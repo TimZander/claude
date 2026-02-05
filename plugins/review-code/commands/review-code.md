@@ -20,6 +20,8 @@ git diff origin/main...HEAD --stat
 
 Read every changed file in full (not just the diff) to understand the surrounding context.
 
+Also read the project's `CLAUDE.md` (if it exists) to understand project-specific coding standards, conventions, and quality expectations. Apply those standards throughout the review.
+
 ## Step 2: Review Mindset
 
 - **Default to skepticism.** Assume there are problems until you've proven otherwise.
