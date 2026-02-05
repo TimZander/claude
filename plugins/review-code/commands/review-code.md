@@ -12,9 +12,10 @@ You are performing a rigorous code review of all changes on the current branch c
 Run these commands to understand the full scope of changes:
 
 ```
-git diff main...HEAD
-git log main..HEAD --oneline
-git diff main...HEAD --stat
+git fetch origin main
+git diff origin/main...HEAD
+git log origin/main..HEAD --oneline
+git diff origin/main...HEAD --stat
 ```
 
 Read every changed file in full (not just the diff) to understand the surrounding context.

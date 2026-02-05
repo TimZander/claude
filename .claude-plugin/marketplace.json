@@ -1,7 +1,9 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "tzander-skills",
-  "description": "Community Claude Code plugins and skills by Tim Zander",
+  "metadata": {
+    "description": "Community Claude Code plugins and skills by Tim Zander"
+  },
   "owner": {
     "name": "Tim Zander"
   },
@@ -11,7 +13,8 @@
       "description": "Rigorous code review of all changes on the current branch compared to main, with structured verdict and actionable feedback",
       "author": { "name": "Tim Zander" },
       "source": "./plugins/review-code",
-      "category": "productivity"
+      "category": "productivity",
+      "strict": false
     }
   ]
 }
