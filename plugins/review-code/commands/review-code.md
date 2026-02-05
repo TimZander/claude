@@ -55,6 +55,8 @@ When touching a file, the author should leave it better than they found it. Chec
 - **Style consistency.** Does the changed code match the surrounding style? Are there inconsistent naming conventions, spacing, or formatting in the same file?
 - **Clarifying comments.** Is there non-obvious logic that would benefit from a brief comment? Conversely, are there stale or misleading comments that should be updated or removed?
 - **Naming.** Are variable, method, or class names clear and accurate? A rename in a touched file is a welcome improvement.
+- **Performance.** Correctness and readability come first, but flag obvious performance issues: unnecessary allocations in hot paths, O(n²) when O(n) is straightforward, repeated expensive operations that could be cached, missing pagination on unbounded queries, or blocking calls where async is expected. Don't suggest micro-optimizations that hurt readability.
+- **Logging.** Use Grep to find the logging pattern used elsewhere in the codebase (e.g., `logger`, `console.log`, `Log.`, `logging.`, `slog.`, etc.). Then check: does the changed code log appropriately? Are error paths logged? Are key operations traceable? Does the log level match the codebase conventions (debug vs info vs warn vs error)? If the surrounding codebase has logging but the changed code does not, flag it. Even if the project has no logging at all, suggest adding it when the changed code touches precarious areas: payment/billing, authentication, data mutations, external API calls, scheduled jobs, or anything where silent failure would be costly to debug in production. Flag any caught exceptions that are swallowed silently (empty catch blocks, catch-and-continue with no logging or re-throw) — these hide bugs and make production issues nearly impossible to diagnose.
 
 **Boundaries:** These improvements should be limited to files already being modified and should be clear, concise, and obviously correct. Wholesale refactoring of unrelated code, large structural changes, or changes that require extensive testing are not in scope here.
 
@@ -92,44 +94,48 @@ Flag assumptions that weren't validated. If the code assumes something that coul
 
 ## Step 9: Output
 
-Structure your review as follows:
+Structure your review as follows. Use the emoji prefixes exactly as shown — they provide visual severity scanning.
+
+---
 
 ### Verdict
 
-APPROVE, REQUEST CHANGES, or NEEDS DISCUSSION
+Use one of:
+- **APPROVE** — no blocking issues
+- **REQUEST CHANGES** — has critical issues that must be fixed
+- **NEEDS DISCUSSION** — has open questions that need alignment
 
 ### Summary
 
 One paragraph restating what this change does and whether it achieves its goal.
 
-### Complexity Assessment
+**Complexity:** Increases / Decreases / Neutral — with brief justification.
 
-Increases / Decreases / Neutral — with justification.
+### Findings
 
-### Critical Issues
+List every finding as a single flat list. Each finding is one line with a severity emoji prefix, the file path and line number, and a concise description:
 
-Problems that must be fixed before merge (correctness, security, data loss risk). If none, say "None found."
+- Use these severity levels:
+  - `🔴` **Critical** — must fix before merge (correctness, security, data loss)
+  - `🟡` **Warning** — should fix, potential for bugs or maintenance issues
+  - `💡` **Suggestion** — optional improvement (style, naming, cleanup, simplification)
+  - `✅` **Good** — something done well worth calling out (use sparingly)
 
-### Assumptions to Verify
+- Format each finding as:
+  > `🔴 path/to/file.ts:42 — Description of the issue`
 
-Assumptions the code makes that should be validated. If none, say "None found."
+- Group findings by file when multiple findings affect the same file.
+- Include findings from ALL review steps: unintended consequences, assumptions, missing tests, improvement opportunities, simplification, and minor issues.
+- If there are no findings at all, say "No issues found."
 
-### Simplification Opportunities
+### Test Gaps
 
-Ways the change could be made simpler. If none, say "None — this is appropriately minimal."
+If there are specific untested scenarios, list them as a brief checklist:
 
-### Unintended Consequences
+- `⬜ Scenario that needs a test`
 
-Potential side effects or regressions. If none, say "None identified."
+If coverage is adequate, say "Coverage is adequate."
 
-### Improvement Opportunities
+### Bottom Line
 
-Specific opportunities to leave touched files better: explicit types, dead code removal, stale comments, naming improvements, style fixes. If none, say "None — the author left things better than they found them." If the author already made good opportunistic improvements, acknowledge them here.
-
-### Missing Test Coverage
-
-Specific scenarios that need tests. If none, say "Coverage is adequate."
-
-### Minor Issues
-
-Style, naming, or non-blocking suggestions. If none, say "None."
+A 2-3 sentence executive summary. State the verdict again, the number of critical/warning/suggestion findings, and the single most important thing the author should address. This is what someone skimming reads first after the verdict.
