@@ -1,0 +1,7 @@
+{
+  "name": "review-code",
+  "description": "Rigorous code review of all changes on the current branch compared to main, with structured verdict and actionable feedback",
+  "author": {
+    "name": "Tim Zander"
+  }
+}
