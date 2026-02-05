@@ -94,48 +94,45 @@ Flag assumptions that weren't validated. If the code assumes something that coul
 
 ## Step 9: Output
 
-Structure your review as follows. Use the emoji prefixes exactly as shown — they provide visual severity scanning.
+**IMPORTANT: You MUST use the EXACT output format below. Do NOT use numbered lists, do NOT create sections like "Critical Issues" or "Assumptions to Verify". Every finding goes in ONE flat list under "Findings" with emoji prefixes. Copy the structure exactly.**
+
+Here is the exact template — follow it precisely:
 
 ---
 
-### Verdict
+## ⚖️ Verdict
 
-Use one of:
-- **APPROVE** — no blocking issues
-- **REQUEST CHANGES** — has critical issues that must be fixed
-- **NEEDS DISCUSSION** — has open questions that need alignment
+**REQUEST CHANGES** / **APPROVE** / **NEEDS DISCUSSION**
 
-### Summary
+## 📋 Summary
 
 One paragraph restating what this change does and whether it achieves its goal.
 
 **Complexity:** Increases / Decreases / Neutral — with brief justification.
 
-### Findings
+## 🔍 Findings
 
-List every finding as a single flat list. Each finding is one line with a severity emoji prefix, the file path and line number, and a concise description:
+🔴 `path/to/file.ts:42` — Description of critical issue (must fix before merge)
+🔴 `path/to/file.ts:55` — Another critical issue
+🟡 `path/to/file.ts:78` — Warning: potential bug or maintenance issue
+🟡 `path/to/other.ts:12` — Another warning
+💡 `path/to/file.ts:90` — Suggestion: optional improvement
+✅ `path/to/file.ts:30` — Something done well (use sparingly)
 
-- Use these severity levels:
-  - `🔴` **Critical** — must fix before merge (correctness, security, data loss)
-  - `🟡` **Warning** — should fix, potential for bugs or maintenance issues
-  - `💡` **Suggestion** — optional improvement (style, naming, cleanup, simplification)
-  - `✅` **Good** — something done well worth calling out (use sparingly)
-
-- Format each finding as:
-  > `🔴 path/to/file.ts:42 — Description of the issue`
-
+Rules:
+- Every finding from ALL review steps goes here: correctness, security, assumptions, unintended consequences, performance, logging, style, naming, simplification — everything.
+- Each finding is ONE line: emoji, backtick-wrapped file:line, em dash, description.
 - Group findings by file when multiple findings affect the same file.
-- Include findings from ALL review steps: unintended consequences, assumptions, missing tests, improvement opportunities, simplification, and minor issues.
-- If there are no findings at all, say "No issues found."
+- If there are no findings, write "No issues found."
+- Do NOT create separate sections for different finding types.
 
-### Test Gaps
+## 🧪 Test Gaps
 
-If there are specific untested scenarios, list them as a brief checklist:
+⬜ Scenario that needs a test
+⬜ Another scenario that needs a test
 
-- `⬜ Scenario that needs a test`
+If coverage is adequate, write "Coverage is adequate."
 
-If coverage is adequate, say "Coverage is adequate."
+## ⚡ Bottom Line
 
-### Bottom Line
-
-A 2-3 sentence executive summary. State the verdict again, the number of critical/warning/suggestion findings, and the single most important thing the author should address. This is what someone skimming reads first after the verdict.
+2-3 sentences. Restate the verdict, count of 🔴/🟡/💡 findings, and the single most important thing the author should address.
