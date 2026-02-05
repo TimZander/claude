@@ -1,0 +1,9 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "tzander-skills",
+  "description": "Community Claude Code plugins and skills by Tim Zander",
+  "owner": {
+    "name": "Tim Zander"
+  },
+  "plugins": []
+}
