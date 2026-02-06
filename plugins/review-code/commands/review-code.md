@@ -9,18 +9,15 @@ You are performing a rigorous code review of all changes on the current branch c
 
 ## Step 1: Gather Context
 
-Run these commands to understand the full scope of changes:
+**Run all of these in parallel** to minimize latency:
 
-```
-git fetch origin main
-git diff origin/main...HEAD
-git log origin/main..HEAD --oneline
-git diff origin/main...HEAD --stat
-```
+1. Run in one Bash call: `git fetch origin main && git log origin/main..HEAD --oneline && git diff origin/main...HEAD --stat`
+2. Run in a separate parallel Bash call: `git diff -U10 origin/main...HEAD` (10 lines of context around each change)
+3. Read the project's `CLAUDE.md` (if it exists) to understand project-specific coding standards.
 
-Read every changed file in full (not just the diff) to understand the surrounding context.
+The diff with context is your primary input. Only Read a full file when you need more surrounding context to understand a specific change — do not read every changed file upfront.
 
-Also read the project's `CLAUDE.md` (if it exists) to understand project-specific coding standards, conventions, and quality expectations. Apply those standards throughout the review.
+When you do need to read files or grep for references (Steps 6-7), **make parallel tool calls** whenever the reads are independent of each other.
 
 ## Step 2: Review Mindset
 
@@ -56,7 +53,7 @@ When touching a file, the author should leave it better than they found it. Chec
 - **Clarifying comments.** Is there non-obvious logic that would benefit from a brief comment? Conversely, are there stale or misleading comments that should be updated or removed?
 - **Naming.** Are variable, method, or class names clear and accurate? A rename in a touched file is a welcome improvement.
 - **Performance.** Correctness and readability come first, but flag obvious performance issues: unnecessary allocations in hot paths, O(n²) when O(n) is straightforward, repeated expensive operations that could be cached, missing pagination on unbounded queries, or blocking calls where async is expected. Don't suggest micro-optimizations that hurt readability.
-- **Logging.** Use Grep to find the logging pattern used elsewhere in the codebase (e.g., `logger`, `console.log`, `Log.`, `logging.`, `slog.`, etc.). Then check: does the changed code log appropriately? Are error paths logged? Are key operations traceable? Does the log level match the codebase conventions (debug vs info vs warn vs error)? If the surrounding codebase has logging but the changed code does not, flag it. Even if the project has no logging at all, suggest adding it when the changed code touches precarious areas: payment/billing, authentication, data mutations, external API calls, scheduled jobs, or anything where silent failure would be costly to debug in production. Flag any caught exceptions that are swallowed silently (empty catch blocks, catch-and-continue with no logging or re-throw) — these hide bugs and make production issues nearly impossible to diagnose.
+- **Logging.** From the diff context, identify the logging pattern used in the codebase (e.g., `logger`, `console.log`, `Log.`, `logging.`, `slog.`). Only Grep if the pattern isn't visible in the diff. Then check: does the changed code log appropriately? Are error paths logged? Are key operations traceable? Does the log level match the codebase conventions (debug vs info vs warn vs error)? If the surrounding codebase has logging but the changed code does not, flag it. Even if the project has no logging at all, suggest adding it when the changed code touches precarious areas: payment/billing, authentication, data mutations, external API calls, scheduled jobs, or anything where silent failure would be costly to debug in production. Flag any caught exceptions that are swallowed silently (empty catch blocks, catch-and-continue with no logging or re-throw) — these hide bugs and make production issues nearly impossible to diagnose.
 
 **Boundaries:** These improvements should be limited to files already being modified and should be clear, concise, and obviously correct. Wholesale refactoring of unrelated code, large structural changes, or changes that require extensive testing are not in scope here.
 
@@ -64,7 +61,7 @@ If the author made good opportunistic improvements, acknowledge them. If obvious
 
 ## Step 6: Unintended Consequences
 
-- **Trace all callers and consumers.** If a method signature, return type, or behavior changed, verify every call site still works correctly. Use Grep to find all references.
+- **Trace all callers and consumers.** If a method signature, return type, or behavior changed, verify every call site still works correctly. Grep for references only when a public API actually changed — don't grep for every function touched.
 - **Check for state mutations.** Does this change shared state, static fields, singleton behavior, or cached data in ways that affect other code paths?
 - **Consider timing and ordering.** Does this change when something executes? Could it create race conditions, deadlocks, or ordering dependencies?
 - **Check boundary conditions.** What happens with null inputs, empty collections, first run, network failure, concurrent access, or maximum data volumes?
