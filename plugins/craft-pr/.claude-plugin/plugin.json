@@ -1,0 +1,7 @@
+{
+  "name": "craft-pr",
+  "description": "Generate a PR title and description for the current branch compared to origin/main",
+  "author": {
+    "name": "Tim Zander"
+  }
+}

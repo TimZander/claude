@@ -17,7 +17,7 @@ You are performing a rigorous code review of all changes on the current branch c
 
 The diff with context is your primary input. Only Read a full file when you need more surrounding context to understand a specific change — do not read every changed file upfront.
 
-When you do need to read files or grep for references (Steps 6-7), **make parallel tool calls** whenever the reads are independent of each other.
+When you do need to read files or grep for references (Steps 6-8), **make parallel tool calls** whenever the reads are independent of each other.
 
 ## Step 2: Review Mindset
 
@@ -67,7 +67,20 @@ If the author made good opportunistic improvements, acknowledge them. If obvious
 - **Check boundary conditions.** What happens with null inputs, empty collections, first run, network failure, concurrent access, or maximum data volumes?
 - **Platform impact.** If the change touches shared code, verify it works correctly on both Android and iOS. If it touches platform-specific code, verify the other platform's equivalent is still consistent.
 
-## Step 7: Assumptions Audit
+## Step 7: Breaking Changes
+
+Specifically check whether this change breaks any existing contract or consumer:
+
+- **Public API changes.** Were any endpoints removed, renamed, or did their request/response shape change? Check route definitions, controller signatures, and DTO/model classes.
+- **Shared interface changes.** Were any public method signatures, return types, or parameter types changed on classes/interfaces consumed by other modules or services?
+- **Contract/schema changes.** Were any serialized formats changed (JSON field names, event payloads, message queue contracts, gRPC/protobuf definitions)?
+- **Configuration changes.** Were any environment variables, config keys, or feature flags renamed, removed, or given new semantics?
+- **Behavioral changes.** Does existing functionality now behave differently in a way callers depend on? (e.g., a method that returned null now throws, ordering of results changed, default values changed)
+- **Database assumptions.** Does the code now reference new or altered tables, columns, or stored procedures that other services may also consume?
+
+If you find breaking changes, Grep for usages of the changed API/contract to assess the blast radius. Each breaking change must be flagged as 🔴 in the Findings with a clear description of what broke and who is affected.
+
+## Step 8: Assumptions Audit
 
 List every assumption the code makes. Then verify each one:
 
@@ -80,7 +93,7 @@ List every assumption the code makes. Then verify each one:
 
 Flag assumptions that weren't validated. If the code assumes something that could reasonably be false, it needs either validation or a comment explaining why the assumption is safe.
 
-## Step 8: Test Coverage
+## Step 9: Test Coverage
 
 - **Are there tests?** If not, why not? "It's hard to test" is not an acceptable reason — it usually means the code needs restructuring.
 - **Do tests cover the actual behavior change?** Tests that pass regardless of whether the feature works are worthless.
@@ -89,7 +102,7 @@ Flag assumptions that weren't validated. If the code assumes something that coul
 - **Do existing tests still pass?** A change that breaks existing tests is a red flag that the author may not understand the system's contracts.
 - **Is the test testing implementation or behavior?** Tests coupled to implementation details are brittle. Tests should verify observable behavior.
 
-## Step 9: Output
+## Step 10: Output
 
 **IMPORTANT: You MUST use the EXACT output format below. Do NOT use numbered lists, do NOT create sections like "Critical Issues" or "Assumptions to Verify". Every finding goes in ONE flat list under "Findings" with emoji prefixes. Copy the structure exactly.**
 
@@ -119,7 +132,7 @@ One paragraph restating what this change does and whether it achieves its goal.
 ✅ `path/to/file.ts:30` — Something done well (use sparingly)
 
 Rules:
-- Every finding from ALL review steps goes here: correctness, security, assumptions, unintended consequences, performance, logging, style, naming, simplification — everything.
+- Every finding from ALL review steps goes here: correctness, security, breaking changes, assumptions, unintended consequences, performance, logging, style, naming, simplification — everything.
 - Each finding is ONE line: emoji, backtick-wrapped file:line, em dash, description.
 - Group findings by file when multiple findings affect the same file.
 - If there are no findings, write "No issues found."

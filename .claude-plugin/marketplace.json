@@ -15,6 +15,22 @@
       "source": "./plugins/review-code",
       "category": "productivity",
       "strict": false
+    },
+    {
+      "name": "craft-commit",
+      "description": "Craft a commit message for staged changes, output as text and a ready-to-run command",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/craft-commit",
+      "category": "productivity",
+      "strict": false
+    },
+    {
+      "name": "craft-pr",
+      "description": "Generate a PR title and description for the current branch compared to origin/main",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/craft-pr",
+      "category": "productivity",
+      "strict": false
     }
   ]
 }
