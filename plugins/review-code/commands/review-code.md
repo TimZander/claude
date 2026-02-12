@@ -7,6 +7,15 @@ allowed-tools: Bash, Read, Grep, Glob
 
 You are performing a rigorous code review of all changes on the current branch compared to main. Your job is to find problems, not to be agreeable.
 
+## OUTPUT FORMAT — READ THIS FIRST
+
+Your final output MUST follow the exact template in Step 10. Violations that will cause your review to be rejected:
+- ❌ Creating sections like "Critical Issues", "Assumptions to Verify", "Simplification Opportunities", or "Minor Issues" — ALL findings go in ONE flat list under "🔍 Findings"
+- ❌ Using numbered lists for findings — use emoji-prefixed single lines
+- ❌ Using markdown emoji shortcodes like `:red_circle:` or `:yellow_circle:` — use ONLY real Unicode emoji characters: 🔴 🟡 💡 ✅ ⬜ ⚖️ 📋 🔍 🧪 ⚡
+- ❌ Omitting the five required sections (⚖️ Verdict, 📋 Summary, 🔍 Findings, 🧪 Test Gaps, ⚡ Bottom Line)
+- ❌ Adding any sections not in the template
+
 ## Step 1: Gather Context
 
 **Run all of these in parallel** to minimize latency:
@@ -148,3 +157,15 @@ If coverage is adequate, write "Coverage is adequate."
 ## ⚡ Bottom Line
 
 2-3 sentences. Restate the verdict, count of 🔴/🟡/💡 findings, and the single most important thing the author should address.
+
+---
+
+## Step 11: Self-Check (MANDATORY — do this before outputting)
+
+Before writing your response, verify ALL of the following. If any check fails, fix your output before presenting it:
+
+1. **Sections**: Your output has EXACTLY five sections: ⚖️ Verdict, 📋 Summary, 🔍 Findings, 🧪 Test Gaps, ⚡ Bottom Line. No other sections exist.
+2. **No sub-sections in Findings**: The 🔍 Findings section is a flat list of emoji-prefixed lines. There are NO headers, NO numbered lists, NO sub-sections like "Critical Issues" or "Assumptions to Verify" anywhere in your output.
+3. **Real emoji only**: Search your output for any colon-wrapped shortcodes (`:red_circle:`, `:yellow_circle:`, `:bulb:`, `:white_check_mark:`, `:mag:`, etc.). If you find ANY, replace them with the real Unicode characters (🔴, 🟡, 💡, ✅, 🔍, etc.).
+4. **Finding format**: Every finding line starts with an emoji (🔴/🟡/💡/✅), followed by a backtick-wrapped `file:line`, an em dash (—), and a description. No exceptions.
+5. **Test gaps format**: Every test gap line starts with ⬜ followed by a scenario description.
