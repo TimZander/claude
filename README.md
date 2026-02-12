@@ -29,6 +29,26 @@ plugins/                # First-party plugins
 external_plugins/       # Community-submitted plugins
 ```
 
+## Team Coding Standards
+
+This repo includes shared coding standards that can be synced into your `~/.claude/CLAUDE.md` so Claude Code applies them in every session.
+
+### Sync standards
+
+**Windows (PowerShell):**
+
+```
+./sync-standards.ps1
+```
+
+**macOS / Linux:**
+
+```
+./sync-standards.sh
+```
+
+Re-run after pulling updates to the `standards/CLAUDE.md` file.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to submit a plugin.
