@@ -93,6 +93,8 @@ Flag assumptions that weren't validated. If the code assumes something that coul
 
 **IMPORTANT: You MUST use the EXACT output format below. Do NOT use numbered lists, do NOT create sections like "Critical Issues" or "Assumptions to Verify". Every finding goes in ONE flat list under "Findings" with emoji prefixes. Copy the structure exactly.**
 
+**IMPORTANT: Use actual Unicode emoji characters (🔴 🟡 💡 ✅ ⬜), NOT markdown shortcodes (:red_circle:, :yellow_circle:, etc.).**
+
 Here is the exact template — follow it precisely:
 
 ---
