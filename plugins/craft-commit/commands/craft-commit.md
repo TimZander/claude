@@ -76,3 +76,5 @@ git commit -m "Subject line here`n`nBody paragraph here, wrapped at 72 character
 - ✅ `git commit -m "Fix parsing of 'Critical Issues' section"`
 
 **Do NOT run the commit command.** Only output it for the user to copy.
+
+**Do NOT add a `Co-Authored-By` trailer or any other attribution line.** The commit message must contain only the subject and optional body — nothing else.
