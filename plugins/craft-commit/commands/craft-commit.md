@@ -71,4 +71,8 @@ For messages with a body, use `` `n`n `` to separate the subject from the body (
 git commit -m "Subject line here`n`nBody paragraph here, wrapped at 72 characters. Explains why the change was made and any important context."
 ```
 
+**Quoting rule:** If the commit message body contains words that need quoting, use single quotes — NEVER double quotes. Double-quote escaping (`""` or `\"`) inside the `-m` string breaks PowerShell argument parsing for `git commit`.
+- ❌ `git commit -m "Fix parsing of ""Critical Issues"" section"`
+- ✅ `git commit -m "Fix parsing of 'Critical Issues' section"`
+
 **Do NOT run the commit command.** Only output it for the user to copy.
