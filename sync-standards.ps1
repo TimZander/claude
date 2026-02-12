@@ -15,7 +15,7 @@ $EndMarker = '<!-- TEAM-STANDARDS:tzander-skills:END -->'
 
 # Resolve paths
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$StandardsFile = Join-Path $RepoRoot 'standards' 'CLAUDE.md'
+$StandardsFile = Join-Path (Join-Path $RepoRoot 'standards') 'CLAUDE.md'
 $ClaudeDir = Join-Path $HOME '.claude'
 $TargetFile = Join-Path $ClaudeDir 'CLAUDE.md'
 
