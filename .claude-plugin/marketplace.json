@@ -55,6 +55,14 @@
       "source": "./plugins/craft-stage-commit-push",
       "category": "productivity",
       "strict": false
+    },
+    {
+      "name": "setup-newrelic",
+      "description": "Discover New Relic application entities for this repo and add them to the project CLAUDE.md",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/setup-newrelic",
+      "category": "productivity",
+      "strict": false
     }
   ]
 }

@@ -1,0 +1,7 @@
+{
+  "name": "setup-newrelic",
+  "description": "Discover New Relic application entities for this repo and add them to the project CLAUDE.md",
+  "author": {
+    "name": "Tim Zander"
+  }
+}
