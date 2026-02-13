@@ -59,7 +59,7 @@ the change was made and any important context.
 
 ### Command
 
-Output a ready-to-paste single-line command using PowerShell's `` `n `` escape for newlines within the `-m` string. This keeps the command on one line regardless of terminal width.
+Build a single-line command using PowerShell's `` `n `` escape for newlines within the `-m` string.
 
 For subject-only messages:
 ```powershell
@@ -72,9 +72,19 @@ git commit -m "Subject line here`n`nBody paragraph here, wrapped at 72 character
 ```
 
 **Quoting rule:** If the commit message body contains words that need quoting, use single quotes — NEVER double quotes. Double-quote escaping (`""` or `\"`) inside the `-m` string breaks PowerShell argument parsing for `git commit`.
-- ❌ `git commit -m "Fix parsing of ""Critical Issues"" section"`
-- ✅ `git commit -m "Fix parsing of 'Critical Issues' section"`
+- Bad: `git commit -m "Fix parsing of ""Critical Issues"" section"`
+- Good: `git commit -m "Fix parsing of 'Critical Issues' section"`
 
-**Do NOT run the commit command.** Only output it for the user to copy.
+**Copy to clipboard:** Use the Bash tool to pipe the command string to `clip.exe` so it lands on the user's clipboard as one unbroken line. For example:
+
+```
+echo 'git commit -m "Subject line here"' | clip
+```
+
+Then tell the user the command has been copied to their clipboard and they can paste it directly.
+
+Also display the command in your response for reference, but note that the clipboard copy is the reliable way to use it.
+
+**Do NOT run the git commit command itself.** Only copy it to the clipboard and display it.
 
 **Do NOT add a `Co-Authored-By` trailer or any other attribution line.** The commit message must contain only the subject and optional body — nothing else.
