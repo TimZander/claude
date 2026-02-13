@@ -59,26 +59,26 @@ the change was made and any important context.
 
 ### Command
 
-Build a single-line command that commits and then pushes, using `&&` to chain the commands. Use PowerShell's `` `n `` escape for newlines within the `-m` string.
+Build a single-line command that commits and then pushes, using `;` to chain the commands. Use PowerShell's `` `n `` escape for newlines within the `-m` string.
 
 For subject-only messages:
 ```powershell
-git commit -m "Subject line here" && git push
+git commit -m "Subject line here"; git push
 ```
 
 For messages with a body, use `` `n`n `` to separate the subject from the body (double newline = blank line):
 ```powershell
-git commit -m "Subject line here`n`nBody paragraph here, wrapped at 72 characters. Explains why the change was made and any important context." && git push
+git commit -m "Subject line here`n`nBody paragraph here, wrapped at 72 characters. Explains why the change was made and any important context."; git push
 ```
 
 **Quoting rule:** If the commit message body contains words that need quoting, use single quotes — NEVER double quotes. Double-quote escaping (`""` or `\"`) inside the `-m` string breaks PowerShell argument parsing for `git commit`.
-- Bad: `git commit -m "Fix parsing of ""Critical Issues"" section" && git push`
-- Good: `git commit -m "Fix parsing of 'Critical Issues' section" && git push`
+- Bad: `git commit -m "Fix parsing of ""Critical Issues"" section"; git push`
+- Good: `git commit -m "Fix parsing of 'Critical Issues' section"; git push`
 
 **Copy to clipboard:** Use the Bash tool to pipe the command string to `clip.exe` so it lands on the user's clipboard as one unbroken line. For example:
 
 ```
-echo 'git commit -m "Subject line here" && git push' | clip
+echo 'git commit -m "Subject line here"; git push' | clip
 ```
 
 Then tell the user the command has been copied to their clipboard and they can paste it directly.

@@ -47,6 +47,14 @@
       "source": "./plugins/craft-commit-push",
       "category": "productivity",
       "strict": false
+    },
+    {
+      "name": "craft-stage-commit-push",
+      "description": "Filter junk files, stage meaningful changes, craft a commit message, and output a combined stage-commit-push command",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/craft-stage-commit-push",
+      "category": "productivity",
+      "strict": false
     }
   ]
 }

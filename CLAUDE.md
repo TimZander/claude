@@ -33,6 +33,11 @@ When doing SQL-related work, the database schema is stored in Azure DevOps TFVC.
 Connection details (org, project, TFVC path) are defined in the developer's
 private `~/.claude/CLAUDE.md`. Use `az devops invoke` to query it.
 
+**Prerequisites:** Before running any commands below, verify the required tools are installed:
+1. Run `az --version` to confirm Azure CLI is installed.
+2. Run `az extension list -o table` and check that `azure-devops` appears. If missing, install it with `az extension add --name azure-devops`.
+3. Run `az account show` to confirm you are logged in. If not, run `az login`.
+
 **Commands (prefix with `MSYS_NO_PATHCONV=1` on Git Bash to avoid path mangling):**
 
 List items:
