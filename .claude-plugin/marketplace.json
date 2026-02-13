@@ -31,6 +31,22 @@
       "source": "./plugins/craft-pr",
       "category": "productivity",
       "strict": false
+    },
+    {
+      "name": "craft-stage",
+      "description": "Analyze working directory changes, filter junk files, and output a ready-to-run git add command",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/craft-stage",
+      "category": "productivity",
+      "strict": false
+    },
+    {
+      "name": "craft-commit-push",
+      "description": "Craft a commit message for staged changes and output a combined commit-and-push command",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/craft-commit-push",
+      "category": "productivity",
+      "strict": false
     }
   ]
 }

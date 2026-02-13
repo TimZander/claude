@@ -1,0 +1,7 @@
+{
+  "name": "craft-commit-push",
+  "description": "Craft a commit message for staged changes and output a combined commit-and-push command",
+  "author": {
+    "name": "Tim Zander"
+  }
+}

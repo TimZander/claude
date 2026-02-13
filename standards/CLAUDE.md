@@ -29,3 +29,13 @@ then have each developer re-run the sync script.
 
 - Always use explicit types instead of `var` unless the type is immediately obvious from the right side of the assignment
 - Use `string.Empty` instead of `""`
+
+## Test Standards
+
+- Use the Arrange/Act/Assert pattern with comment separators
+- Name tests as `MethodName_Scenario_ExpectedBehavior`
+- No magic numbers — extract numeric literals into named `const` locals at the top of each test method
+- Keep constants local to each test, not shared at the class level — each test should be readable in isolation
+- Cover edge cases: partial state changes, error/exception propagation, no-op when inputs are unchanged
+- Include at least one negative test (invalid input, failure scenario) per method under test
+- Tests should verify observable behavior, not implementation details

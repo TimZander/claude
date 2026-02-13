@@ -1,0 +1,7 @@
+{
+  "name": "craft-stage",
+  "description": "Analyze working directory changes, filter junk files, and output a ready-to-run git add command",
+  "author": {
+    "name": "Tim Zander"
+  }
+}
