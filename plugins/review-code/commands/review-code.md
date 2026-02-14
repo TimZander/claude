@@ -20,11 +20,14 @@ Your final output MUST follow the exact template in Step 10. Violations that wil
 
 **Run all of these in parallel** to minimize latency:
 
-1. Run in one Bash call: `git fetch origin main && git log origin/main..HEAD --oneline && git diff origin/main...HEAD --stat`
-2. Run in a separate parallel Bash call: `git diff -U10 origin/main...HEAD` (10 lines of context around each change)
-3. Read the project's `CLAUDE.md` (if it exists) to understand project-specific coding standards.
+1. Run in one Bash call: `git fetch origin main && git log origin/main..HEAD --oneline && git diff origin/main...HEAD --stat && git diff HEAD --stat`
+2. Run in a separate parallel Bash call: `git diff -U10 origin/main...HEAD` (committed branch changes with 10 lines of context)
+3. Run in a separate parallel Bash call: `git diff -U10 HEAD` (uncommitted changes — both staged and unstaged)
+4. Read the project's `CLAUDE.md` (if it exists) to understand project-specific coding standards.
 
-The diff with context is your primary input. Only Read a full file when you need more surrounding context to understand a specific change — do not read every changed file upfront.
+The committed diff (step 2) is your primary input. If step 3 returns uncommitted changes, review those with equal rigor — they represent work-in-progress that will likely be committed. If there are no uncommitted changes, note that and move on.
+
+Only Read a full file when you need more surrounding context to understand a specific change — do not read every changed file upfront.
 
 When you do need to read files or grep for references (Steps 6-8), **make parallel tool calls** whenever the reads are independent of each other.
 
