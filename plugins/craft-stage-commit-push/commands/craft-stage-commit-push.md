@@ -3,9 +3,12 @@ name: craft-stage-commit-push
 description: Filter junk files, stage meaningful changes, craft a commit message, and output a combined stage-commit-push command
 disable-model-invocation: true
 allowed-tools: Bash, Read, Grep, Glob
+user-input: optional
 ---
 
 You are crafting a single command that stages meaningful files, commits, and pushes. Your job is to analyze the working directory, filter out junk files, craft a clear commit message, and produce a ready-to-copy command.
+
+**If the user provided input, treat it as a feature filter.** The input describes which feature or piece of work to isolate. Only stage files whose changes are related to that feature. All other changed files — even if they are meaningful and not junk — must be left unstaged. When a feature filter is active, after Step 2 (junk filtering), apply an additional pass: read the diffs of every remaining file and include only files whose changes are directly related to the user's described feature. Report which meaningful files were excluded because they belong to a different piece of work.
 
 ## Step 1: Gather Context
 
@@ -38,6 +41,18 @@ After filtering, report the excluded files grouped by reason. For example:
 > **Excluded (IDE files):** `.vs/config/applicationhost.config`
 
 If ALL unstaged/untracked files were filtered out as junk and there are no already-staged changes, stop and tell the user: "All changed files are build artifacts, IDE files, or other junk. Nothing meaningful to stage."
+
+## Step 2b: Feature Filter (only when user provided input)
+
+If the user provided a feature description, apply it now as a second filter on top of the junk-filtered list.
+
+1. **Read the diff of each remaining file.** Use the diffs gathered in Step 1 to understand what each file's changes do.
+2. **For each file, decide: does this change relate to the user's described feature?** Be precise — only include files that are clearly part of the specified work. When in doubt, exclude the file.
+3. **Report excluded files.** List the meaningful files that were left out because they belong to different work:
+
+> **Excluded (not part of this feature):** `src/Unrelated.cs`, `tests/OtherTests.cs`
+
+4. If no files remain after feature filtering, stop and tell the user: "None of the current changes match the described feature: '{user input}'."
 
 ## Step 3: Analyze the Changes
 
