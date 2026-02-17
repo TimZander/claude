@@ -49,6 +49,8 @@ The title appears in release notes. Follow these rules exactly:
 
 ## Step 4: PR Description
 
+The description **must be 4000 characters or fewer** (this is a hard platform limit). Be concise — cut filler, collapse trivial bullets, and abbreviate test cases if needed to stay under the limit.
+
 Write the description in markdown using exactly this structure:
 
 ```
@@ -139,5 +141,7 @@ Output the full markdown description in a code block:
 ## Summary
 ...
 ```
+
+**Verify the description is 4000 characters or fewer.** Count the characters in the description (not including the code fence). If it exceeds 4000, tighten the wording — shorten bullets, drop low-value test cases, and condense the summary — until it fits. State the final character count after the output.
 
 **Do NOT create the PR.** Only output the title and description for the user to use.
