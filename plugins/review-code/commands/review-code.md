@@ -20,10 +20,12 @@ Your final output MUST follow the exact template in Step 10. Violations that wil
 
 **Run all of these in parallel** to minimize latency:
 
-1. Run in one Bash call: `git fetch origin main && git log origin/main..HEAD --oneline && git diff origin/main...HEAD --stat && git diff HEAD --stat`
+1. Run in one Bash call: `git fetch origin main 2>/dev/null; git log origin/main..HEAD --oneline; echo "---COMMITTED STAT---"; git diff origin/main...HEAD --stat; echo "---UNCOMMITTED STAT---"; git diff HEAD --stat`
 2. Run in a separate parallel Bash call: `git diff -U10 origin/main...HEAD` (committed branch changes with 10 lines of context)
 3. Run in a separate parallel Bash call: `git diff -U10 HEAD` (uncommitted changes — both staged and unstaged)
 4. Read the project's `CLAUDE.md` (if it exists) to understand project-specific coding standards.
+
+**Important:** Use `;` (not `&&`) to separate commands in step 1 so that a failure in one command does not prevent the others from running. If any parallel Bash call fails, sibling parallel calls may be cancelled — if this happens, retry the failed calls individually.
 
 The committed diff (step 2) is your primary input. If step 3 returns uncommitted changes, review those with equal rigor — they represent work-in-progress that will likely be committed. If there are no uncommitted changes, note that and move on.
 
