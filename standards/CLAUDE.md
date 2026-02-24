@@ -40,6 +40,7 @@ then have each developer re-run the sync script.
 - Include at least one negative test (invalid input, failure scenario) per method under test
 - Tests should verify observable behavior, not implementation details
 
+<!-- Keep in sync with plugins/review-code/commands/review-code.md preamble -->
 ## Code Review Standards
 
 When reviewing code (PRs, branches, or staged changes), apply rigorous scrutiny. The goal is to catch problems before they ship, not to be agreeable.
