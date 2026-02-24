@@ -39,3 +39,16 @@ then have each developer re-run the sync script.
 - Cover edge cases: partial state changes, error/exception propagation, no-op when inputs are unchanged
 - Include at least one negative test (invalid input, failure scenario) per method under test
 - Tests should verify observable behavior, not implementation details
+
+## Code Review Standards
+
+When reviewing code (PRs, branches, or staged changes), apply rigorous scrutiny. The goal is to catch problems before they ship, not to be agreeable.
+
+- **Default to skepticism** — assume there are problems until proven otherwise
+- **Read every line of every diff.** Do not skim. Understand what each change does and why.
+- **Review what's NOT there** — missing error handling, tests, edge cases, and documentation are all defects
+- **Question the premise** — is this the right thing to build? Could a simpler approach work?
+- **Flag unnecessary complexity** — every line of code is a liability; if a 5-line change could replace a 50-line change, say so
+- **Trace unintended consequences** — check callers, state mutations, timing, and boundary conditions
+- **Audit assumptions** — list and verify every assumption the code makes; flag those without validation
+- **Demand test coverage** — "hard to test" means the code needs restructuring, not a pass on testing
