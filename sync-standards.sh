@@ -40,12 +40,17 @@ elif grep -qF "$START_MARKER" "$TARGET_FILE"; then
     # Markers exist — replace the managed section in-place
     EXISTING_CONTENT="$(cat "$TARGET_FILE")"
 
-    # Use awk to replace everything between (and including) the markers
-    UPDATED_CONTENT="$(awk -v start="$START_MARKER" -v end="$END_MARKER" -v section="$MANAGED_SECTION" '
-        $0 == start { printing=0; print section; next }
+    # Use awk to replace everything between (and including) the markers.
+    # Write the managed section to a temp file because awk -v cannot handle
+    # multi-line strings (causes "newline in string" errors).
+    SECTION_FILE="$(mktemp)"
+    printf '%s\n' "$MANAGED_SECTION" > "$SECTION_FILE"
+    UPDATED_CONTENT="$(awk -v start="$START_MARKER" -v end="$END_MARKER" -v sfile="$SECTION_FILE" '
+        $0 == start { printing=0; while ((getline line < sfile) > 0) print line; close(sfile); next }
         $0 == end { printing=1; next }
         printing!=0 { print }
     ' "$TARGET_FILE")"
+    rm -f "$SECTION_FILE"
 
     if [ "$UPDATED_CONTENT" = "$EXISTING_CONTENT" ]; then
         echo "Team standards in $TARGET_FILE are already up to date."
