@@ -26,7 +26,7 @@
     },
     {
       "name": "craft-pr",
-      "description": "Generate a PR title and description for the current branch compared to origin/main",
+      "description": "Generate a PR title and description, optionally creating it on GitHub or Azure DevOps",
       "author": { "name": "Tim Zander" },
       "source": "./plugins/craft-pr",
       "category": "productivity",
