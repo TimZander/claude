@@ -14,6 +14,7 @@ You are crafting a `git add` command for the current working directory changes. 
 1. Run `git status --porcelain` to see all modified, untracked, and staged files.
 2. Run `git diff --stat` to see unstaged tracked changes.
 3. Run `git diff --cached --stat` to check for already-staged changes.
+4. Run `echo "OS=$(uname -s)"` to detect the user's operating system.
 
 If there are no unstaged changes and no untracked files (nothing new to stage), stop immediately and tell the user: "No unstaged changes found. There is nothing to stage."
 
@@ -55,11 +56,10 @@ Build a single-line `git add` command with all meaningful files:
 - List every meaningful file explicitly so junk files are excluded.
 - If there are already-staged files, mention them separately and note they are already staged — do not include them in the `git add` command.
 
-**Copy to clipboard:** Use the Bash tool to pipe the command string to `clip.exe` so it lands on the user's clipboard as one unbroken line. For example:
-
-```
-echo 'git add src/Profile.cs src/Validator.cs tests/ProfileTests.cs' | clip
-```
+**Copy to clipboard:** Use the Bash tool to pipe the command string to the clipboard based on the detected OS:
+- **`Darwin` (macOS):** `echo '...' | pbcopy`
+- **`Linux`:** `echo '...' | xclip -selection clipboard` (falls back to `xsel --clipboard --input` if `xclip` is not installed)
+- **`MINGW`/`MSYS`/`CYGWIN` (Windows):** `echo '...' | clip`
 
 Then tell the user the command has been copied to their clipboard and they can paste it directly.
 
