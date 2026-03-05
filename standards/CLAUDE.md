@@ -40,6 +40,11 @@ then have each developer re-run the sync script.
 - Include at least one negative test (invalid input, failure scenario) per method under test
 - Tests should verify observable behavior, not implementation details
 
+## Git Push Safety
+
+- **Never push to `main` or `master`** — all changes must go through pull requests
+- **Never force push** (`--force`, `-f`, `--force-with-lease`) to any branch
+
 <!-- Keep in sync with plugins/deep-review/commands/deep-review.md preamble -->
 ## Code Review Standards
 

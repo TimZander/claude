@@ -58,6 +58,13 @@ az devops invoke --area tfvc --resource items \
 
 Replace `<PROJECT>`, `<TFVC_ROOT>`, and `<ORG_URL>` with values from your private `~/.claude/CLAUDE.md`.
 
+## Git Push Safety
+
+These rules apply to all plugin commands and manual operations:
+
+- **Never push to `main` or `master`** — all changes must go through pull requests
+- **Never force push** (`--force`, `-f`, `--force-with-lease`) to any branch
+
 ## Testing
 
 1. Register: `/plugin marketplace add TimZander/claude`
