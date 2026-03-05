@@ -19,6 +19,7 @@ You are crafting a single command that stages meaningful files, commits, and pus
 3. Run `git diff --cached --stat` to check for already-staged changes.
 4. Run `git diff -U5` to see the full unstaged diff with context.
 5. Run `git diff --cached -U5` to see the full staged diff with context.
+6. Run `echo "OS=$(uname -s)"` to detect the user's operating system.
 
 If there are no unstaged changes, no untracked files, and no staged changes, stop immediately and tell the user: "No changes found. There is nothing to stage or commit."
 
@@ -107,27 +108,39 @@ the change was made and any important context.
 
 ### Command
 
-Build a single-line command that stages the meaningful files, commits, and pushes. Use `;` to chain the commands. Use PowerShell's `` `n `` escape for newlines within the `-m` string. List every meaningful file explicitly in the `git add` so junk files are excluded.
+Build a single-line command that stages the meaningful files, commits, and pushes. Use `;` to chain the commands. List every meaningful file explicitly in the `git add` so junk files are excluded. Match the syntax to the detected OS.
+
+**If the OS is `Darwin` (macOS) or `Linux`:**
+
+For subject-only messages:
+```bash
+git add file1 file2; git commit -m "Subject line here"; git push
+```
+
+For messages with a body, use `$'...'` quoting with literal `\n` for newlines:
+```bash
+git add file1 file2; git commit -m $'Subject line here\n\nBody paragraph here, wrapped at 72 characters. Explains why the change was made and any important context.'; git push
+```
+
+Copy to clipboard: `echo '...' | pbcopy` (macOS) or `echo '...' | xclip -selection clipboard` (Linux, falls back to `xsel --clipboard --input` if `xclip` is not installed).
+
+**If the OS contains `MINGW`, `MSYS`, or `CYGWIN` (Windows):**
 
 For subject-only messages:
 ```powershell
 git add file1 file2; git commit -m "Subject line here"; git push
 ```
 
-For messages with a body, use `` `n`n `` to separate the subject from the body (double newline = blank line):
+For messages with a body, use `` `n `` for newlines:
 ```powershell
 git add file1 file2; git commit -m "Subject line here`n`nBody paragraph here, wrapped at 72 characters. Explains why the change was made and any important context."; git push
 ```
 
-**Quoting rule:** If the commit message body contains words that need quoting, use single quotes — NEVER double quotes. Double-quote escaping (`""` or `\"`) inside the `-m` string breaks PowerShell argument parsing for `git commit`.
+**Quoting rule (Windows/PowerShell only):** If the commit message body contains words that need quoting, use single quotes — NEVER double quotes. Double-quote escaping (`""` or `\"`) inside the `-m` string breaks PowerShell argument parsing for `git commit`.
 - Bad: `git commit -m "Fix parsing of ""Critical Issues"" section"`
 - Good: `git commit -m "Fix parsing of 'Critical Issues' section"`
 
-**Copy to clipboard:** Use the Bash tool to pipe the command string to `clip.exe` so it lands on the user's clipboard as one unbroken line. For example:
-
-```
-echo 'git add src/Profile.cs src/Validator.cs; git commit -m "Subject line here"; git push' | clip
-```
+Copy to clipboard: `echo '...' | clip`
 
 Then tell the user the command has been copied to their clipboard and they can paste it directly.
 

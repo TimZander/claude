@@ -13,6 +13,7 @@ You are crafting a commit message for the currently staged changes and producing
 
 1. Run `git diff --cached --stat` to see which files are staged.
 2. Run `git diff --cached -U5` to see the full staged diff with context.
+3. Run `echo "OS=$(uname -s)"` to detect the user's operating system.
 
 If there are no staged changes, stop immediately and tell the user: "No staged changes found. Stage your changes with `git add` first."
 
@@ -59,27 +60,39 @@ the change was made and any important context.
 
 ### Command
 
-Build a single-line command that commits and then pushes, using `;` to chain the commands. Use PowerShell's `` `n `` escape for newlines within the `-m` string.
+Build a single-line command that commits and then pushes, using `;` to chain the commands. Match the syntax to the detected OS.
+
+**If the OS is `Darwin` (macOS) or `Linux`:**
+
+For subject-only messages:
+```bash
+git commit -m "Subject line here"; git push
+```
+
+For messages with a body, use `$'...'` quoting with literal `\n` for newlines:
+```bash
+git commit -m $'Subject line here\n\nBody paragraph here, wrapped at 72 characters. Explains why the change was made and any important context.'; git push
+```
+
+Copy to clipboard: `echo '...' | pbcopy` (macOS) or `echo '...' | xclip -selection clipboard` (Linux, falls back to `xsel --clipboard --input` if `xclip` is not installed).
+
+**If the OS contains `MINGW`, `MSYS`, or `CYGWIN` (Windows):**
 
 For subject-only messages:
 ```powershell
 git commit -m "Subject line here"; git push
 ```
 
-For messages with a body, use `` `n`n `` to separate the subject from the body (double newline = blank line):
+For messages with a body, use `` `n `` for newlines:
 ```powershell
 git commit -m "Subject line here`n`nBody paragraph here, wrapped at 72 characters. Explains why the change was made and any important context."; git push
 ```
 
-**Quoting rule:** If the commit message body contains words that need quoting, use single quotes — NEVER double quotes. Double-quote escaping (`""` or `\"`) inside the `-m` string breaks PowerShell argument parsing for `git commit`.
+**Quoting rule (Windows/PowerShell only):** If the commit message body contains words that need quoting, use single quotes — NEVER double quotes. Double-quote escaping (`""` or `\"`) inside the `-m` string breaks PowerShell argument parsing for `git commit`.
 - Bad: `git commit -m "Fix parsing of ""Critical Issues"" section"; git push`
 - Good: `git commit -m "Fix parsing of 'Critical Issues' section"; git push`
 
-**Copy to clipboard:** Use the Bash tool to pipe the command string to `clip.exe` so it lands on the user's clipboard as one unbroken line. For example:
-
-```
-echo 'git commit -m "Subject line here"; git push' | clip
-```
+Copy to clipboard: `echo '...' | clip`
 
 Then tell the user the command has been copied to their clipboard and they can paste it directly.
 
