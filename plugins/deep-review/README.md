@@ -1,11 +1,18 @@
-# review-code
+# deep-review
 
 Rigorous code review plugin that reviews all changes on the current branch compared to main.
+
+> **Renamed from `review-code`** to avoid conflict with Claude's built-in `/review` skill.
+> If you have `review-code` installed, uninstall it and install `deep-review`:
+> ```
+> /plugin uninstall review-code
+> /plugin install deep-review@tzander-skills
+> ```
 
 ## Usage
 
 ```
-/review-code
+/deep-review
 ```
 
 ## What It Does
