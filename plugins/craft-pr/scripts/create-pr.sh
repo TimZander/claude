@@ -81,6 +81,13 @@ if [[ -z "$BRANCH" ]]; then
     exit 1
 fi
 
+# ── Branch safety ────────────────────────────────────────────────────
+
+if [[ "$BRANCH" == "main" || "$BRANCH" == "master" ]]; then
+    echo "Error: Refusing to push to '$BRANCH'. Create a feature branch first." >&2
+    exit 1
+fi
+
 # ── Pre-flight checks ───────────────────────────────────────────────
 
 if [[ "$PLATFORM" == "github" ]]; then

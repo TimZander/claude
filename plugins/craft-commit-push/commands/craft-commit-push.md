@@ -14,6 +14,9 @@ You are crafting a commit message for the currently staged changes and producing
 1. Run `git diff --cached --stat` to see which files are staged.
 2. Run `git diff --cached -U5` to see the full staged diff with context.
 3. Run `echo "OS=$(uname -s)"` to detect the user's operating system.
+4. Run `git branch --show-current` to check the current branch.
+
+**If the current branch is `main` or `master`, stop immediately and tell the user: "You are on `<branch>`. All changes must go through a pull request — switch to a feature branch first."**
 
 If there are no staged changes, stop immediately and tell the user: "No staged changes found. Stage your changes with `git add` first."
 
@@ -99,5 +102,7 @@ Then tell the user the command has been copied to their clipboard and they can p
 Also display the command in your response for reference, but note that the clipboard copy is the reliable way to use it.
 
 **Do NOT run the git commit or git push commands.** Only copy the command to the clipboard and display it.
+
+**Never include `--force`, `-f`, or `--force-with-lease` in the push command.**
 
 **Do NOT add a `Co-Authored-By` trailer or any other attribution line.** The commit message must contain only the subject and optional body — nothing else.
