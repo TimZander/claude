@@ -99,5 +99,3 @@ Then tell the user the command has been copied to their clipboard and they can p
 Also display the command in your response for reference, but note that the clipboard copy is the reliable way to use it.
 
 **Do NOT run the git commit command itself.** Only copy it to the clipboard and display it.
-
-**Do NOT add a `Co-Authored-By` trailer or any other attribution line.** The commit message must contain only the subject and optional body — nothing else.

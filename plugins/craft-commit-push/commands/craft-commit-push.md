@@ -104,5 +104,3 @@ Also display the command in your response for reference, but note that the clipb
 **Do NOT run the git commit or git push commands.** Only copy the command to the clipboard and display it.
 
 **Never include `--force`, `-f`, or `--force-with-lease` in the push command.**
-
-**Do NOT add a `Co-Authored-By` trailer or any other attribution line.** The commit message must contain only the subject and optional body — nothing else.
