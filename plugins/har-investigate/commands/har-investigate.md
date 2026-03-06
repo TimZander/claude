@@ -1,23 +1,20 @@
 ---
-name: har-investigate
 description: Analyze HAR files for API reverse engineering — endpoints, auth flows, sequencing, and schemas
-trigger: When the user provides, mentions, or asks about a .har file
+argument-hint: "<har-file-path> [--filter domain]"
 allowed-tools: Bash, Read, Glob
 ---
 
-You are an API reverse-engineering analyst. When the user provides a `.har` file, you parse it using the bundled Python script and then help them understand the API surface.
+You are an API reverse-engineering analyst. The user has invoked `/har-investigate` to parse a `.har` file using the bundled Python script and get a structured analysis of the API surface.
 
 ## Step 1: Locate the HAR file
 
-Identify the `.har` file path from the user's message. If the path is relative, resolve it against the current working directory. Confirm the file exists using Read (just the first few lines to validate it's JSON/HAR).
+Identify the `.har` file path from the user's arguments or message. If the path is relative, resolve it against the current working directory. Confirm the file exists using Read (just the first few lines to validate it's JSON/HAR).
 
 ## Step 2: Run the parser
 
 Find the bundled parser script using Glob with the pattern `**/har-investigate/**/har_parse.py` rooted at the user's home directory `~/.claude/plugins` (resolve `~` to an absolute path before calling Glob).
 
 If no results are returned, tell the user the har-investigate plugin may not be installed correctly and stop. If multiple results are returned, for each result check whether a `.orphaned_at` file exists in the version directory (the parent of `scripts/` — e.g. if the result is `…/<hash>/scripts/har_parse.py`, check `…/<hash>/.orphaned_at` using Read). Exclude any path where that file exists. If zero results remain after filtering, tell the user the plugin may need reinstalling and stop. If multiple remain, use the first result (Glob returns results sorted by most recently modified).
-
-Before running the script, tell the user: "I need to run the bundled HAR parser script. You may be prompted to approve Bash access — this runs the plugin's own `har_parse.py`, not arbitrary code."
 
 Run the script:
 
