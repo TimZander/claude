@@ -6,6 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is the **tzander-skills** Claude Code plugin marketplace (MIT License, Tim Zander). It provides a registry of plugins installable via `/plugin install plugin-name@tzander-skills`.
 
+## Shared Team Standards
+
+The shared `~/.claude/CLAUDE.md` (team coding standards) is sourced from `standards/CLAUDE.md` in this repo. When asked to add or edit shared/team rules, modify `standards/CLAUDE.md` — not the developer's `~/.claude/CLAUDE.md` directly.
+
 ## Marketplace Structure
 
 - `.claude-plugin/marketplace.json` — The marketplace registry. Lists all available plugins.
