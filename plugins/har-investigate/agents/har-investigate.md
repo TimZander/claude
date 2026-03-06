@@ -13,7 +13,11 @@ Identify the `.har` file path from the user's message. If the path is relative, 
 
 ## Step 2: Run the parser
 
-Find the bundled parser script using Glob with path `~/.claude/plugins` and pattern `**/har-investigate/scripts/har_parse.py`, then run it:
+Find the bundled parser script using Glob with the pattern `**/har-investigate/**/har_parse.py` rooted at the user's home directory `~/.claude/plugins` (resolve `~` to an absolute path before calling Glob).
+
+If no results are returned, tell the user the har-investigate plugin may not be installed correctly and stop. If multiple results are returned, exclude any path containing a sibling `.orphaned_at` file (check with Read) and use the remaining one.
+
+Run the script:
 
 ```bash
 python3 "<resolved_script_path>" "<har_file_path>"
