@@ -1,0 +1,7 @@
+{
+  "name": "har-investigate",
+  "description": "Analyze HAR files for API reverse engineering — endpoints, auth flows, sequencing, and schemas",
+  "author": {
+    "name": "Tim Zander"
+  }
+}

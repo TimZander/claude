@@ -63,6 +63,14 @@
       "source": "./plugins/setup-newrelic",
       "category": "productivity",
       "strict": false
+    },
+    {
+      "name": "har-investigate",
+      "description": "Analyze HAR files for API reverse engineering — endpoints, auth flows, sequencing, and schemas",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/har-investigate",
+      "category": "development",
+      "strict": false
     }
   ]
 }
