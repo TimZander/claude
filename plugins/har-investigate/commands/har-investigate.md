@@ -63,7 +63,7 @@ If no focus was given, provide a high-level summary of the API surface and then 
 ## Rules
 
 - **Only use the bundled `har_parse.py` script.** Never write or execute ad hoc Python code.
-- **Only read the HAR file specified by the user.** Do not read other files unless the user asks.
+- **Only read the HAR file identified in Step 1.** Do not read other files unless the user asks.
 - When no focus area is given, lead with the dependency chain and call ordering — that's the most valuable insight for reverse engineering.
 - If the output is very large, summarize the high-level flow first, then offer to detail specific endpoints.
 - When the user asks follow-up questions, refer back to the script output rather than re-running it.
