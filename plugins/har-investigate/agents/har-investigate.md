@@ -13,15 +13,19 @@ Identify the `.har` file path from the user's message. If the path is relative, 
 
 ## Step 2: Run the parser
 
-Find the bundled parser script using Glob for `**/har-investigate/scripts/har_parse.py`, then run it:
+Find the bundled parser script using Glob with the pattern `**/har-investigate/**/har_parse.py` rooted at the user's home directory `~/.claude/plugins` (resolve `~` to an absolute path before calling Glob).
 
-```
+If no results are returned, tell the user the har-investigate plugin may not be installed correctly and stop. If multiple results are returned, for each result check whether a `.orphaned_at` file exists in the version directory (the parent of `scripts/` — e.g. if the result is `…/<hash>/scripts/har_parse.py`, check `…/<hash>/.orphaned_at` using Read). Exclude any path where that file exists. If zero results remain after filtering, tell the user the plugin may need reinstalling and stop. If multiple remain, use the first result (Glob returns results sorted by most recently modified).
+
+Run the script:
+
+```bash
 python3 "<resolved_script_path>" "<har_file_path>"
 ```
 
 If the HAR file contains mixed traffic (CDN, analytics, etc.), use `--filter` to focus on the API domain:
 
-```
+```bash
 python3 "<resolved_script_path>" "<har_file_path>" --filter "api.example.com"
 ```
 
