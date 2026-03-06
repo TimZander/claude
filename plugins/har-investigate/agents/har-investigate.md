@@ -13,15 +13,15 @@ Identify the `.har` file path from the user's message. If the path is relative, 
 
 ## Step 2: Run the parser
 
-Find the bundled parser script using Glob for `**/har-investigate/scripts/har_parse.py`, then run it:
+Find the bundled parser script using Glob with path `~/.claude/plugins` and pattern `**/har-investigate/scripts/har_parse.py`, then run it:
 
-```
+```bash
 python3 "<resolved_script_path>" "<har_file_path>"
 ```
 
 If the HAR file contains mixed traffic (CDN, analytics, etc.), use `--filter` to focus on the API domain:
 
-```
+```bash
 python3 "<resolved_script_path>" "<har_file_path>" --filter "api.example.com"
 ```
 
