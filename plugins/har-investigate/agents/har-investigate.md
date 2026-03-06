@@ -17,6 +17,8 @@ Find the bundled parser script using Glob with the pattern `**/har-investigate/*
 
 If no results are returned, tell the user the har-investigate plugin may not be installed correctly and stop. If multiple results are returned, for each result check whether a `.orphaned_at` file exists in the version directory (the parent of `scripts/` — e.g. if the result is `…/<hash>/scripts/har_parse.py`, check `…/<hash>/.orphaned_at` using Read). Exclude any path where that file exists. If zero results remain after filtering, tell the user the plugin may need reinstalling and stop. If multiple remain, use the first result (Glob returns results sorted by most recently modified).
 
+Before running the script, tell the user: "I need to run the bundled HAR parser script. You may be prompted to approve Bash access — this runs the plugin's own `har_parse.py`, not arbitrary code."
+
 Run the script:
 
 ```bash
