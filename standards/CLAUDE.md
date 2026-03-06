@@ -49,6 +49,10 @@ then have each developer re-run the sync script.
 - **Never push to `main` or `master`** — all changes must go through pull requests
 - **Never force push** (`--force`, `-f`, `--force-with-lease`) to any branch
 
+## Pre-PR Checklist
+
+When asked to push a branch or create a pull request, remind the user to run `/deep-review` on the current branch if they haven't already done so during this session. Keep the reminder to a single sentence — do not block the push or PR.
+
 <!-- Keep in sync with plugins/deep-review/commands/deep-review.md preamble -->
 ## Code Review Standards
 
