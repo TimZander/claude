@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# Global pre-push hook — installed by setup-env.
+#
+# 1. Blocks pushes to main/master (opt-out: .allow-push-main in repo root)
+# 2. Warns on non-fast-forward (force) pushes with confirmation prompt
+# 3. Chains to repo-local .git/hooks/pre-push if present
+
+REMOTE="$1"
+URL="$2"
+ZERO="0000000000000000000000000000000000000000"
+
+# Determine repo root and opt-out status
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"
+allow_push_main=false
+if [ -n "$repo_root" ] && [ -f "$repo_root/.allow-push-main" ]; then
+    allow_push_main=true
+fi
+
+# Save stdin so we can replay it for a chained local hook
+input="$(cat)"
+
+while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
+    [ -z "$local_ref" ] && continue
+
+    remote_branch="${remote_ref##refs/heads/}"
+
+    # Block pushes to main/master
+    if [ "$allow_push_main" = false ]; then
+        if [ "$remote_branch" = "main" ] || [ "$remote_branch" = "master" ]; then
+            echo "ERROR: Pushing to '$remote_branch' is blocked. Use a pull request." >&2
+            exit 1
+        fi
+    fi
+
+    # Warn on non-fast-forward (force) pushes
+    if [ "$local_sha" != "$ZERO" ] && [ "$remote_sha" != "$ZERO" ]; then
+        if ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+            echo "" >&2
+            echo "WARNING: Non-fast-forward push detected on '$remote_branch'." >&2
+            echo "This will rewrite remote history." >&2
+            echo "" >&2
+            if read -r -p "Type 'yes' to continue, or anything else to abort: " confirm < /dev/tty 2>/dev/null; then
+                if [ "$confirm" != "yes" ]; then
+                    echo "Push aborted." >&2
+                    exit 1
+                fi
+            else
+                echo "Non-interactive session: force push blocked. Run manually to confirm." >&2
+                exit 1
+            fi
+        fi
+    fi
+done <<< "$input"
+
+# Chain to repo-local .git/hooks/pre-push if present
+if [ -n "$repo_root" ]; then
+    local_hook="$repo_root/.git/hooks/pre-push"
+    if [ -f "$local_hook" ] && [ -x "$local_hook" ]; then
+        echo "$input" | "$local_hook" "$@"
+        exit $?
+    fi
+fi
