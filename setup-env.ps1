@@ -18,7 +18,7 @@ $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 ###############################################################################
 
 $HooksDir = Join-Path $HOME '.git-hooks'
-$HooksManifest = Join-Path $RepoRoot 'hooks' 'hooks.json'
+$HooksManifest = Join-Path (Join-Path $RepoRoot 'hooks') 'hooks.json'
 
 Write-Host '=== Git Hooks ==='
 
@@ -38,7 +38,7 @@ else {
             continue
         }
 
-        $SourcePath = Join-Path $RepoRoot 'hooks' $Hook.source
+        $SourcePath = Join-Path (Join-Path $RepoRoot 'hooks') $Hook.source
         $TargetPath = Join-Path $HooksDir $Hook.name
 
         if (-not (Test-Path $SourcePath)) {
