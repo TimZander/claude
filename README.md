@@ -27,27 +27,42 @@ Run `/plugin` and select **Discover** to browse all available plugins from regis
   marketplace.json      # Marketplace registry (lists all available plugins)
 plugins/                # First-party plugins
 external_plugins/       # Community-submitted plugins
+hooks/                  # Git hook scripts and manifest
+standards/              # Team coding standards source
 ```
 
-## Team Coding Standards
+## Environment Setup
 
-This repo includes shared coding standards that can be synced into your `~/.claude/CLAUDE.md` so Claude Code applies them in every session.
-
-### Sync standards
-
-**Windows (PowerShell):**
-
-```
-./sync-standards.ps1
-```
+Run the setup script to bootstrap your local environment — installs global git hooks and syncs team coding standards into `~/.claude/CLAUDE.md`.
 
 **macOS / Linux:**
 
 ```
-./sync-standards.sh
+./setup-env.sh
 ```
 
-Re-run after pulling updates to the `standards/CLAUDE.md` file.
+**Windows (PowerShell):**
+
+```
+./setup-env.ps1
+```
+
+Re-run after pulling updates to pick up new hooks or standard changes.
+
+### What it does
+
+1. **Git hooks** — Installs a global `pre-push` hook (via `core.hooksPath`) that blocks pushes to `main`/`master` and warns on force pushes. Hooks are configured in `hooks/hooks.json`.
+2. **Team standards** — Syncs `standards/CLAUDE.md` into `~/.claude/CLAUDE.md`, preserving any personal content.
+
+### Per-repo opt-out
+
+The `pre-push` hook applies globally to all repos on your machine. To allow pushing to `main` in a specific repo (e.g., personal projects), create a `.allow-push-main` file in that repo's root:
+
+```
+touch .allow-push-main
+```
+
+Add it to `.gitignore` so it stays local. Team repos should **not** include this file.
 
 ## Contributing
 

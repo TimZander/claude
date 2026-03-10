@@ -10,6 +10,19 @@ This is the **tzander-skills** Claude Code plugin marketplace (MIT License, Tim 
 
 The shared `~/.claude/CLAUDE.md` (team coding standards) is sourced from `standards/CLAUDE.md` in this repo. When asked to add or edit shared/team rules, modify `standards/CLAUDE.md` — not the developer's `~/.claude/CLAUDE.md` directly.
 
+## Environment Setup
+
+Run `./setup-env.sh` (bash) or `./setup-env.ps1` (PowerShell) to bootstrap the local environment:
+
+1. **Git hooks** — Installs global hooks from `hooks/` to `~/.git-hooks/` (controlled by `hooks/hooks.json`). Sets `core.hooksPath` globally.
+2. **Team standards** — Syncs `standards/CLAUDE.md` into `~/.claude/CLAUDE.md`.
+
+The script is idempotent — safe to re-run at any time. It replaces the old `sync-standards` scripts.
+
+### Per-repo hook opt-out
+
+The `pre-push` hook blocks pushes to `main`/`master` globally. To opt out for a specific repo (e.g., personal projects), create a `.allow-push-main` file in that repo's root.
+
 ## Marketplace Structure
 
 - `.claude-plugin/marketplace.json` — The marketplace registry. Lists all available plugins.

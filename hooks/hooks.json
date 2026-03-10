@@ -1,0 +1,10 @@
+{
+  "hooks": [
+    {
+      "name": "pre-push",
+      "source": "pre-push",
+      "description": "Blocks pushes to main/master and warns on force pushes",
+      "enabled": true
+    }
+  ]
+}
