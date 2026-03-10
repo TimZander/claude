@@ -49,12 +49,33 @@ else {
     if ($ExistingContent -match [regex]::Escape($StartMarker)) {
         # Markers exist — replace the managed section in-place
         $Pattern = [regex]::Escape($StartMarker) + '[\s\S]*?' + [regex]::Escape($EndMarker)
+
+        # Extract old managed section content (between markers, exclusive)
+        $OldSectionPattern = [regex]::Escape($StartMarker) + '\r?\n([\s\S]*?)\r?\n' + [regex]::Escape($EndMarker)
+        $OldSection = [regex]::Match($ExistingContent, $OldSectionPattern).Groups[1].Value
+
         $UpdatedContent = [regex]::Replace($ExistingContent, $Pattern, $ManagedSection)
 
         if ($UpdatedContent -eq $ExistingContent) {
             Write-Host "Team standards in $TargetFile are already up to date."
         }
         else {
+            # Show what changed
+            $OldLines = $OldSection -split '\r?\n'
+            $NewLines = $StandardsContent.TrimEnd() -split '\r?\n'
+            $Diff = Compare-Object -ReferenceObject $OldLines -DifferenceObject $NewLines
+            if ($Diff) {
+                Write-Host "Changes:"
+                foreach ($d in $Diff) {
+                    if ($d.SideIndicator -eq '=>') {
+                        Write-Host "  + $($d.InputObject)"
+                    }
+                    else {
+                        Write-Host "  - $($d.InputObject)"
+                    }
+                }
+            }
+
             Set-Content -Path $TargetFile -Value $UpdatedContent -NoNewline
             Write-Host "Updated team standards in $TargetFile."
         }

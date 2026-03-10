@@ -40,6 +40,14 @@ elif grep -qF "$START_MARKER" "$TARGET_FILE"; then
     # Markers exist — replace the managed section in-place
     EXISTING_CONTENT="$(cat "$TARGET_FILE")"
 
+    # Extract old managed section content (between markers, exclusive)
+    OLD_SECTION_FILE="$(mktemp)"
+    awk -v start="$START_MARKER" -v end="$END_MARKER" '
+        $0 == start { capture=1; next }
+        $0 == end { capture=0; next }
+        capture { print }
+    ' "$TARGET_FILE" > "$OLD_SECTION_FILE"
+
     # Use awk to replace everything between (and including) the markers.
     # Write the managed section to a temp file because awk -v cannot handle
     # multi-line strings (causes "newline in string" errors).
@@ -55,9 +63,20 @@ elif grep -qF "$START_MARKER" "$TARGET_FILE"; then
     if [ "$UPDATED_CONTENT" = "$EXISTING_CONTENT" ]; then
         echo "Team standards in $TARGET_FILE are already up to date."
     else
+        # Show what changed
+        NEW_SECTION_FILE="$(mktemp)"
+        printf '%s\n' "$STANDARDS_CONTENT" > "$NEW_SECTION_FILE"
+        echo "Changes:"
+        diff "$OLD_SECTION_FILE" "$NEW_SECTION_FILE" \
+            --old-line-format='  - %L' \
+            --new-line-format='  + %L' \
+            --unchanged-line-format='' || true
+        rm -f "$NEW_SECTION_FILE"
+
         printf '%s' "$UPDATED_CONTENT" > "$TARGET_FILE"
         echo "Updated team standards in $TARGET_FILE."
     fi
+    rm -f "$OLD_SECTION_FILE"
 else
     # No markers — append the managed section
     # Add appropriate spacing
