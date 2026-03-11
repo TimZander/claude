@@ -13,7 +13,13 @@ Rigorous code review plugin that reviews all changes on the current branch compa
 
 ```
 /deep-review
+/deep-review focus on thread safety and error handling
+/deep-review https://github.com/org/repo/issues/42
+/deep-review https://dev.azure.com/org/project/_workitems/edit/1234
+/deep-review https://github.com/org/repo/pull/99 check auth edge cases
 ```
+
+Optional text after `/deep-review` provides additional context for the review. This can be a focus area, a GitHub issue/PR URL, an Azure DevOps work item URL, a plain URL, or any combination.
 
 ## What It Does
 

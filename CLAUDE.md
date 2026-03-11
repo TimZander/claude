@@ -10,6 +10,8 @@ This is the **tzander-skills** Claude Code plugin marketplace (MIT License, Tim 
 
 The shared `~/.claude/CLAUDE.md` (team coding standards) is sourced from `standards/CLAUDE.md` in this repo. When asked to add or edit shared/team rules, modify `standards/CLAUDE.md` — not the developer's `~/.claude/CLAUDE.md` directly.
 
+The shared `~/.claude/settings.json` (team permission rules and settings) is sourced from `standards/settings.json`. The sync scripts deep-merge team settings into the user's existing settings (arrays are unioned, objects are merged, personal entries are preserved). When asked to add or edit shared settings, modify `standards/settings.json`.
+
 ## Marketplace Structure
 
 - `.claude-plugin/marketplace.json` — The marketplace registry. Lists all available plugins.
