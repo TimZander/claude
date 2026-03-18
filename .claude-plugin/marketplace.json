@@ -71,6 +71,14 @@
       "source": "./plugins/har-investigate",
       "category": "development",
       "strict": false
+    },
+    {
+      "name": "improve-stories",
+      "description": "Review user stories for completeness, research the codebase to fill gaps, and update each story with structured documentation",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/improve-stories",
+      "category": "productivity",
+      "strict": false
     }
   ]
 }
