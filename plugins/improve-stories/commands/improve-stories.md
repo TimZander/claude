@@ -30,6 +30,8 @@ This skill runs from within a specific repository, which is where codebase resea
 
 For each remaining story, read its full details and classify it:
 
+**Already in progress** (skip) — state is Active, In Progress, Resolved, or any non-New/non-Proposed state. A developer has already started work and changing the description under them could be disruptive.
+
 **Well-documented** (skip) — has a clear description, acceptance criteria, and enough context to start work.
 
 **Needs improvement** — flag if ANY of these are true:
