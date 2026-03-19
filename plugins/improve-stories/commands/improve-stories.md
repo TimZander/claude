@@ -218,6 +218,7 @@ Before updating each story, verify:
 ### 4e: Update the Work Items
 
 - If the story already has description content, incorporate any relevant context from the original into the new structured description. Do not silently discard product owner notes, links, stakeholder references, or edge case mentions — weave them into the appropriate section of the template.
+- **Preserve all images and attachments.** Scan the original HTML for `<img>` tags (typically pointing to `_apis/wit/attachments/...`). These are screenshots, mockups, or reference images added by the author. Include them in the new description — either inline in the relevant section or in a dedicated "Reference Images" section at the end. Never drop `<img>` tags during a rewrite.
 - Write the updated description to each ADO work item using the update tool.
 - After each successful update, add a brief work item comment noting what was changed (e.g., "Description restructured — added root cause analysis, acceptance criteria, and proposed fix based on codebase research."). This creates an audit trail so reviewers know the description was reworked.
 - Do NOT change title, state, assignment, or story points.
