@@ -14,7 +14,7 @@ You are improving user stories so they are actionable, complete, and ready for a
 - If the user provided specific work item IDs, fetch those directly.
 - If the user provided an iteration path, fetch all user stories for that iteration.
 - If no argument was given, ask the user which iteration or work items to target.
-- Filter to the relevant project or area if specified (e.g., "STC" prefix).
+- Filter to the relevant project or area if specified (e.g., a specific area path prefix).
 
 ## Step 2: Filter to Repository-Relevant Stories
 
@@ -47,6 +47,7 @@ Present the triage summary to the user:
 - List which stories you're skipping and why
 - If more than 10 stories need improvement, recommend processing in chunks and ask the user how many to tackle now
 - Ask the user to confirm before proceeding
+- If the user declines, asks to skip specific stories, or wants to add stories that were filtered out, adjust the selection accordingly and re-present the updated plan
 
 ## Step 4: Research and Update (chunked)
 
