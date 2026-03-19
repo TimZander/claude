@@ -1,7 +1,7 @@
 ---
 name: improve-stories
 description: Review user stories for completeness, research the codebase to fill gaps, and update each story with structured documentation
-allowed-tools: Bash, Read, Grep, Glob, Agent, AskUserQuestion, mcp__azure-devops__core_list_project_teams, mcp__azure-devops__wit_get_work_items_for_iteration, mcp__azure-devops__wit_get_work_item, mcp__azure-devops__wit_update_work_item, mcp__azure-devops__wit_my_work_items, mcp__azure-devops__wit_list_backlogs, mcp__azure-devops__wit_list_backlog_work_items, mcp__azure-devops__wit_get_work_items_batch_by_ids
+allowed-tools: Bash, Read, Grep, Glob, Agent, AskUserQuestion, mcp__azure-devops__core_list_project_teams, mcp__azure-devops__wit_get_work_items_for_iteration, mcp__azure-devops__wit_get_work_item, mcp__azure-devops__wit_update_work_item, mcp__azure-devops__wit_add_work_item_comment, mcp__azure-devops__wit_my_work_items, mcp__azure-devops__wit_list_backlogs, mcp__azure-devops__wit_list_backlog_work_items, mcp__azure-devops__wit_get_work_items_batch_by_ids
 user-input: optional
 argument-hint: "[iteration-path or work-item-ids]"
 model: opus
@@ -9,12 +9,16 @@ model: opus
 
 You are improving user stories so they are actionable, complete, and ready for any developer to pick up. Your deliverable is **updated work item descriptions** — you do NOT begin implementation.
 
-## Step 1: Gather Stories
+## Step 1: Gather Stories (lightweight fetch)
 
 - If the user provided specific work item IDs, fetch those directly.
 - If the user provided an iteration path, resolve it to an iteration ID (see below) and fetch work items for it.
 - If no argument was given, detect the current iteration automatically (see below). Tell the user which iteration was detected and proceed. If detection fails (common causes: `az` CLI not installed, not logged in, or `azure-devops` extension missing), tell the user what went wrong and fall back to asking them which iteration to target.
 - Filter to the relevant project or area if specified (e.g., a specific area path prefix).
+
+**Use a lightweight batch fetch** to minimize payload size. Request only the fields needed for filtering and triage:
+- `System.Id`, `System.Title`, `System.State`, `System.WorkItemType`, `System.AreaPath`, `System.Tags`, `System.AssignedTo`
+- Do **not** fetch `System.Description` or `Microsoft.VSTS.Common.AcceptanceCriteria` yet — those are large text fields and most items will be filtered out before they're needed.
 
 ### Resolving the Current Iteration
 
@@ -54,9 +58,17 @@ This skill runs from within a specific repository, which is where codebase resea
 
 ## Step 3: Triage
 
-For each remaining story, read its full details and classify it:
+### 3a: Filter by state (from lightweight data)
+
+Using the fields already fetched, skip items without needing their descriptions:
 
 **Already in progress** (skip) — state is Active, In Progress, Resolved, or any non-New/non-Proposed state. A developer has already started work and changing the description under them could be disruptive.
+
+### 3b: Fetch full details for remaining candidates
+
+For items that survived Steps 1-3a, fetch `System.Description` and `Microsoft.VSTS.Common.AcceptanceCriteria` using `wit_get_work_items_batch_by_ids`. Fetch in batches of up to 10.
+
+### 3c: Classify with full details
 
 **Well-documented** (skip) — has a clear description, acceptance criteria, and enough context to start work.
 
@@ -94,9 +106,9 @@ Use the Agent tool to parallelize research across stories within the chunk.
 
 ### 4b: Detect Description Format
 
-Only needs to be done once (for the first chunk). Examine the existing work items you fetched to determine whether the project uses **HTML** or **Markdown** for descriptions.
+Only needs to be done once (for the first chunk). Examine the descriptions fetched in Step 3b to determine whether the project uses **HTML** or **Markdown** for descriptions.
 
-- Look at well-documented stories (the ones you skipped) and any non-empty descriptions on the stories you're improving.
+- Look at well-documented stories (the ones you skipped in 3c) and any non-empty descriptions on the stories you're improving.
 - HTML indicators: `<div>`, `<br>`, `<b>`, `<ol>`, `<ul>`, `<li>`, `<h2>`, `&nbsp;`, inline `style=` attributes.
 - Markdown indicators: `##` headings, `**bold**`, `- ` bullet lists, `1. ` numbered lists, backtick code spans.
 - Match whatever format the existing stories use. If the project mixes both, prefer the format used by the majority.
@@ -205,7 +217,10 @@ Before updating each story, verify:
 
 ### 4e: Update the Work Items
 
+- If the story already has description content, incorporate any relevant context from the original into the new structured description. Do not silently discard product owner notes, links, stakeholder references, or edge case mentions — weave them into the appropriate section of the template.
+- **Preserve all images and attachments.** Scan the original HTML for `<img>` tags (typically pointing to `_apis/wit/attachments/...`). These are screenshots, mockups, or reference images added by the author. Include them in the new description — either inline in the relevant section or in a dedicated "Reference Images" section at the end. Never drop `<img>` tags during a rewrite.
 - Write the updated description to each ADO work item using the update tool.
+- After each successful update, add a brief work item comment noting what was changed (e.g., "Description restructured — added root cause analysis, acceptance criteria, and proposed fix based on codebase research."). This creates an audit trail so reviewers know the description was reworked.
 - Do NOT change title, state, assignment, or story points.
 - Do NOT begin implementation — the deliverable is the updated story.
 - If an update fails, report the error and continue with the remaining stories.
