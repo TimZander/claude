@@ -10,8 +10,10 @@ Review user stories for completeness, research the codebase to fill gaps, and up
 
 Run this from the repository whose code the stories relate to. The skill searches the local codebase to fill in root causes, affected files, and proposed fixes.
 
+Requires the Azure CLI (`az`) with the `azure-devops` extension, and the `azure-devops` MCP server configured in your Claude Code settings.
+
 Examples:
-- `/improve-stories` — prompts you to pick an iteration
+- `/improve-stories` — auto-detects the current sprint
 - `/improve-stories "Project\Sprint 5"` — targets a specific sprint
 - `/improve-stories 12345 12346 12347` — targets specific work items
 

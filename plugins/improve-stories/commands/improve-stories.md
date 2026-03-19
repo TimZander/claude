@@ -1,7 +1,7 @@
 ---
 name: improve-stories
 description: Review user stories for completeness, research the codebase to fill gaps, and update each story with structured documentation
-allowed-tools: Bash, Read, Grep, Glob, Agent, AskUserQuestion, mcp__azure-devops__wit_get_work_items_for_iteration, mcp__azure-devops__wit_get_work_item, mcp__azure-devops__wit_update_work_item, mcp__azure-devops__wit_my_work_items, mcp__azure-devops__wit_list_backlogs, mcp__azure-devops__wit_list_backlog_work_items, mcp__azure-devops__wit_get_work_items_batch_by_ids
+allowed-tools: Bash, Read, Grep, Glob, Agent, AskUserQuestion, mcp__azure-devops__core_list_project_teams, mcp__azure-devops__wit_get_work_items_for_iteration, mcp__azure-devops__wit_get_work_item, mcp__azure-devops__wit_update_work_item, mcp__azure-devops__wit_my_work_items, mcp__azure-devops__wit_list_backlogs, mcp__azure-devops__wit_list_backlog_work_items, mcp__azure-devops__wit_get_work_items_batch_by_ids
 user-input: optional
 argument-hint: "[iteration-path or work-item-ids]"
 model: opus
@@ -12,9 +12,35 @@ You are improving user stories so they are actionable, complete, and ready for a
 ## Step 1: Gather Stories
 
 - If the user provided specific work item IDs, fetch those directly.
-- If the user provided an iteration path, fetch all user stories for that iteration.
-- If no argument was given, ask the user which iteration or work items to target.
+- If the user provided an iteration path, resolve it to an iteration ID (see below) and fetch work items for it.
+- If no argument was given, detect the current iteration automatically (see below). Tell the user which iteration was detected and proceed. If detection fails (common causes: `az` CLI not installed, not logged in, or `azure-devops` extension missing), tell the user what went wrong and fall back to asking them which iteration to target.
 - Filter to the relevant project or area if specified (e.g., a specific area path prefix).
+
+### Resolving the Current Iteration
+
+The MCP server's `wit_get_work_items_for_iteration` requires an iteration **ID** (GUID), not a path or name. Use the Azure DevOps REST API via the `az` CLI to resolve iterations:
+
+**Get the current iteration:**
+```bash
+MSYS_NO_PATHCONV=1 az devops invoke \
+  --area work --resource iterations \
+  --route-parameters project="PROJECT" team="TEAM" \
+  --query-parameters '$timeframe=current' \
+  --org ORG_URL -o json
+```
+
+**Resolve an iteration path to an ID:**
+```bash
+MSYS_NO_PATHCONV=1 az devops invoke \
+  --area work --resource iterations \
+  --route-parameters project="PROJECT" team="TEAM" \
+  --org ORG_URL -o json
+```
+Then find the matching iteration by path or name in the response.
+
+Replace `PROJECT`, `TEAM`, and `ORG_URL` with values from the user's `~/.claude/CLAUDE.md` or the project's `CLAUDE.md`. If no team is specified, use `core_list_project_teams` with `mine=true` to find teams the user belongs to. If exactly one team is returned, use it. If multiple are returned, ask the user which team to target.
+
+The response includes an `id` field (GUID) — pass that to `wit_get_work_items_for_iteration`.
 
 ## Step 2: Filter to Repository-Relevant Stories
 
