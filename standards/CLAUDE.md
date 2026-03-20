@@ -53,6 +53,10 @@ then have each developer re-run the sync script.
 
 When asked to push a branch or create a pull request, remind the user to run `/deep-review` on the current branch if they haven't already done so during this session. Keep the reminder to a single sentence — do not block the push or PR.
 
+## Phased Work
+
+When an issue defines phased work (Phase 1, Phase 2, Phase 3), ship each phase as a separate PR — even when the phases feel small. Interaction bugs between phases (e.g., a new tri-state return value meeting existing binary assumptions in callers) only surface when the phases are integrated. Separate PRs catch these incrementally during review instead of requiring multiple fix-up commits after the fact.
+
 <!-- Keep in sync with plugins/deep-review/commands/deep-review.md preamble -->
 ## Code Review Standards
 
