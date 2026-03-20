@@ -167,4 +167,78 @@ $EndMarker
 }
 
 Write-Host ''
+
+###############################################################################
+# 3. Team settings sync
+###############################################################################
+
+Write-Host '=== Team Settings ==='
+
+$SettingsSource = Join-Path (Join-Path $RepoRoot 'standards') 'settings.json'
+$SettingsTarget = Join-Path $ClaudeDir 'settings.json'
+
+function Merge-JsonObjects {
+    param(
+        [Parameter(Mandatory)] $Base,
+        [Parameter(Mandatory)] $Override
+    )
+
+    if ($Base -is [System.Management.Automation.PSCustomObject] -and
+        $Override -is [System.Management.Automation.PSCustomObject]) {
+        $Result = [PSCustomObject]@{}
+        $AllKeys = @(($Base.PSObject.Properties.Name + $Override.PSObject.Properties.Name) | Sort-Object -Unique)
+        foreach ($Key in $AllKeys) {
+            $HasBase = $null -ne ($Base.PSObject.Properties | Where-Object { $_.Name -eq $Key })
+            $HasOverride = $null -ne ($Override.PSObject.Properties | Where-Object { $_.Name -eq $Key })
+            if ($HasBase -and $HasOverride) {
+                $Result | Add-Member -NotePropertyName $Key -NotePropertyValue (
+                    Merge-JsonObjects -Base $Base.$Key -Override $Override.$Key
+                )
+            }
+            elseif ($HasOverride) {
+                $Result | Add-Member -NotePropertyName $Key -NotePropertyValue $Override.$Key
+            }
+            else {
+                $Result | Add-Member -NotePropertyName $Key -NotePropertyValue $Base.$Key
+            }
+        }
+        return $Result
+    }
+    elseif ($Base -is [System.Collections.IEnumerable] -and $Base -isnot [string] -and
+            $Override -is [System.Collections.IEnumerable] -and $Override -isnot [string]) {
+        $Combined = @($Base) + @($Override) | Sort-Object -Unique
+        return @($Combined)
+    }
+    else {
+        return $Override
+    }
+}
+
+if (-not (Test-Path $SettingsSource)) {
+    Write-Host "No standards/settings.json found — skipping settings sync."
+}
+else {
+    $TeamSettings = Get-Content -Path $SettingsSource -Raw | ConvertFrom-Json
+
+    if (-not (Test-Path $SettingsTarget)) {
+        Copy-Item -Path $SettingsSource -Destination $SettingsTarget
+        Write-Host "Created $SettingsTarget with team settings."
+    }
+    else {
+        $ExistingSettings = Get-Content -Path $SettingsTarget -Raw | ConvertFrom-Json
+        $Merged = Merge-JsonObjects -Base $TeamSettings -Override $ExistingSettings
+        $MergedJson = $Merged | ConvertTo-Json -Depth 10
+
+        $ExistingJson = Get-Content -Path $SettingsTarget -Raw
+        if ($MergedJson.Trim() -eq $ExistingJson.Trim()) {
+            Write-Host "Settings in $SettingsTarget are already up to date."
+        }
+        else {
+            Set-Content -Path $SettingsTarget -Value $MergedJson -NoNewline
+            Write-Host "Merged team settings into $SettingsTarget."
+        }
+    }
+}
+
+Write-Host ''
 Write-Host '=== Setup complete ==='
