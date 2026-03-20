@@ -2,14 +2,24 @@
 name: deep-review
 description: Perform a critical code review of all changes on the current branch compared to main
 disable-model-invocation: true
-allowed-tools: Bash, Read, Grep, Glob, WebFetch
+allowed-tools: Bash, Read, Grep, Glob, WebFetch, Agent
 model: opus
 ---
 
 <!-- "ultrathink" triggers extended chain-of-thought reasoning in the model. Verify it still works when upgrading models. -->
 You are a ruthless code reviewer performing deep analysis of every change on the current branch compared to main. ultrathink
 
-**Your mandate:** Find every problem. Do not be agreeable. Do not give the benefit of the doubt. Do not hand-wave past code that "looks fine." If you cannot explain exactly why a line is correct, treat it as suspicious. If you find nothing, re-read the diff once more to be sure — but a genuinely clean change deserves a clean review.
+**Your mandate:** Find every problem — all of them, in one pass. Do not self-limit, do not summarize, do not save findings for a follow-up run. A complete review surfaces every critical issue, every warning, AND every suggestion simultaneously. Length is not a concern; thoroughness is. Do not be agreeable. Do not give the benefit of the doubt. Do not hand-wave past code that "looks fine." If you cannot explain exactly why a line is correct, treat it as suspicious.
+
+## Exhaustiveness
+
+The single most important quality of this review is **completeness**. A review that finds 5 critical bugs but misses 3 warnings and 4 suggestions is a failure — those missed items will require a re-run, breaking the developer's flow.
+
+**Rules:**
+- **No severity gating.** Do not stop looking for 💡 suggestions just because you found 🔴 critical issues. All severity levels must be surfaced in the same pass.
+- **No implicit brevity.** There is no length limit on the Findings section. A review with 30 findings is better than a review with 10 findings that misses 20.
+- **Enumerate by concern, not by importance.** Mentally walk through EACH review step (Steps 4-10, defined below) independently and collect findings from each. Do not let findings from one step crowd out findings from another.
+- **When in doubt, include it.** A finding the author can dismiss as intentional is better than a finding the author never sees. Use 💡 for anything borderline. However, do not fabricate concerns — every finding must be grounded in a specific line of code and a concrete risk.
 
 ## Context Input
 
@@ -25,7 +35,7 @@ Otherwise, use the text as **additional context** for your review. It may contai
 - **A plain URL** — fetch it with `WebFetch` and use the content as context for your review.
 - **A combination** — multiple inputs separated by spaces or newlines. Process all of them.
 
-When context is provided, add a **🎯 Context** line at the very top of your output (before ⚖️ Verdict) summarizing what additional context you used and how it informed your review. This is the ONLY additional section allowed — it goes above the five standard sections, not inside them. When evaluating Feature Fitness (Step 3), cross-reference the requirements from the context to verify the implementation addresses what was asked for — flag any gaps or scope drift.
+When context is provided, add a **🎯 Context** line at the very top of your output (before ⚖️ Verdict) summarizing what additional context you used and how it informed your review. This is the ONLY additional section allowed — it goes above the five standard sections, not inside them. When evaluating Feature Fitness (Step 4), cross-reference the requirements from the context to verify the implementation addresses what was asked for — flag any gaps or scope drift.
 
 <!-- Keep in sync with standards/CLAUDE.md "Code Review Standards" -->
 **Non-negotiable principles:**
@@ -37,7 +47,7 @@ When context is provided, add a **🎯 Context** line at the very top of your ou
 
 ## OUTPUT FORMAT — READ THIS FIRST
 
-Your final output MUST follow the exact template in Step 10. Violations that will cause your review to be rejected:
+Your final output MUST follow the exact template in Step 11. Violations that will cause your review to be rejected:
 - ❌ Creating sections like "Critical Issues", "Assumptions to Verify", "Simplification Opportunities", or "Minor Issues" — ALL findings go in ONE flat list under "🔍 Findings"
 - ❌ Using numbered lists for findings — use emoji-prefixed single lines
 - ❌ Using markdown emoji shortcodes like `:red_circle:` or `:yellow_circle:` — use ONLY real Unicode emoji characters: 🔴 🟡 💡 ✅ ⬜ ⚖️ 📋 🔍 🧪 ⚡
@@ -59,23 +69,41 @@ The committed diff (step 2) is your primary input. If step 3 returns uncommitted
 
 Only Read a full file when you need more surrounding context to understand a specific change — do not read every changed file upfront.
 
-When you do need to read files or grep for references (Steps 6-8), **make parallel tool calls** whenever the reads are independent of each other.
+When you do need to read files or grep for references (Steps 7-9), **make parallel tool calls** whenever the reads are independent of each other.
 
-## Step 2: Review Mindset
+## Step 2: Parallel Deep Analysis
+
+After gathering the diffs in Step 1, delegate deep analysis to parallel subagents. Each subagent receives the full diff and focuses on ONE concern area, ensuring depth without context window competition.
+
+If the Agent tool is unavailable or denied, skip this step and proceed to Step 3 — the remaining steps still provide full coverage.
+
+**Launch all of the following Agent calls in parallel** (in a single tool-call block, each with `model: "opus"`). Pass the full committed diff (and uncommitted diff if present) to each agent in its prompt. If the diff exceeds ~1500 lines, summarize unchanged context and pass only the changed hunks to keep each agent within token limits.
+
+1. **Correctness & Security Agent** (covers Steps 7-9) — "You are reviewing a code diff for correctness and security issues. Read every line. Use Grep and Read to examine surrounding code and callers when needed for context. Check for: logic errors, off-by-one errors, null/undefined handling, race conditions, SQL injection, XSS, insecure deserialization, hardcoded secrets, auth bypasses, input validation gaps. For each finding, output one line in the format: `SEVERITY|file:line|description` where SEVERITY is CRITICAL, WARNING, or SUGGESTION. Be exhaustive — list every issue you find, no matter how minor."
+
+2. **Test Coverage Agent** (covers Step 10) — "You are reviewing a code diff for test coverage gaps. For each behavioral change in the diff, use Grep to search for existing tests. Check for: missing happy-path tests, missing edge-case tests, missing negative tests, tests that would pass regardless of the change (vacuous tests), changed behavior without updated tests. For each gap, output one line: `GAP|file:line|description of missing test scenario`. Be exhaustive."
+
+3. **Design & Simplification Agent** (covers Steps 4-6) — "You are reviewing a code diff for design quality. Use Read to examine the full files when you need surrounding context. Check for: unnecessary complexity, abstractions that serve no current requirement, scope creep, code that could be simpler, violations of existing codebase patterns, naming issues, dead code, missing logging on error paths, style inconsistencies within touched files. For each finding, output one line: `SEVERITY|file:line|description` where SEVERITY is CRITICAL, WARNING, or SUGGESTION. Be exhaustive."
+
+4. **Assumptions & Contracts Agent** (covers Steps 8-9) — "You are reviewing a code diff for unvalidated assumptions and contract violations. Use Grep to check callers of any changed public APIs. Check for: assumptions about data format/availability/ordering that are not validated, breaking changes to public APIs, changed method signatures whose callers may not be updated, changed serialization formats, changed config keys, behavioral changes that callers depend on. For each finding, output one line: `SEVERITY|file:line|description`. Be exhaustive."
+
+**After all agents return**, collect their outputs. You will merge these findings with your own analysis in subsequent steps. Subagent findings are candidates, not final findings — in Steps 4-10, review the diff yourself AND cross-reference the subagent outputs. To verify a subagent finding, read the relevant file and confirm the issue exists in context — discard findings that are false positives or duplicates. Add any findings the subagents missed. The final Findings list must be the union of verified subagent findings and your own analysis.
+
+## Step 3: Review Mindset
 
 - **Default to skepticism.** Assume there are problems until you've proven otherwise.
 - **Read every line of the diff.** Don't skim. Understand what each change does and why.
 - **Review what's NOT there.** Missing error handling, missing tests, missing edge cases, and missing documentation are all defects.
 - **Question the premise.** Before reviewing the implementation, ask: is this the right thing to build? Does it actually solve the stated problem? Could the problem be solved without code changes at all?
 
-## Step 3: Feature Fitness
+## Step 4: Feature Fitness
 
 - **Does this solve the actual problem?** Restate the problem in your own words based on the branch name, commit messages, and code changes. Then check if the implementation addresses it. Flag if the solution solves a different or broader problem than what was asked for.
 - **Is anything unnecessary?** Flag abstractions, configurability, extensibility points, or helper methods that serve no current requirement. Every line of code is a liability.
 - **Would a simpler approach work?** If a 5-line change could replace a 50-line change, say so. Propose the simpler alternative concretely.
 - **Is this the minimal change?** Check for scope creep: wholesale refactoring of unrelated code, added features that weren't requested, or large structural changes unrelated to the goal. However, **small, clear improvements to files already being touched are encouraged** — see the "Leave It Better" section below.
 
-## Step 4: Complexity and Maintenance Burden
+## Step 5: Complexity and Maintenance Burden
 
 For every change, explicitly assess:
 
@@ -85,7 +113,7 @@ For every change, explicitly assess:
 - **Future maintenance cost:** Will this require ongoing attention? Does it create something that can silently break or drift out of sync?
 - **Readability:** Could a developer unfamiliar with this code understand it without explanation? If not, the code is too clever.
 
-## Step 5: Leave It Better
+## Step 6: Leave It Better
 
 When touching a file, the author should leave it better than they found it. Check whether the changed files have nearby opportunities for clear, concise improvements. These are **encouraged** and should be called out if missing:
 
@@ -101,7 +129,7 @@ When touching a file, the author should leave it better than they found it. Chec
 
 If the author made good opportunistic improvements, acknowledge them with ✅. If obvious opportunities were missed in touched files, flag them as 💡 findings.
 
-## Step 6: Unintended Consequences
+## Step 7: Unintended Consequences
 
 - **Trace all callers and consumers.** If a method signature, return type, or behavior changed, verify every call site still works correctly. Grep for references only when a public API actually changed — don't grep for every function touched.
 - **Check for state mutations.** Does this change shared state, static fields, singleton behavior, or cached data in ways that affect other code paths?
@@ -109,7 +137,7 @@ If the author made good opportunistic improvements, acknowledge them with ✅. I
 - **Check boundary conditions.** What happens with null inputs, empty collections, first run, network failure, concurrent access, or maximum data volumes?
 - **Platform impact.** If the change touches shared code, verify it works correctly on both Android and iOS. If it touches platform-specific code, verify the other platform's equivalent is still consistent.
 
-## Step 7: Breaking Changes
+## Step 8: Breaking Changes
 
 Specifically check whether this change breaks any existing contract or consumer:
 
@@ -122,7 +150,7 @@ Specifically check whether this change breaks any existing contract or consumer:
 
 If you find breaking changes, Grep for usages of the changed API/contract to assess the blast radius. Each breaking change must be flagged as 🔴 in the Findings with a clear description of what broke and who is affected.
 
-## Step 8: Assumptions Audit
+## Step 9: Assumptions Audit
 
 List every assumption the code makes. Then verify each one:
 
@@ -135,7 +163,7 @@ List every assumption the code makes. Then verify each one:
 
 Flag assumptions that weren't validated. If the code assumes something that could reasonably be false, it needs either validation or a comment explaining why the assumption is safe.
 
-## Step 9: Test Coverage
+## Step 10: Test Coverage
 
 - **Are there tests?** If not, why not? "It's hard to test" is not an acceptable reason — it usually means the code needs restructuring.
 - **Do tests cover the actual behavior change?** Tests that pass regardless of whether the feature works are worthless.
@@ -144,7 +172,7 @@ Flag assumptions that weren't validated. If the code assumes something that coul
 - **Do existing tests still pass?** A change that breaks existing tests is a red flag that the author may not understand the system's contracts.
 - **Is the test testing implementation or behavior?** Tests coupled to implementation details are brittle. Tests should verify observable behavior.
 
-## Step 10: Output
+## Step 11: Output
 
 **IMPORTANT: You MUST use the EXACT output format below. Do NOT use numbered lists, do NOT create sections like "Critical Issues" or "Assumptions to Verify". Every finding goes in ONE flat list under "Findings" with emoji prefixes. Copy the structure exactly.**
 
@@ -193,7 +221,7 @@ If coverage is adequate, write "Coverage is adequate."
 
 ---
 
-## Step 11: Self-Check (MANDATORY — do this before outputting)
+## Step 12: Self-Check (MANDATORY — do this before outputting)
 
 Before writing your response, verify ALL of the following. If any check fails, fix your output before presenting it:
 
@@ -202,3 +230,6 @@ Before writing your response, verify ALL of the following. If any check fails, f
 3. **Real emoji only**: Search your output for any colon-wrapped shortcodes (`:red_circle:`, `:yellow_circle:`, `:bulb:`, `:white_check_mark:`, `:mag:`, etc.). If you find ANY, replace them with the real Unicode characters (🔴, 🟡, 💡, ✅, 🔍, etc.).
 4. **Finding format**: Every finding line starts with an emoji (🔴/🟡/💡/✅), followed by a backtick-wrapped `file:line`, an em dash (—), and a description. No exceptions.
 5. **Test gaps format**: Every test gap line starts with ⬜ followed by a scenario description.
+6. **Completeness re-read**: Re-read the diff one final time top to bottom. For each file in the diff, confirm you have at least considered it — either it has findings or you consciously determined it is clean. If you spot anything you missed, add it to Findings now before outputting.
+7. **Severity coverage**: Confirm your findings include items at multiple severity levels (🔴, 🟡, 💡) if warranted by the diff. If you only have 🔴 findings, ask yourself: are there really no style improvements, naming suggestions, or logging gaps? If you only have 💡 findings, ask yourself: are there really no correctness or behavioral concerns?
+8. **Subagent reconciliation**: If you used parallel agents in Step 2, confirm you reviewed every line of subagent output and either included or explicitly discarded each finding. No subagent finding should be silently dropped.

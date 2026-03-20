@@ -31,4 +31,6 @@ Runs a structured, skeptical code review covering:
 - Assumptions audit
 - Test coverage gaps
 
+Uses parallel subagents to deeply analyze correctness/security, test coverage, design quality, and assumptions simultaneously — then merges and verifies findings into a single comprehensive output.
+
 Outputs a structured verdict with critical issues, simplification opportunities, and actionable feedback.
