@@ -42,9 +42,9 @@ then have each developer re-run the sync script.
 
 ## Tool Usage
 
-- Prefer core tools (Read, Edit, Write, Grep, Glob, Bash) over MCP or other tools that require permission prompts — minimize interruptions to maximize velocity
+- Prefer core tools (e.g., Read, Edit, Write, Grep, Glob, Agent, Bash) over MCP or other tools that require permission prompts — minimize interruptions to maximize velocity
 - When core tools are insufficient or significantly less efficient, external tools and custom scripts (Python, etc.) are acceptable
-- If a particular external tool or workflow pattern is used frequently, suggest creating a skill to wrap the common usage
+- If a particular external tool or workflow pattern is used repeatedly across multiple sessions, suggest creating a skill to wrap the common usage
 
 ## No Attribution
 
