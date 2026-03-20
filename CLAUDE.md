@@ -10,12 +10,15 @@ This is the **tzander-skills** Claude Code plugin marketplace (MIT License, Tim 
 
 The shared `~/.claude/CLAUDE.md` (team coding standards) is sourced from `standards/CLAUDE.md` in this repo. When asked to add or edit shared/team rules, modify `standards/CLAUDE.md` — not the developer's `~/.claude/CLAUDE.md` directly.
 
+The shared `~/.claude/settings.json` (team permission rules and settings) is sourced from `standards/settings.json`. The sync scripts deep-merge team settings into the user's existing settings (arrays are unioned, objects are merged, personal entries are preserved). When asked to add or edit shared settings, modify `standards/settings.json`.
+
 ## Environment Setup
 
 Run `./setup-env.sh` (bash) or `./setup-env.ps1` (PowerShell) to bootstrap the local environment:
 
 1. **Git hooks** — Installs global hooks from `hooks/` to `~/.git-hooks/` (controlled by `hooks/hooks.json`). Sets `core.hooksPath` globally.
 2. **Team standards** — Syncs `standards/CLAUDE.md` into `~/.claude/CLAUDE.md`.
+3. **Team settings** — Deep-merges `standards/settings.json` into `~/.claude/settings.json`.
 
 The script is idempotent — safe to re-run at any time. It replaces the old `sync-standards` scripts.
 

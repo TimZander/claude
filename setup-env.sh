@@ -163,4 +163,56 @@ ${END_MARKER}"
 fi
 
 echo ""
+
+###############################################################################
+# 3. Team settings sync
+###############################################################################
+
+echo "=== Team Settings ==="
+
+SETTINGS_SOURCE="$REPO_ROOT/standards/settings.json"
+SETTINGS_TARGET="$CLAUDE_DIR/settings.json"
+
+if [ ! -f "$SETTINGS_SOURCE" ]; then
+    echo "No standards/settings.json found — skipping settings sync."
+else
+    if ! command -v jq &>/dev/null; then
+        echo "Warning: jq is not installed — skipping settings.json sync." >&2
+    else
+        if [ ! -f "$SETTINGS_TARGET" ]; then
+            cp "$SETTINGS_SOURCE" "$SETTINGS_TARGET"
+            echo "Created $SETTINGS_TARGET with team settings."
+        else
+            # Deep-merge: team settings are the base, user settings win on
+            # scalar conflicts, arrays are unioned (deduplicated).
+            MERGED="$(jq -s '
+                def deep_merge:
+                    .[0] as $a | .[1] as $b |
+                    if ($a | type) == "object" and ($b | type) == "object" then
+                        ([($a | keys[]), ($b | keys[])] | unique) as $keys |
+                        reduce ($keys | .[]) as $k ({};
+                            if ($a | has($k)) and ($b | has($k))
+                            then . + { ($k): ([$a[$k], $b[$k]] | deep_merge) }
+                            elif ($b | has($k)) then . + { ($k): $b[$k] }
+                            else . + { ($k): $a[$k] }
+                            end)
+                    elif ($a | type) == "array" and ($b | type) == "array" then
+                        ($a + $b) | unique
+                    else $b
+                    end;
+                deep_merge
+            ' "$SETTINGS_SOURCE" "$SETTINGS_TARGET")"
+
+            EXISTING_SETTINGS="$(cat "$SETTINGS_TARGET")"
+            if [ "$MERGED" = "$EXISTING_SETTINGS" ]; then
+                echo "Settings in $SETTINGS_TARGET are already up to date."
+            else
+                printf '%s\n' "$MERGED" > "$SETTINGS_TARGET"
+                echo "Merged team settings into $SETTINGS_TARGET."
+            fi
+        fi
+    fi
+fi
+
+echo ""
 echo "=== Setup complete ==="

@@ -1,8 +1,9 @@
 # Team Coding Standards
 
 These standards are automatically synced into each developer's `~/.claude/CLAUDE.md`
-via the sync scripts at the repository root. Edit this file to update the team's standards,
-then have each developer re-run the sync script.
+via the sync scripts at the repository root. Team settings (`standards/settings.json`)
+are also synced into `~/.claude/settings.json`. Edit these files to update the team's
+standards, then have each developer re-run the sync script.
 
 ## Naming Conventions
 
