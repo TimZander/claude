@@ -133,7 +133,7 @@ Use the Agent tool to parallelize research across items within the chunk.
 
 ### 4b: Dependency Analysis
 
-After researching all items in the chunk, analyze them for dependencies. This step only applies when the chunk contains 2+ items.
+After researching all items in the chunk, analyze them for dependencies. This step only applies when the chunk contains 2+ items. Note: dependencies between items in different chunks won't be detected — if cross-chunk dependencies are a concern, process all items in a single chunk or ask the user to run the skill on the specific items together.
 
 **Detection — check for:**
 - **Overlapping code paths:** Does one item's proposed fix touch code that another item also modifies? If so, one likely needs to land first.
@@ -150,7 +150,7 @@ After researching all items in the chunk, analyze them for dependencies. This st
 
 **GitHub:** Use the GraphQL `addBlockedBy` mutation (documented in `standards/CLAUDE.md`). First fetch node IDs for the affected issues, then create the relationships. Before creating, query existing `blockedBy` relationships to avoid duplicates — `addBlockedBy` is not idempotent and will error on duplicates.
 
-**ADO:** Use `wit_work_items_link` with type `predecessor` (the blocking item) / `successor` (the blocked item). Example: if item 100 blocks item 101, link item 101 with `linkToId: 100, type: "predecessor"`.
+**ADO:** Use `wit_work_items_link` with type `predecessor` (the blocking item) / `successor` (the blocked item). Example: if item 100 blocks item 101, link item 101 with `linkToId: 100, type: "predecessor"`. ADO also errors on duplicate links — check existing links on the work item before creating new ones.
 
 **Description integration:** When a dependency is confirmed, reference it in the relevant description section:
 - For bugs: note in "Root Cause" or "Proposed Fix" if the fix depends on another item
@@ -172,7 +172,7 @@ Only needs to be done once (for the first chunk).
 
 ### 4d: Write the Updated Descriptions
 
-Use the appropriate template based on the item type. **Write in whichever format you detected in Step 4b** — the examples below show both.
+Use the appropriate template based on the item type. **Write in whichever format you detected in Step 4c** — the examples below show both.
 
 #### For Bugs:
 
