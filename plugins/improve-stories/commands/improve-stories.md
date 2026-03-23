@@ -15,10 +15,10 @@ This skill supports two sources: **Azure DevOps work items** and **GitHub Issues
 
 Determine whether the user is targeting GitHub Issues or ADO work items:
 
-- **GitHub** if the argument matches `#<number>`, `issue <number>`, `issues`, or a bare number and the repo has a GitHub remote (check with `gh repo view --json url 2>/dev/null`)
-- **ADO** if the argument is an iteration path, an ADO work item ID (typically 5+ digits), or references ADO concepts (iteration, sprint, area path)
+- **GitHub** if the argument contains `#` (e.g., `#29`, `#29 #30`), or uses the word `issue`/`issues`
+- **ADO** if the argument is an iteration path (contains `\`), or references ADO concepts (iteration, sprint, area path)
+- **Bare numbers** (e.g., `29`, `12345 12346`) are ambiguous — check if the repo has a GitHub remote (`gh repo view --json url 2>/dev/null`). If yes, ask the user: "Did you mean GitHub issue #29 or ADO work item 29?" If no GitHub remote, route to ADO.
 - **No argument:** Check if the repo has a GitHub remote. If yes, offer to process open GitHub issues. If no, fall back to ADO iteration detection.
-- **Ambiguous:** Ask the user to clarify.
 
 Once the source is determined, follow the corresponding path in each step below.
 
@@ -26,8 +26,8 @@ Once the source is determined, follow the corresponding path in each step below.
 
 ### GitHub path
 
-- **Specific issues:** If the user provided issue numbers, fetch them with `gh issue view <number> --json number,title,state,labels,assignees,body`.
-- **All open issues:** Run `gh issue list --state open --json number,title,state,labels,assignees --limit 100` for a lightweight fetch. Do **not** fetch `body` yet — it's the largest field and most issues will be filtered out.
+- **Specific issues:** If the user provided issue numbers, fetch them with `gh issue view <number> --json number,title,state,labels,assignees,body`. Since the body is already fetched, these issues can skip Step 3b.
+- **All open issues:** Run `gh issue list --state open --json number,title,state,labels,assignees --limit 100` for a lightweight fetch. Do **not** fetch `body` yet — it's the largest field and most issues will be filtered out. Note: only the 100 most recent open issues are fetched. If the repo has more, tell the user and suggest narrowing with labels or specific issue numbers.
 - Tell the user how many open issues were found and proceed.
 
 ### ADO path
@@ -83,7 +83,7 @@ This skill runs from within a specific repository, which is where codebase resea
 
 Using the fields already fetched, skip items without needing their full descriptions:
 
-**GitHub:** Skip closed issues. Skip issues with assignees (someone is already working on them).
+**GitHub:** Skip closed issues. Skip issues that have both an assignee and a linked pull request or branch (someone is actively working on them). Issues with only an assignee but no linked PR are kept — many teams assign at triage before work begins.
 
 **ADO:** Skip items where state is Active, In Progress, Resolved, or any non-New/non-Proposed state. A developer has already started work and changing the description under them could be disruptive.
 
@@ -139,10 +139,10 @@ Only needs to be done once (for the first chunk).
 
 **ADO:** Examine the descriptions fetched in Step 3b to determine whether the project uses **HTML** or **Markdown** for descriptions.
 
-- Look at well-documented stories (the ones you skipped in 3c) and any non-empty descriptions on the stories you're improving.
+- Look at well-documented items (the ones you skipped in 3c) and any non-empty descriptions on the items you're improving.
 - HTML indicators: `<div>`, `<br>`, `<b>`, `<ol>`, `<ul>`, `<li>`, `<h2>`, `&nbsp;`, inline `style=` attributes.
 - Markdown indicators: `##` headings, `**bold**`, `- ` bullet lists, `1. ` numbered lists, backtick code spans.
-- Match whatever format the existing stories use. If the project mixes both, prefer the format used by the majority.
+- Match whatever format the existing items use. If the project mixes both, prefer the format used by the majority.
 - If all existing descriptions are empty (no signal), default to HTML since that is the ADO native format.
 
 ### 4c: Write the Updated Descriptions
@@ -266,7 +266,7 @@ Before updating each item, verify:
 - Do NOT begin implementation — the deliverable is the updated description.
 - If an update fails, report the error and continue with the remaining items.
 
-**GitHub:** Use `gh issue edit <number> --body "<new body>"` to update the issue. After each successful update, add an audit trail comment with `gh issue comment <number> --body "Description restructured — added [what was added] based on codebase research."`.
+**GitHub:** Write the new body to a temp file, then use `gh issue edit <number> --body-file /tmp/issue-body.md` to update the issue. This avoids shell escaping issues with quotes, backticks, and `$` in markdown content. After each successful update, add an audit trail comment with `gh issue comment <number> --body "Description restructured — added [what was added] based on codebase research."`.
 
 **ADO:** Write the updated description to each ADO work item using the update tool. After each successful update, add a brief work item comment noting what was changed (e.g., "Description restructured — added root cause analysis, acceptance criteria, and proposed fix based on codebase research."). This creates an audit trail so reviewers know the description was reworked.
 
