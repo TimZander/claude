@@ -172,6 +172,24 @@ query {
 - **Never force push** (`--force`, `-f`, `--force-with-lease`) to any branch
 - **Always create new commits instead of amending** — amending requires force pushing to sync with the remote. When a pre-commit hook fails, fix the issue and create a new commit; do not `--amend` the previous one. Only amend if the user explicitly requests it and acknowledges the force push consequence.
 
+## Commit Email
+
+Work repositories (BGV/ADO) must use the `@grandtimber.com` email domain for commits. This matches the Entra ID (AAD) identity used by the ADO web interface and ensures correct licensing attribution.
+
+- The global `pre-commit` hook enforces this when a `.commit-email-rules` file exists in the repo root
+- To configure per-repo: `git config user.email "yourname@grandtimber.com"`
+- To configure automatically by directory, use `includeIf` in `~/.gitconfig`:
+  ```gitconfig
+  [includeIf "gitdir:~/work/"]
+      path = ~/.gitconfig-work
+  ```
+  Then in `~/.gitconfig-work`:
+  ```gitconfig
+  [user]
+      email = yourname@grandtimber.com
+  ```
+- Add all email variants (personal, `@breckgv.com`, etc.) as alternate emails in your ADO profile (User Settings > General > Emails) so historical commits are attributed correctly
+
 ## Git Hygiene Before New Work
 
 Before starting any new unit of work (picking up an issue, beginning a task that will produce code changes), verify the local git state:

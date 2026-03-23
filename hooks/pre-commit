@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+#
+# Global pre-commit hook — installed by setup-env.
+#
+# Validates the commit author email against rules in .commit-email-rules
+# at the repo root. If no rules file exists, the hook passes silently.
+#
+# .commit-email-rules format:
+#   domain=example.com
+#
+# Chains to repo-local .git/hooks/pre-commit if present.
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"
+
+if [ -n "$repo_root" ] && [ -f "$repo_root/.commit-email-rules" ]; then
+    email="$(git config user.email 2>/dev/null)"
+
+    # Read allowed domain from rules file
+    allowed_domain=""
+    while IFS='=' read -r key value; do
+        # Skip comments and blank lines
+        case "$key" in
+            \#*|"") continue ;;
+        esac
+        key="$(echo "$key" | tr -d '[:space:]')"
+        value="$(echo "$value" | tr -d '[:space:]')"
+        if [ "$key" = "domain" ]; then
+            allowed_domain="$value"
+        fi
+    done < "$repo_root/.commit-email-rules"
+
+    if [ -n "$allowed_domain" ]; then
+        # Check if email ends with @domain
+        email_domain="${email##*@}"
+        if [ "$email_domain" != "$allowed_domain" ]; then
+            echo "" >&2
+            echo "ERROR: Commit email '$email' does not match the required domain '@$allowed_domain'." >&2
+            echo "" >&2
+            echo "To fix, set the correct email for this repo:" >&2
+            echo "  git config user.email \"yourname@$allowed_domain\"" >&2
+            echo "" >&2
+            echo "Or set it globally for all work repos using includeIf in ~/.gitconfig:" >&2
+            echo "  [includeIf \"gitdir:~/work/\"]" >&2
+            echo "      path = ~/.gitconfig-work" >&2
+            echo "" >&2
+            echo "Then in ~/.gitconfig-work:" >&2
+            echo "  [user]" >&2
+            echo "      email = yourname@$allowed_domain" >&2
+            echo "" >&2
+            exit 1
+        fi
+    fi
+fi
+
+# Chain to repo-local .git/hooks/pre-commit if present
+if [ -n "$repo_root" ]; then
+    local_hook="$repo_root/.git/hooks/pre-commit"
+    if [ -f "$local_hook" ] && [ -x "$local_hook" ]; then
+        "$local_hook" "$@"
+        exit $?
+    fi
+fi

@@ -5,6 +5,12 @@
       "source": "pre-push",
       "description": "Blocks pushes to main/master and warns on force pushes",
       "enabled": true
+    },
+    {
+      "name": "pre-commit",
+      "source": "pre-commit",
+      "description": "Validates commit email against .commit-email-rules if present",
+      "enabled": true
     }
   ]
 }
