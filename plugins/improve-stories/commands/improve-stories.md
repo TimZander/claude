@@ -76,7 +76,7 @@ For items that survived Steps 1-3a, fetch `System.Description` and `Microsoft.VS
 - Empty or near-empty description
 - No acceptance criteria
 - Description is a single vague sentence with no context
-- Missing failure scenario or steps to reproduce (for bugs)
+- Missing steps to reproduce (for bugs)
 - No mention of affected files or components
 
 Present the triage summary to the user:
@@ -126,7 +126,9 @@ Use the appropriate template based on the work item type. **Write in whichever f
 What is happening and where. Be specific about the component/page.
 
 ## Steps to Reproduce
-Numbered steps to reliably trigger the bug. Start from a clear starting state.
+1. Start from [clear starting state]
+2. Do [action]
+3. Observe [result]
 
 ## Expected vs Actual Behavior
 What should happen vs what actually happens.
@@ -220,6 +222,7 @@ Before updating each story, verify:
 - Root cause or change scope references specific files/lines
 - Steps to reproduce are numbered and start from a clear state (for bugs)
 - Expected vs actual behavior is explicitly stated (for bugs)
+- Current behavior description is concrete, not abstract (for features)
 - Acceptance criteria are numbered and independently testable
 - Proposed fix leverages existing codebase patterns where possible
 - Open questions are called out explicitly (e.g., "Confirm whether X should also be updated")
