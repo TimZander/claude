@@ -184,6 +184,18 @@ Before starting any new unit of work (picking up an issue, beginning a task that
 
 Do not start work on an existing feature branch unless the user explicitly asks to continue work on that branch.
 
+## Mark Work Items Active
+
+After creating the feature branch but before any code research or changes, update the work item state:
+
+- **GitHub Issues:** Self-assign with `gh issue edit <number> --add-assignee @me`
+- **ADO work items:** Move state to Active using the appropriate update tool
+
+**Exceptions — do NOT change state when:**
+- Improving/grooming stories (e.g., `/improve-stories`)
+- Reviewing or reading an issue without starting implementation
+- The user explicitly says not to change state
+
 ## Pre-PR Checklist
 
 When asked to push a branch or create a pull request, remind the user to run `/deep-review` on the current branch if they haven't already done so during this session. Keep the reminder to a single sentence — do not block the push or PR.
