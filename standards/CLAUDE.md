@@ -62,6 +62,7 @@ These standards cover unit tests only. Integration and smoke test standards will
 - Prefer core tools (e.g., Read, Edit, Write, Grep, Glob, Agent, Bash) over MCP or other tools that require permission prompts — minimize interruptions to maximize velocity
 - When core tools are insufficient or significantly less efficient, external tools and custom scripts (Python, etc.) are acceptable
 - If a particular external tool or workflow pattern is used repeatedly across multiple sessions, suggest creating a skill to wrap the common usage
+- **ADO MCP: always resolve repository GUIDs before creating PRs.** `repo_create_pull_request` requires a repository GUID for `repositoryId` — passing a name or `Project/Name` produces misleading errors. Call `repo_get_repo_by_name_or_id` first to resolve the name to a GUID.
 
 ## Troubleshooting Failures
 
