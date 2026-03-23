@@ -160,6 +160,7 @@ query {
 
 - **Never push to `main` or `master`** — all changes must go through pull requests
 - **Never force push** (`--force`, `-f`, `--force-with-lease`) to any branch
+- **Always create new commits instead of amending** — amending requires force pushing to sync with the remote. When a pre-commit hook fails, fix the issue and create a new commit; do not `--amend` the previous one. Only amend if the user explicitly requests it and acknowledges the force push consequence.
 
 ## Git Hygiene Before New Work
 
