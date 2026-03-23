@@ -30,6 +30,7 @@ standards, then have each developer re-run the sync script.
 
 - Always use explicit types instead of `var` unless the type is immediately obvious from the right side of the assignment
 - Use `string.Empty` instead of `""`
+- Prefix private fields with `_` and use camelCase (e.g., `_connectionString`, `_logger`)
 
 ## Test Standards
 
