@@ -12,6 +12,15 @@ The shared `~/.claude/CLAUDE.md` (team coding standards) is sourced from `standa
 
 The shared `~/.claude/settings.json` (team permission rules and settings) is sourced from `standards/settings.json`. The sync scripts deep-merge team settings into the user's existing settings (arrays are unioned, objects are merged, personal entries are preserved). When asked to add or edit shared settings, modify `standards/settings.json`.
 
+### Where standards live
+
+| Location | Scope | What belongs here |
+|---|---|---|
+| `standards/CLAUDE.md` | All repos, all developers | Coding conventions, review standards, CLI references (e.g., GraphQL snippets), workflow rules |
+| `standards/settings.json` | All repos, all developers | Tool permissions, environment variables, hooks |
+| `CLAUDE.md` (this file) | This repo only | Repo structure, plugin instructions, repo-specific references (e.g., SQL/TFVC for this project) |
+| `~/.claude/CLAUDE.md` | All repos, one developer | Private credentials, connection strings, personal overrides (never edit directly — managed by sync scripts + personal additions) |
+
 ## Environment Setup
 
 Run `./setup-env.sh` (bash) or `./setup-env.ps1` (PowerShell) to bootstrap the local environment:
@@ -77,111 +86,6 @@ az devops invoke --area tfvc --resource items \
 ```
 
 Replace `<PROJECT>`, `<TFVC_ROOT>`, and `<ORG_URL>` with values from your private `~/.claude/CLAUDE.md`.
-
-## GitHub Issue Relationships
-
-GitHub's "Relationships" feature (Blocked by / Blocking) can be managed via `gh api graphql`.
-
-### Get issue node IDs
-
-Single issue:
-```bash
-gh api graphql -f query='
-query {
-  repository(owner: "<OWNER>", name: "<REPO>") {
-    issue(number: 123) { id number title }
-  }
-}'
-```
-
-Multiple issues (use aliases — `issues` doesn't support a `numbers` filter):
-```bash
-gh api graphql -f query='
-query {
-  repository(owner: "<OWNER>", name: "<REPO>") {
-    a: issue(number: 445) { id number title }
-    b: issue(number: 446) { id number title }
-    c: issue(number: 447) { id number title }
-  }
-}'
-```
-
-### Create "blocked by" relationships
-
-**Schema:** `addBlockedBy(input: { issueId: BLOCKED_ISSUE, blockingIssueId: BLOCKING_ISSUE })`
-
-- `issueId` = the issue that IS blocked (the dependent)
-- `blockingIssueId` = the issue that BLOCKS it (the dependency)
-
-Single relationship (e.g., #446 is blocked by #445):
-```bash
-gh api graphql -f query='
-mutation {
-  addBlockedBy(input: {
-    issueId: "<NODE_ID_OF_446>"
-    blockingIssueId: "<NODE_ID_OF_445>"
-  }) {
-    issue { number title }
-  }
-}'
-```
-
-Batch — multiple relationships in one mutation (use aliases):
-```bash
-gh api graphql -f query='
-mutation {
-  a: addBlockedBy(input: { issueId: "<ID_446>", blockingIssueId: "<ID_445>" }) { issue { number } }
-  b: addBlockedBy(input: { issueId: "<ID_447>", blockingIssueId: "<ID_445>" }) { issue { number } }
-}'
-```
-
-### Remove relationships
-
-```bash
-gh api graphql -f query='
-mutation {
-  removeBlockedBy(input: {
-    issueId: "<NODE_ID_OF_BLOCKED_ISSUE>"
-    blockingIssueId: "<NODE_ID_OF_BLOCKING_ISSUE>"
-  }) {
-    issue { number }
-  }
-}'
-```
-
-### Query existing relationships
-
-```bash
-gh api graphql -f query='
-query {
-  repository(owner: "<OWNER>", name: "<REPO>") {
-    issue(number: 447) {
-      number
-      title
-      blockedBy(first: 10) { nodes { number title } }
-      blocking(first: 10) { nodes { number title } }
-    }
-  }
-}'
-```
-
-Batch — verify relationships across multiple issues:
-```bash
-gh api graphql -f query='
-query {
-  repository(owner: "<OWNER>", name: "<REPO>") {
-    a: issue(number: 446) { number blockedBy(first: 5) { nodes { number title } } }
-    b: issue(number: 447) { number blockedBy(first: 5) { nodes { number title } } }
-    c: issue(number: 448) { number blockedBy(first: 5) { nodes { number title } } }
-  }
-}'
-```
-
-### Gotchas
-
-- `issues(numbers: [...])` does **not** exist in the GraphQL schema — use aliases (`a: issue(number: N)`) to batch
-- `addBlockedBy` is **not idempotent** — calling it twice for the same pair will error
-- Node IDs are opaque strings (e.g., `I_kwDOQOqPc871pGVo`) — always fetch them fresh
 
 ## No Attribution
 
