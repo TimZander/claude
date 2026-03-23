@@ -39,7 +39,11 @@ standards, then have each developer re-run the sync script.
 - **New functionality:** All new code that contains logic (conditionals, calculations, transformations) must have accompanying tests
 - **Bug fixes:** Every bug fix must include a test that reproduces the bug and verifies the fix — this prevents recurrence
 - **Refactoring:** Before refactoring existing code that lacks test coverage, add tests for the current behavior first, then refactor. This prevents silent regressions.
-- **Exceptions:** Pure configuration changes, documentation, prompt/skill templates, and simple pass-through wiring (e.g., DI registration) do not require tests
+- **Exceptions:** Tests are not required for:
+  - Pure configuration changes, documentation, and prompt/skill templates
+  - Simple pass-through wiring (e.g., DI registration)
+  - UI-specific code that cannot be unit tested (e.g., view layouts, animations, platform-specific rendering)
+  - Code where creating a test fixture would require disproportionate effort relative to the risk — use judgment, but document why tests were skipped in the PR description
 
 ### How to write tests
 
