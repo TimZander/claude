@@ -34,6 +34,15 @@ standards, then have each developer re-run the sync script.
 
 ## Test Standards
 
+### When to write tests
+
+- **New functionality:** All new code that contains logic (conditionals, calculations, transformations) must have accompanying tests
+- **Bug fixes:** Every bug fix must include a test that reproduces the bug and verifies the fix — this prevents recurrence
+- **Refactoring:** Before refactoring existing code that lacks test coverage, add tests for the current behavior first, then refactor. This prevents silent regressions.
+- **Exceptions:** Pure configuration changes, documentation, prompt/skill templates, and simple pass-through wiring (e.g., DI registration) do not require tests
+
+### How to write tests
+
 - Use the Arrange/Act/Assert pattern with comment separators
 - Name tests as `MethodName_Scenario_ExpectedBehavior`
 - No magic numbers — extract numeric literals into named `const` locals at the top of each test method
