@@ -47,6 +47,15 @@ standards, then have each developer re-run the sync script.
 - When core tools are insufficient or significantly less efficient, external tools and custom scripts (Python, etc.) are acceptable
 - If a particular external tool or workflow pattern is used repeatedly across multiple sessions, suggest creating a skill to wrap the common usage
 
+## Troubleshooting Failures
+
+When a deployment, infrastructure operation, or third-party integration fails with an unexpected error:
+
+- **Do not retry the same operation with variations.** If it failed twice with the same error, a third attempt with slightly different flags won't help.
+- **Search for known issues first.** Before diagnosing further, search GitHub issues, Stack Overflow, and vendor docs for the exact error message or platform/version combination. This takes seconds and often surfaces known bugs or unsupported configurations.
+- **State your confidence level.** If speculating about a root cause, say so explicitly rather than presenting it as a conclusion. "I suspect X but haven't confirmed" is better than "X is the issue."
+- **Ask: could this be a known limitation?** Especially with preview/new runtime versions, unsupported plan types, or region availability — these are commonly documented in vendor issue trackers.
+
 ## GitHub Issue Relationships
 
 GitHub's "Relationships" feature (Blocked by / Blocking) can be managed via `gh api graphql`.
