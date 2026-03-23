@@ -12,6 +12,15 @@ The shared `~/.claude/CLAUDE.md` (team coding standards) is sourced from `standa
 
 The shared `~/.claude/settings.json` (team permission rules and settings) is sourced from `standards/settings.json`. The sync scripts deep-merge team settings into the user's existing settings (arrays are unioned, objects are merged, personal entries are preserved). When asked to add or edit shared settings, modify `standards/settings.json`.
 
+### Where standards live
+
+| Location | Scope | What belongs here |
+|---|---|---|
+| `standards/CLAUDE.md` | All repos, all developers | Coding conventions, review standards, CLI references (e.g., GraphQL snippets), workflow rules |
+| `standards/settings.json` | All repos, all developers | Tool permissions, environment variables, hooks |
+| `CLAUDE.md` (this file) | This repo only | Repo structure, plugin instructions, repo-specific references (e.g., SQL/TFVC for this project) |
+| `~/.claude/CLAUDE.md` | All repos, one developer | Private credentials, connection strings, personal overrides (never edit directly — managed by sync scripts + personal additions) |
+
 ## Environment Setup
 
 Run `./setup-env.sh` (bash) or `./setup-env.ps1` (PowerShell) to bootstrap the local environment:
