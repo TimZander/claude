@@ -161,6 +161,18 @@ query {
 - **Never push to `main` or `master`** — all changes must go through pull requests
 - **Never force push** (`--force`, `-f`, `--force-with-lease`) to any branch
 
+## Git Hygiene Before New Work
+
+Before starting any new unit of work (picking up an issue, beginning a task that will produce code changes), verify the local git state:
+
+1. Run `git status` to check the current branch and working tree
+2. If not on `main`, switch to `main` (stash uncommitted changes if needed)
+3. Run `git fetch origin main` and compare local `main` to `origin/main`
+4. If local `main` is behind, run `git pull` to catch up
+5. Create a new branch from the up-to-date `main`
+
+Do not start work on an existing feature branch unless the user explicitly asks to continue work on that branch.
+
 ## Pre-PR Checklist
 
 When asked to push a branch or create a pull request, remind the user to run `/deep-review` on the current branch if they haven't already done so during this session. Keep the reminder to a single sentence — do not block the push or PR.
