@@ -172,6 +172,42 @@ query {
 - **Never force push** (`--force`, `-f`, `--force-with-lease`) to any branch
 - **Always create new commits instead of amending** — amending requires force pushing to sync with the remote. When a pre-commit hook fails, fix the issue and create a new commit; do not `--amend` the previous one. Only amend if the user explicitly requests it and acknowledges the force push consequence.
 
+## Commit Email
+
+Each repository should use a consistent commit email that matches its hosting platform's identity:
+- **ADO repos:** Use the email matching your Entra ID (AAD) identity — this is what the ADO web interface uses for commits and what ADO matches for licensing attribution
+- **GitHub repos:** Use the email associated with your GitHub account
+
+The global `pre-commit` hook enforces this when a `.commit-email-rules` file exists in the repo root. Add this file to any repo that needs enforcement:
+```
+# .commit-email-rules
+domain=example.com
+```
+
+To configure email automatically, use `includeIf` in `~/.gitconfig`. Two approaches:
+
+**By remote URL (recommended, Git 2.36+)** — matches based on the remote origin, no directory reorganization needed:
+```gitconfig
+[includeIf "hasconfig:remote.*.url:https://dev.azure.com/<ORG>/**"]
+    path = ~/.gitconfig-work
+[includeIf "hasconfig:remote.*.url:git@ssh.dev.azure.com:**/<ORG>/**"]
+    path = ~/.gitconfig-work
+```
+
+**By directory** — requires repos grouped under a common parent:
+```gitconfig
+[includeIf "gitdir:~/work/"]
+    path = ~/.gitconfig-work
+```
+
+Then in `~/.gitconfig-work`:
+```gitconfig
+[user]
+    email = yourname@your-work-domain.com
+```
+
+Add all email variants as alternate emails in your ADO profile (User Settings > General > Emails) so historical commits from other addresses are attributed correctly.
+
 ## Git Hygiene Before New Work
 
 Before starting any new unit of work (picking up an issue, beginning a task that will produce code changes), verify the local git state:
