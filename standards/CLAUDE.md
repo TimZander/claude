@@ -184,11 +184,22 @@ The global `pre-commit` hook enforces this when a `.commit-email-rules` file exi
 domain=example.com
 ```
 
-To configure email automatically by directory, use `includeIf` in `~/.gitconfig`:
+To configure email automatically, use `includeIf` in `~/.gitconfig`. Two approaches:
+
+**By remote URL (recommended, Git 2.36+)** — matches based on the remote origin, no directory reorganization needed:
+```gitconfig
+[includeIf "hasconfig:remote.*.url:https://dev.azure.com/<ORG>/**"]
+    path = ~/.gitconfig-work
+[includeIf "hasconfig:remote.*.url:git@ssh.dev.azure.com:**/<ORG>/**"]
+    path = ~/.gitconfig-work
+```
+
+**By directory** — requires repos grouped under a common parent:
 ```gitconfig
 [includeIf "gitdir:~/work/"]
     path = ~/.gitconfig-work
 ```
+
 Then in `~/.gitconfig-work`:
 ```gitconfig
 [user]
