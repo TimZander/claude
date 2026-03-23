@@ -1,7 +1,7 @@
 ---
 name: improve-stories
 description: Review user stories and GitHub issues for completeness, research the codebase to fill gaps, and update each with structured documentation
-allowed-tools: Bash, Read, Grep, Glob, Agent, AskUserQuestion, mcp__azure-devops__core_list_project_teams, mcp__azure-devops__wit_get_work_items_for_iteration, mcp__azure-devops__wit_get_work_item, mcp__azure-devops__wit_update_work_item, mcp__azure-devops__wit_add_work_item_comment, mcp__azure-devops__wit_my_work_items, mcp__azure-devops__wit_list_backlogs, mcp__azure-devops__wit_list_backlog_work_items, mcp__azure-devops__wit_get_work_items_batch_by_ids
+allowed-tools: Bash, Read, Grep, Glob, Agent, AskUserQuestion, mcp__azure-devops__core_list_project_teams, mcp__azure-devops__wit_get_work_items_for_iteration, mcp__azure-devops__wit_get_work_item, mcp__azure-devops__wit_update_work_item, mcp__azure-devops__wit_add_work_item_comment, mcp__azure-devops__wit_my_work_items, mcp__azure-devops__wit_list_backlogs, mcp__azure-devops__wit_list_backlog_work_items, mcp__azure-devops__wit_get_work_items_batch_by_ids, mcp__azure-devops__wit_work_items_link
 user-input: optional
 argument-hint: "[iteration-path, work-item-ids, or #issue-number]"
 model: opus
@@ -131,7 +131,32 @@ For each item in the chunk, research the codebase:
 
 Use the Agent tool to parallelize research across items within the chunk.
 
-### 4b: Detect Description Format
+### 4b: Dependency Analysis
+
+After researching all items in the chunk, analyze them for dependencies. This step only applies when the chunk contains 2+ items.
+
+**Detection — check for:**
+- **Overlapping code paths:** Does one item's proposed fix touch code that another item also modifies? If so, one likely needs to land first.
+- **Prerequisite changes:** Does a bug's root cause live in a component that a feature item is adding or changing? The feature may need to land first.
+- **Explicit mentions:** Scan titles and descriptions for references to other items (e.g., "after #45 is done", "depends on PBI 12345", "blocked by #30").
+- **Assumed completion:** Do acceptance criteria of one item assume another item is already done?
+
+**Reporting — present to user before acting:**
+- List each proposed dependency with: blocked item, blocking item, and a one-sentence rationale
+- Allow the user to approve, reject, or modify each relationship individually
+- Do not create any relationships without user confirmation
+
+**Setting relationships (after confirmation):**
+
+**GitHub:** Use the GraphQL `addBlockedBy` mutation (documented in `standards/CLAUDE.md`). First fetch node IDs for the affected issues, then create the relationships. Before creating, query existing `blockedBy` relationships to avoid duplicates — `addBlockedBy` is not idempotent and will error on duplicates.
+
+**ADO:** Use `wit_work_items_link` with type `predecessor` (the blocking item) / `successor` (the blocked item). Example: if item 100 blocks item 101, link item 101 with `linkToId: 100, type: "predecessor"`.
+
+**Description integration:** When a dependency is confirmed, reference it in the relevant description section:
+- For bugs: note in "Root Cause" or "Proposed Fix" if the fix depends on another item
+- For features: note in "Proposed Solution" if the feature requires another item first
+
+### 4c: Detect Description Format
 
 Only needs to be done once (for the first chunk).
 
@@ -145,7 +170,7 @@ Only needs to be done once (for the first chunk).
 - Match whatever format the existing items use. If the project mixes both, prefer the format used by the majority.
 - If all existing descriptions are empty (no signal), default to HTML since that is the ADO native format.
 
-### 4c: Write the Updated Descriptions
+### 4d: Write the Updated Descriptions
 
 Use the appropriate template based on the item type. **Write in whichever format you detected in Step 4b** — the examples below show both.
 
@@ -246,7 +271,7 @@ Always include:
 - Regression safety ("existing X behavior remains unchanged")
 - Test coverage expectations if the change touches logic
 
-### 4d: Quality Check
+### 4e: Quality Check
 
 Before updating each item, verify:
 - A developer unfamiliar with the code could start work from the description alone
@@ -258,7 +283,7 @@ Before updating each item, verify:
 - Proposed fix leverages existing codebase patterns where possible
 - Open questions are called out explicitly (e.g., "Confirm whether X should also be updated")
 
-### 4e: Update the Items
+### 4f: Update the Items
 
 - If the item already has description content, incorporate any relevant context from the original into the new structured description. Do not silently discard product owner notes, links, stakeholder references, or edge case mentions — weave them into the appropriate section of the template.
 - **Preserve all images and attachments.** Scan the original content for image references — `<img>` tags in HTML (typically pointing to `_apis/wit/attachments/...` in ADO) or `![alt](url)` in Markdown. These are screenshots, mockups, or reference images added by the author. Include them in the new description — either inline in the relevant section or in a dedicated "Reference Images" section at the end. Never drop image references during a rewrite.
@@ -270,7 +295,7 @@ Before updating each item, verify:
 
 **ADO:** Write the updated description to each ADO work item using the update tool. After each successful update, add a brief work item comment noting what was changed (e.g., "Description restructured — added root cause analysis, acceptance criteria, and proposed fix based on codebase research."). This creates an audit trail so reviewers know the description was reworked.
 
-### 4f: Chunk Progress
+### 4g: Chunk Progress
 
 After completing each chunk, report progress to the user:
 - Which items were updated in this chunk
