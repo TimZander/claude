@@ -1,15 +1,36 @@
 ---
 name: improve-stories
-description: Review user stories for completeness, research the codebase to fill gaps, and update each story with structured documentation
+description: Review user stories and GitHub issues for completeness, research the codebase to fill gaps, and update each with structured documentation
 allowed-tools: Bash, Read, Grep, Glob, Agent, AskUserQuestion, mcp__azure-devops__core_list_project_teams, mcp__azure-devops__wit_get_work_items_for_iteration, mcp__azure-devops__wit_get_work_item, mcp__azure-devops__wit_update_work_item, mcp__azure-devops__wit_add_work_item_comment, mcp__azure-devops__wit_my_work_items, mcp__azure-devops__wit_list_backlogs, mcp__azure-devops__wit_list_backlog_work_items, mcp__azure-devops__wit_get_work_items_batch_by_ids
 user-input: optional
-argument-hint: "[iteration-path or work-item-ids]"
+argument-hint: "[iteration-path, work-item-ids, or #issue-number]"
 model: opus
 ---
 
-You are improving user stories so they are actionable, complete, and ready for any developer to pick up. Your deliverable is **updated work item descriptions** — you do NOT begin implementation.
+You are improving user stories and issues so they are actionable, complete, and ready for any developer to pick up. Your deliverable is **updated descriptions** — you do NOT begin implementation.
 
-## Step 1: Gather Stories (lightweight fetch)
+This skill supports two sources: **Azure DevOps work items** and **GitHub Issues**. Detect which source to use in Step 1, then follow the appropriate path in each step.
+
+## Step 0: Detect Source
+
+Determine whether the user is targeting GitHub Issues or ADO work items:
+
+- **GitHub** if the argument matches `#<number>`, `issue <number>`, `issues`, or a bare number and the repo has a GitHub remote (check with `gh repo view --json url 2>/dev/null`)
+- **ADO** if the argument is an iteration path, an ADO work item ID (typically 5+ digits), or references ADO concepts (iteration, sprint, area path)
+- **No argument:** Check if the repo has a GitHub remote. If yes, offer to process open GitHub issues. If no, fall back to ADO iteration detection.
+- **Ambiguous:** Ask the user to clarify.
+
+Once the source is determined, follow the corresponding path in each step below.
+
+## Step 1: Gather Items (lightweight fetch)
+
+### GitHub path
+
+- **Specific issues:** If the user provided issue numbers, fetch them with `gh issue view <number> --json number,title,state,labels,assignees,body`.
+- **All open issues:** Run `gh issue list --state open --json number,title,state,labels,assignees --limit 100` for a lightweight fetch. Do **not** fetch `body` yet — it's the largest field and most issues will be filtered out.
+- Tell the user how many open issues were found and proceed.
+
+### ADO path
 
 - If the user provided specific work item IDs, fetch those directly.
 - If the user provided an iteration path, resolve it to an iteration ID (see below) and fetch work items for it.
@@ -20,7 +41,7 @@ You are improving user stories so they are actionable, complete, and ready for a
 - `System.Id`, `System.Title`, `System.State`, `System.WorkItemType`, `System.AreaPath`, `System.Tags`, `System.AssignedTo`
 - Do **not** fetch `System.Description` or `Microsoft.VSTS.Common.AcceptanceCriteria` yet — those are large text fields and most items will be filtered out before they're needed.
 
-### Resolving the Current Iteration
+### Resolving the Current Iteration (ADO only)
 
 The MCP server's `wit_get_work_items_for_iteration` requires an iteration **ID** (GUID), not a path or name. Use the Azure DevOps REST API via the `az` CLI to resolve iterations:
 
@@ -46,54 +67,60 @@ Replace `PROJECT`, `TEAM`, and `ORG_URL` with values from the user's `~/.claude/
 
 The response includes an `id` field (GUID) — pass that to `wit_get_work_items_for_iteration`.
 
-## Step 2: Filter to Repository-Relevant Stories
+## Step 2: Filter to Repository-Relevant Items
 
-This skill runs from within a specific repository, which is where codebase research happens. Stories unrelated to this repo cannot be meaningfully improved.
+This skill runs from within a specific repository, which is where codebase research happens. Items unrelated to this repo cannot be meaningfully improved.
 
 - Read the project's CLAUDE.md and examine the repo structure (top-level directories, solution files, project names) to understand what this codebase covers.
-- For each fetched story, check whether its title, description, tags, or area path relate to this repository's domain. Look for mentions of components, services, namespaces, or features that exist in this codebase.
-- **Keep** stories that clearly relate to this repo or are ambiguous enough that research might clarify them.
-- **Skip** stories that clearly belong to a different codebase or domain (e.g., a mobile app story when you're in a backend API repo).
-- If all stories are filtered out, tell the user and suggest which repo might be more appropriate.
+- For each fetched item, check whether its title, description, tags, labels, or area path relate to this repository's domain. Look for mentions of components, services, namespaces, or features that exist in this codebase.
+- **Keep** items that clearly relate to this repo or are ambiguous enough that research might clarify them.
+- **Skip** items that clearly belong to a different codebase or domain (e.g., a mobile app story when you're in a backend API repo).
+- If all items are filtered out, tell the user and suggest which repo might be more appropriate.
 
 ## Step 3: Triage
 
 ### 3a: Filter by state (from lightweight data)
 
-Using the fields already fetched, skip items without needing their descriptions:
+Using the fields already fetched, skip items without needing their full descriptions:
 
-**Already in progress** (skip) — state is Active, In Progress, Resolved, or any non-New/non-Proposed state. A developer has already started work and changing the description under them could be disruptive.
+**GitHub:** Skip closed issues. Skip issues with assignees (someone is already working on them).
+
+**ADO:** Skip items where state is Active, In Progress, Resolved, or any non-New/non-Proposed state. A developer has already started work and changing the description under them could be disruptive.
 
 ### 3b: Fetch full details for remaining candidates
 
-For items that survived Steps 1-3a, fetch `System.Description` and `Microsoft.VSTS.Common.AcceptanceCriteria` using `wit_get_work_items_batch_by_ids`. Fetch in batches of up to 10.
+**GitHub:** For issues that survived Steps 1-3a, fetch their body with `gh issue view <number> --json number,title,body,labels`. Fetch in parallel (up to 5 concurrent `gh issue view` calls via the Agent tool).
+
+**ADO:** For items that survived Steps 1-3a, fetch `System.Description` and `Microsoft.VSTS.Common.AcceptanceCriteria` using `wit_get_work_items_batch_by_ids`. Fetch in batches of up to 10.
 
 ### 3c: Classify with full details
 
 **Well-documented** (skip) — has a clear description, acceptance criteria, and enough context to start work.
 
 **Needs improvement** — flag if ANY of these are true:
-- Empty or near-empty description
+- Empty or near-empty description/body
 - No acceptance criteria
 - Description is a single vague sentence with no context
 - Missing steps to reproduce (for bugs)
 - No mention of affected files or components
 
+**Detecting item type:** For ADO, use `System.WorkItemType`. For GitHub, infer from labels — issues labeled `bug` are bugs, others are features. If no labels exist, infer from the title and body content (error reports, "broken", "doesn't work" → bug; otherwise feature).
+
 Present the triage summary to the user:
-- How many stories were fetched, how many were filtered as irrelevant, how many are well-documented, how many need improvement
-- List which stories you plan to improve and why
-- List which stories you're skipping and why
-- If more than 10 stories need improvement, recommend processing in chunks and ask the user how many to tackle now
+- How many items were fetched, how many were filtered as irrelevant, how many are well-documented, how many need improvement
+- List which items you plan to improve and why
+- List which items you're skipping and why
+- If more than 10 items need improvement, recommend processing in chunks and ask the user how many to tackle now
 - Ask the user to confirm before proceeding
-- If the user declines, asks to skip specific stories, or wants to add stories that were filtered out, adjust the selection accordingly and re-present the updated plan
+- If the user declines, asks to skip specific items, or wants to add items that were filtered out, adjust the selection accordingly and re-present the updated plan
 
 ## Step 4: Research and Update (chunked)
 
-Process stories in chunks of up to 5 at a time. For each chunk:
+Process items in chunks of up to 5 at a time. For each chunk:
 
 ### 4a: Research
 
-For each story in the chunk, research the codebase:
+For each item in the chunk, research the codebase:
 
 - **Parse the title and description** for keywords — component names, enum values, UI elements, error descriptions
 - **Search the codebase** for related files, components, models, and services using Grep and Glob
@@ -102,11 +129,15 @@ For each story in the chunk, research the codebase:
 - **Check for existing patterns** — does the codebase already solve a similar problem elsewhere?
 - **Review tests** — do existing tests cover or contradict the reported behavior?
 
-Use the Agent tool to parallelize research across stories within the chunk.
+Use the Agent tool to parallelize research across items within the chunk.
 
 ### 4b: Detect Description Format
 
-Only needs to be done once (for the first chunk). Examine the descriptions fetched in Step 3b to determine whether the project uses **HTML** or **Markdown** for descriptions.
+Only needs to be done once (for the first chunk).
+
+**GitHub:** Always use Markdown. Skip format detection.
+
+**ADO:** Examine the descriptions fetched in Step 3b to determine whether the project uses **HTML** or **Markdown** for descriptions.
 
 - Look at well-documented stories (the ones you skipped in 3c) and any non-empty descriptions on the stories you're improving.
 - HTML indicators: `<div>`, `<br>`, `<b>`, `<ol>`, `<ul>`, `<li>`, `<h2>`, `&nbsp;`, inline `style=` attributes.
@@ -116,7 +147,7 @@ Only needs to be done once (for the first chunk). Examine the descriptions fetch
 
 ### 4c: Write the Updated Descriptions
 
-Use the appropriate template based on the work item type. **Write in whichever format you detected in Step 4b** — the examples below show both.
+Use the appropriate template based on the item type. **Write in whichever format you detected in Step 4b** — the examples below show both.
 
 #### For Bugs:
 
@@ -143,7 +174,7 @@ The recommended approach. Reference existing patterns in the codebase.
 Numbered list. Each item is independently testable.
 ```
 
-**HTML version:**
+**HTML version (ADO only):**
 ```html
 <h2>Problem</h2>
 <p>What is happening and where. Be specific about the component/page.</p>
@@ -185,7 +216,7 @@ The recommended approach. Reference existing patterns, files to modify.
 Numbered list. Each item is independently testable.
 ```
 
-**HTML version:**
+**HTML version (ADO only):**
 ```html
 <h2>Goal</h2>
 <p>What capability is being added and why.</p>
@@ -217,7 +248,7 @@ Always include:
 
 ### 4d: Quality Check
 
-Before updating each story, verify:
+Before updating each item, verify:
 - A developer unfamiliar with the code could start work from the description alone
 - Root cause or change scope references specific files/lines
 - Steps to reproduce are numbered and start from a clear state (for bugs)
@@ -227,25 +258,27 @@ Before updating each story, verify:
 - Proposed fix leverages existing codebase patterns where possible
 - Open questions are called out explicitly (e.g., "Confirm whether X should also be updated")
 
-### 4e: Update the Work Items
+### 4e: Update the Items
 
-- If the story already has description content, incorporate any relevant context from the original into the new structured description. Do not silently discard product owner notes, links, stakeholder references, or edge case mentions — weave them into the appropriate section of the template.
-- **Preserve all images and attachments.** Scan the original HTML for `<img>` tags (typically pointing to `_apis/wit/attachments/...`). These are screenshots, mockups, or reference images added by the author. Include them in the new description — either inline in the relevant section or in a dedicated "Reference Images" section at the end. Never drop `<img>` tags during a rewrite.
-- Write the updated description to each ADO work item using the update tool.
-- After each successful update, add a brief work item comment noting what was changed (e.g., "Description restructured — added root cause analysis, acceptance criteria, and proposed fix based on codebase research."). This creates an audit trail so reviewers know the description was reworked.
-- Do NOT change title, state, assignment, or story points.
-- Do NOT begin implementation — the deliverable is the updated story.
-- If an update fails, report the error and continue with the remaining stories.
+- If the item already has description content, incorporate any relevant context from the original into the new structured description. Do not silently discard product owner notes, links, stakeholder references, or edge case mentions — weave them into the appropriate section of the template.
+- **Preserve all images and attachments.** Scan the original content for image references — `<img>` tags in HTML (typically pointing to `_apis/wit/attachments/...` in ADO) or `![alt](url)` in Markdown. These are screenshots, mockups, or reference images added by the author. Include them in the new description — either inline in the relevant section or in a dedicated "Reference Images" section at the end. Never drop image references during a rewrite.
+- Do NOT change title, state, assignment, labels, or story points.
+- Do NOT begin implementation — the deliverable is the updated description.
+- If an update fails, report the error and continue with the remaining items.
+
+**GitHub:** Use `gh issue edit <number> --body "<new body>"` to update the issue. After each successful update, add an audit trail comment with `gh issue comment <number> --body "Description restructured — added [what was added] based on codebase research."`.
+
+**ADO:** Write the updated description to each ADO work item using the update tool. After each successful update, add a brief work item comment noting what was changed (e.g., "Description restructured — added root cause analysis, acceptance criteria, and proposed fix based on codebase research."). This creates an audit trail so reviewers know the description was reworked.
 
 ### 4f: Chunk Progress
 
 After completing each chunk, report progress to the user:
-- Which stories were updated in this chunk
-- How many stories remain
+- Which items were updated in this chunk
+- How many items remain
 - Continue to the next chunk automatically unless the user intervenes
 
 ## Step 5: Summary
 
 After all chunks are complete, present a final summary:
-- How many stories were fetched, filtered, skipped, and improved
-- For each improved story: the work item ID, title, and a one-line summary of what was added
+- How many items were fetched, filtered, skipped, and improved
+- For each improved item: the ID/number, title, and a one-line summary of what was added
