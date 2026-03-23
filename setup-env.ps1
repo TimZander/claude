@@ -215,7 +215,7 @@ function Merge-JsonObjects {
 }
 
 if (-not (Test-Path $SettingsSource)) {
-    Write-Host "No standards/settings.json found — skipping settings sync."
+    Write-Host "No standards/settings.json found - skipping settings sync."
 }
 else {
     $TeamSettings = Get-Content -Path $SettingsSource -Raw | ConvertFrom-Json
