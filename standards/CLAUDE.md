@@ -174,21 +174,28 @@ query {
 
 ## Commit Email
 
-Work repositories (BGV/ADO) must use the `@grandtimber.com` email domain for commits. This matches the Entra ID (AAD) identity used by the ADO web interface and ensures correct licensing attribution.
+Each repository should use a consistent commit email that matches its hosting platform's identity:
+- **ADO repos:** Use the email matching your Entra ID (AAD) identity — this is what the ADO web interface uses for commits and what ADO matches for licensing attribution
+- **GitHub repos:** Use the email associated with your GitHub account
 
-- The global `pre-commit` hook enforces this when a `.commit-email-rules` file exists in the repo root
-- To configure per-repo: `git config user.email "yourname@grandtimber.com"`
-- To configure automatically by directory, use `includeIf` in `~/.gitconfig`:
-  ```gitconfig
-  [includeIf "gitdir:~/work/"]
-      path = ~/.gitconfig-work
-  ```
-  Then in `~/.gitconfig-work`:
-  ```gitconfig
-  [user]
-      email = yourname@grandtimber.com
-  ```
-- Add all email variants (personal, `@breckgv.com`, etc.) as alternate emails in your ADO profile (User Settings > General > Emails) so historical commits are attributed correctly
+The global `pre-commit` hook enforces this when a `.commit-email-rules` file exists in the repo root. Add this file to any repo that needs enforcement:
+```
+# .commit-email-rules
+domain=example.com
+```
+
+To configure email automatically by directory, use `includeIf` in `~/.gitconfig`:
+```gitconfig
+[includeIf "gitdir:~/work/"]
+    path = ~/.gitconfig-work
+```
+Then in `~/.gitconfig-work`:
+```gitconfig
+[user]
+    email = yourname@your-work-domain.com
+```
+
+Add all email variants as alternate emails in your ADO profile (User Settings > General > Emails) so historical commits from other addresses are attributed correctly.
 
 ## Git Hygiene Before New Work
 

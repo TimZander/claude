@@ -1,4 +1,0 @@
-# Allowed email domain for commits in this repository.
-# Enforced by the global pre-commit hook (installed via setup-env).
-# Matches the ADO Entra ID domain to ensure consistent attribution.
-domain=grandtimber.com
