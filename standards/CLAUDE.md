@@ -32,9 +32,11 @@ standards, then have each developer re-run the sync script.
 - Use `string.Empty` instead of `""`
 - Prefix private fields with `_` and use camelCase (e.g., `_connectionString`, `_logger`)
 
-## Test Standards
+## Unit Test Standards
 
-### When to write tests
+These standards cover unit tests only. Integration and smoke test standards will be defined separately.
+
+### When to write unit tests
 
 - **New functionality:** All new code that contains logic (conditionals, calculations, transformations) must have accompanying tests
 - **Bug fixes:** Every bug fix must include a test that reproduces the bug and verifies the fix — this prevents recurrence
@@ -45,7 +47,7 @@ standards, then have each developer re-run the sync script.
   - UI-specific code that cannot be unit tested (e.g., view layouts, animations, platform-specific rendering)
   - Code where creating a test fixture would require disproportionate effort relative to the risk — use judgment, but document why tests were skipped in the PR description
 
-### How to write tests
+### How to write unit tests
 
 - Use the Arrange/Act/Assert pattern with comment separators
 - Name tests as `MethodName_Scenario_ExpectedBehavior`
