@@ -76,7 +76,7 @@ For items that survived Steps 1-3a, fetch `System.Description` and `Microsoft.VS
 - Empty or near-empty description
 - No acceptance criteria
 - Description is a single vague sentence with no context
-- Missing failure scenario (for bugs)
+- Missing failure scenario or steps to reproduce (for bugs)
 - No mention of affected files or components
 
 Present the triage summary to the user:
@@ -125,8 +125,11 @@ Use the appropriate template based on the work item type. **Write in whichever f
 ## Problem
 What is happening and where. Be specific about the component/page.
 
-## Failure Example
-Concrete scenario a user would encounter. Walk through the steps.
+## Steps to Reproduce
+Numbered steps to reliably trigger the bug. Start from a clear starting state.
+
+## Expected vs Actual Behavior
+What should happen vs what actually happens.
 
 ## Root Cause
 The specific code location and why it fails. Include file paths and line numbers.
@@ -143,8 +146,13 @@ Numbered list. Each item is independently testable.
 <h2>Problem</h2>
 <p>What is happening and where. Be specific about the component/page.</p>
 
-<h2>Failure Example</h2>
-<p>Concrete scenario a user would encounter. Walk through the steps.</p>
+<h2>Steps to Reproduce</h2>
+<ol>
+<li>Numbered steps to reliably trigger the bug. Start from a clear starting state.</li>
+</ol>
+
+<h2>Expected vs Actual Behavior</h2>
+<p>What should happen vs what actually happens.</p>
 
 <h2>Root Cause</h2>
 <p>The specific code location and why it fails. Include file paths and line numbers.</p>
@@ -210,7 +218,8 @@ Always include:
 Before updating each story, verify:
 - A developer unfamiliar with the code could start work from the description alone
 - Root cause or change scope references specific files/lines
-- Failure example or current behavior is concrete, not abstract
+- Steps to reproduce are numbered and start from a clear state (for bugs)
+- Expected vs actual behavior is explicitly stated (for bugs)
 - Acceptance criteria are numbered and independently testable
 - Proposed fix leverages existing codebase patterns where possible
 - Open questions are called out explicitly (e.g., "Confirm whether X should also be updated")
