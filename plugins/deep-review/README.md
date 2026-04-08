@@ -87,6 +87,19 @@ Agent({
 
 Each agent checks out its target branch, diffs against the specified base, runs the full review (including its own parallel subagents for correctness, testing, design, and assumptions analysis), and returns a structured verdict.
 
+## Agent Invocation
+
+Agents can invoke `/deep-review` via the Skill tool:
+
+```
+Agent({
+  description: "Deep review of current branch",
+  model: "opus",
+  prompt: "Use the Skill tool to invoke deep-review
+           with args: focus on error handling"
+})
+```
+
 ## What It Does
 
 Runs a structured, skeptical code review covering:
