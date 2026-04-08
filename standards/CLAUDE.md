@@ -103,6 +103,24 @@ fi
 - Use the same Arrange/Act/Assert pattern as unit tests, and name tests with the identical convention: `MethodName_Scenario_ExpectedBehavior`.
 - Integration tests must be assigned a different test category or trait so they can be separated from unit tests in CI and run on different schedules or against different environments.
 
+## End-to-End (E2E) Test Standards
+
+### When to write E2E tests
+
+- **Core User Journeys:** Every web application must have E2E tests covering its critical paths (e.g., login, primary data submission, checkout flows).
+- **Per-Project Basis:** E2E frameworks and specific testing targets are maintained per project. Teams may choose the framework that best fits their needs (e.g., Playwright, Selenium, Cypress).
+
+### How to write E2E tests
+
+- Treat E2E tests as black-box tests. They should interact with the application strictly through the rendered DOM (clicking buttons, filling inputs) rather than testing internal implementation state.
+- Ensure E2E tests are resilient by relying on unique accessibility roles, data attributes (`data-testid`), or labeled text. **Avoid targeting fragile CSS selectors or dynamic layout classes.**
+- Tests should clean up their own state or run in isolated sandbox environments (like Playwright browser contexts) to prevent data collision.
+
+### Pipeline integration
+
+- E2E tests should be wired into the CI/CD pipeline to block deployment to production if a critical user journey is broken.
+- Depending on the speed of the test suite, E2E tests can run post-deployment in a staging environment before manual sign-off, or against ephemeral preview environments during the PR validation phase.
+
 ## Model Selection and Token Efficiency
 
 ### Task-to-model mapping
