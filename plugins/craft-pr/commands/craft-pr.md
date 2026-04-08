@@ -151,7 +151,20 @@ Output the full markdown description in a code block:
 
 **Verify the description is 4000 characters or fewer.** Count the characters in the description (not including the code fence). If it exceeds 4000, tighten the wording — shorten bullets, drop low-value test cases, and condense the summary — until it fits. State the final character count after the output.
 
-**If the user did NOT pass `--create`, stop here.** Do not create the PR — only output the title and description for the user to use.
+**If the user did NOT pass `--create`**:
+1. Run `echo "OS=$(uname -s)"` to detect the user's operating system.
+2. Write the description to a temp file using a heredoc so special characters are preserved:
+   ```bash
+   BODY_FILE=$(mktemp)
+   cat > "$BODY_FILE" << 'ENDOFBODY'
+   <full PR description from Step 4 — nothing else>
+   ENDOFBODY
+   ```
+3. Use Bash to pipe the temp file to the clipboard based on the detected OS:
+   - **`Darwin` (macOS):** `cat "$BODY_FILE" | pbcopy`
+   - **`Linux`:** `cat "$BODY_FILE" | xclip -selection clipboard` (falls back to `xsel --clipboard --input` if `xclip` is not installed)
+   - **`MINGW`/`MSYS`/`CYGWIN` (Windows):** `cat "$BODY_FILE" | clip`
+4. Tell the user the PR description has been copied to their clipboard. Do not create the PR. Stop here.
 
 ## Step 7: Create PR (only when `--create` flag is provided)
 
