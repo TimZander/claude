@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "deep-review",
-      "description": "Rigorous code review of all changes on the current branch compared to main, with structured verdict and actionable feedback",
+      "description": "Rigorous code review of all changes on the current branch compared to a base branch (default main), with structured verdict and actionable feedback",
       "author": { "name": "Tim Zander" },
       "source": "./plugins/deep-review",
       "category": "productivity",
