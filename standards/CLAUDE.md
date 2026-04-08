@@ -108,7 +108,7 @@ fi
 ### When to write E2E tests
 
 - **Core User Journeys:** Every web application must have E2E tests covering its critical paths (e.g., login, primary data submission, checkout flows).
-- **Per-Project Basis:** E2E frameworks and specific testing targets are maintained per project. **Playwright is highly recommended** over Selenium as the default framework due to its superior speed, auto-waiting, and tracing mechanisms.
+- **Per-Project Basis:** E2E frameworks and specific testing targets are maintained per project. Teams may choose the framework that best fits their needs (e.g., Playwright, Selenium, Cypress).
 
 ### How to write E2E tests
 
