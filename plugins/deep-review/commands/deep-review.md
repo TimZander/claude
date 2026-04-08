@@ -1,7 +1,7 @@
 ---
 name: deep-review
 description: Perform a critical code review of all changes on the current branch compared to a base branch (default main)
-disable-model-invocation: false
+disable-model-invocation: false # allows agents to invoke via Skill tool; all other plugins use true
 allowed-tools: Bash, Read, Grep, Glob, WebFetch, Agent
 model: opus
 ---
@@ -29,7 +29,7 @@ The user may provide additional text after `/deep-review`. This text is: **$ARGU
 
 If the text above literally reads `$ARGUMENTS` (not substituted), you are being invoked directly by an Agent rather than through the `/deep-review` slash command. In that case, look for arguments in your initial prompt (e.g., "Your arguments are: ...") and use those instead.
 
-If the resolved arguments are empty or blank, skip this section entirely and proceed with the standard review.
+If the arguments are empty or blank, skip this section entirely and proceed with the standard review.
 
 Otherwise, use the text as **additional context** for your review. It may contain any of the following:
 
