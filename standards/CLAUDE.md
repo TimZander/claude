@@ -34,7 +34,7 @@ standards, then have each developer re-run the sync script.
 
 ## Unit Test Standards
 
-These standards cover unit tests only. Integration test standards will be defined separately.
+These standards cover unit tests only.
 
 ## Smoke Test Standards
 
@@ -87,6 +87,21 @@ fi
 - Cover edge cases: partial state changes, error/exception propagation, no-op when inputs are unchanged
 - Include at least one negative test (invalid input, failure scenario) per method under test
 - Tests should verify observable behavior, not implementation details
+
+## Integration Test Standards
+
+### When to write integration tests
+
+- **Database access:** When new or modified code reads from or writes to a database, add integration tests that run against a real database (not mocks) to verify queries, mappings, and constraints.
+- **New functionality with data layer changes:** Any new repository methods, stored procedure calls, or schema-dependent logic should have integration tests.
+- **External API access:** This decision is team-decided per project. Some teams prefer contract/mock tests for external APIs; others prefer live integration tests in a staging environment.
+
+### How to write integration tests
+
+- Use a dedicated test project (e.g., `*.IntegrationTests`). Do not mix integration tests into unit test projects.
+- Tests should be **isolated**: each test should set up its own data and clean up after itself (or use transactions that roll back).
+- Use the same Arrange/Act/Assert pattern as unit tests, and name tests with the identical convention: `MethodName_Scenario_ExpectedBehavior`.
+- Integration tests must be assigned a different test category or trait so they can be separated from unit tests in CI and run on different schedules or against different environments.
 
 ## Model Selection and Token Efficiency
 
