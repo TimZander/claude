@@ -1,6 +1,6 @@
 # deep-review
 
-Rigorous code review plugin that reviews all changes on the current branch compared to a base branch.
+Rigorous code review plugin that reviews all changes on the current branch compared to a base branch (default `main`).
 
 > **Renamed from `review-code`** to avoid conflict with Claude's built-in `/review` skill.
 > If you have `review-code` installed, uninstall it and install `deep-review`:
@@ -33,6 +33,7 @@ Pass a GitHub issue, PR, or Azure DevOps work item URL. The review will fetch th
 /deep-review https://github.com/org/repo/issues/42
 /deep-review https://github.com/org/repo/pull/99
 /deep-review https://dev.azure.com/org/project/_workitems/edit/1234
+/deep-review https://github.com/org/repo/pull/99 check auth edge cases
 ```
 
 ### With a custom base branch
