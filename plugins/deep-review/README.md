@@ -100,3 +100,21 @@ Runs a structured, skeptical code review covering:
 Uses parallel subagents to deeply analyze correctness/security, test coverage, design quality, and assumptions simultaneously — then merges and verifies findings into a single comprehensive output.
 
 Outputs a structured verdict with critical issues, simplification opportunities, and actionable feedback.
+
+## Agent Invocation
+
+Agents can invoke `/deep-review` via the Skill tool:
+
+```
+Skill({ skill: "deep-review", args: "focus on error handling" })
+```
+
+To run a review in the background while continuing other work:
+
+```
+Agent({
+  description: "Deep review of current branch",
+  model: "opus",
+  prompt: "Use the Skill tool to invoke deep-review. Your arguments are: focus on error handling"
+})
+```

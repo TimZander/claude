@@ -250,7 +250,7 @@ After creating the feature branch but before any code research or changes, updat
 
 ## Pre-PR Checklist
 
-When asked to push a branch or create a pull request, remind the user to run `/deep-review` on the current branch if they haven't already done so during this session. Keep the reminder to a single sentence — do not block the push or PR.
+When asked to push a branch or create a pull request, remind the user to run `/deep-review` on the current branch if they haven't already done so during this session. Keep the reminder to a single sentence — do not block the push or PR. Do not auto-invoke `/deep-review`; always let the user decide.
 
 ## Phased Work
 
