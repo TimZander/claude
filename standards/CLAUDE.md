@@ -34,7 +34,38 @@ standards, then have each developer re-run the sync script.
 
 ## Unit Test Standards
 
-These standards cover unit tests only. Integration and smoke test standards will be defined separately.
+These standards cover unit tests only. Integration test standards will be defined separately.
+
+## Smoke Test Standards
+
+**Definition:** A smoke test is the absolute minimum automated check required to prove that a deployed application is online, reachable, and fundamentally functional. It does not verify correctness; it verifies availability.
+
+### When to write smoke tests
+
+- **All web applications:** Every deployed web application is required to have at least one smoke test.
+- **API endpoints:** Key API routes should have smoke tests that verify they respond with the expected status code.
+
+### How to write smoke tests
+
+- Smoke tests should be simple, fast, and focused on "is it running?" — no business logic verification.
+- Use HTTP calls to verify endpoints respond (primarily status code checks, not payload validation).
+- Smoke tests must be idempotent and safe to run against any environment (strictly no data mutations).
+- Keep them in a dedicated test project or script (e.g., `*.SmokeTests` or a pipeline script).
+
+**Example (bash/curl):**
+```bash
+# Good: Only checking if the API is reachable and returning 200 OK
+HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://api.environment.com/health)
+if [ "$HTTP_STATUS" -ne 200 ]; then
+  echo "Smoke test failed: API returned $HTTP_STATUS"
+  exit 1
+fi
+```
+
+### Pipeline integration
+
+- Smoke tests should be added as a post-deployment step in CI/CD pipelines. They run post-deployment, not during the build phase.
+- If a smoke test fails, the pipeline should report the failure (and optionally trigger a rollback if the pipeline supports it).
 
 ### When to write unit tests
 
