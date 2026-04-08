@@ -87,6 +87,14 @@
       "source": "./plugins/self-review",
       "category": "productivity",
       "strict": false
+    },
+    {
+      "name": "typ-glyph",
+      "description": "Design, preview, compare, and modify TYP file icon glyphs using Garmin XPM rules",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/typ-glyph",
+      "category": "development",
+      "strict": false
     }
   ]
 }
