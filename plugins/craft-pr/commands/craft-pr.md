@@ -1,5 +1,6 @@
 ---
 name: craft-pr
+model: haiku
 description: Generate a PR title and description, optionally creating the PR on GitHub or Azure DevOps
 disable-model-invocation: true
 allowed-tools: Bash, Read, Grep, Glob, AskUserQuestion, WebFetch

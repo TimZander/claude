@@ -1,5 +1,6 @@
 ---
 name: craft-stage
+model: haiku
 description: Analyze working directory changes, filter junk files, and output a ready-to-run git add command
 disable-model-invocation: true
 allowed-tools: Bash, Read, Grep, Glob

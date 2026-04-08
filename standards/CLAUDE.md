@@ -57,6 +57,36 @@ These standards cover unit tests only. Integration and smoke test standards will
 - Include at least one negative test (invalid input, failure scenario) per method under test
 - Tests should verify observable behavior, not implementation details
 
+## Model Selection and Token Efficiency
+
+### Task-to-model mapping
+
+**Opus — deep reasoning required:**
+- Code reviews (`/deep-review`) — multi-file analysis, security auditing, architectural assessment
+- Large refactors spanning multiple files or changing public APIs
+- Story improvement (`/improve-stories`) — codebase research + structured writing
+- Complex debugging requiring cross-module reasoning
+
+**Sonnet — standard development work:**
+- Feature implementation with clear requirements
+- Bug fixes with a known root cause or small scope
+- Writing tests for existing code
+- Documentation changes with codebase research
+
+**Haiku — mechanical or formulaic tasks:**
+- Generating commit messages, PR descriptions (`/craft-pr`, `/craft-commit`)
+- Simple file lookups, formatting, renaming
+- Staging commands (`/craft-stage`)
+- Subagent work with narrow, well-defined prompts (e.g., "fetch this issue and return the body")
+
+*Note: Model selection is a guideline, not a hard rule. Complex edge cases may need escalation to a more capable model.*
+
+### Context vs. Token Savings
+
+- Never sacrifice code context for token savings during a deep review. Quality and architectural verification require full file context.
+- Reserve token-aggressive strategies (like diff-only analysis) for mechanical summarization tasks (e.g., commit messages, PR descriptions).
+- Constrain subagent outputs: When writing prompts for intermediate subagents or plugins, ask the LLM to return succinct formats (like IDs, line numbers, or booleans) instead of conversational explanations to minimize expensive output tokens.
+
 ## Tool Usage
 
 - Prefer core tools (e.g., Read, Edit, Write, Grep, Glob, Agent, Bash) over MCP or other tools that require permission prompts — minimize interruptions to maximize velocity
