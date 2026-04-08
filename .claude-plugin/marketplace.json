@@ -79,6 +79,14 @@
       "source": "./plugins/improve-stories",
       "category": "productivity",
       "strict": false
+    },
+    {
+      "name": "self-review",
+      "description": "Analyzes the current Claude Code session for meta-learnings and workflow improvements.",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/self-review",
+      "category": "productivity",
+      "strict": false
     }
   ]
 }
