@@ -1,5 +1,6 @@
 ---
 name: craft-commit
+model: haiku
 description: Craft a commit message for all currently staged changes and output it as text and a ready-to-run command
 disable-model-invocation: true
 allowed-tools: Bash, Read, Grep, Glob

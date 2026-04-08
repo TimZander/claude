@@ -1,5 +1,6 @@
 ---
 name: craft-stage-commit-push
+model: haiku
 description: Filter junk files, stage meaningful changes, craft a commit message, and output a combined stage-commit-push command
 disable-model-invocation: true
 allowed-tools: Bash, Read, Grep, Glob

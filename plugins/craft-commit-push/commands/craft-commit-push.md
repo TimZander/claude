@@ -1,5 +1,6 @@
 ---
 name: craft-commit-push
+model: haiku
 description: Craft a commit message for staged changes and output a combined commit-and-push command
 disable-model-invocation: true
 allowed-tools: Bash, Read, Grep, Glob
