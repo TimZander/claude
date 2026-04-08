@@ -1,0 +1,12 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "self-review",
+  "version": "0.1.0",
+  "description": "Analyzes the current Claude Code session for meta-learnings and workflow improvements.",
+  "commands": [
+    {
+      "name": "self-review",
+      "resolve": "../commands/self-review.md"
+    }
+  ]
+}
