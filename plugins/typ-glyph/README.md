@@ -5,7 +5,12 @@ A Claude Code plugin for designing, previewing, generating, and iterating on Gar
 ## Prerequisites
 The plugin natively executes a Python utility for visualization and rasterization.
 ```bash
-pip install Pillow cairosvg
+# Preferred:
+uv pip install --system Pillow cairosvg
+
+# Fallback:
+python3 -m venv /tmp/typ-glyph-venv
+/tmp/typ-glyph-venv/bin/pip install Pillow cairosvg
 ```
 
 ## Usage
