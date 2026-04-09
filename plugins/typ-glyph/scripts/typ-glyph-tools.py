@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 import sys
 import argparse
+import subprocess
 import tempfile
 import os
 import io
-import re
 
 def ensure_dependencies():
     try:
@@ -42,6 +42,8 @@ def parse_xpm(xpm_lines):
         # "char c color" -> '! c #000000'
         char = color_def[:chars_per_pixel]
         c_index = color_def.find(' c ')
+        if c_index == -1:
+            raise ValueError(f"Malformed XPM color line (missing ' c ' marker): {color_def!r}")
         color_val = color_def[c_index+3:].strip()
         if color_val.lower() == 'none':
             colors[char] = (0, 0, 0, 0)
@@ -124,11 +126,11 @@ def generate_cmd(args):
 
 def open_file(path):
     if sys.platform == "darwin":
-        os.system(f"open {path}")
+        subprocess.run(["open", path])
     elif sys.platform == "win32":
-        os.system(f"start {path}")
+        subprocess.run(["cmd", "/c", "start", "", path])
     else:
-        os.system(f"xdg-open {path}")
+        subprocess.run(["xdg-open", path])
 
 def main():
     parser = argparse.ArgumentParser(description="TYP Glyph Tools")
