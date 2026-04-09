@@ -121,6 +121,18 @@ fi
 - E2E tests should be wired into the CI/CD pipeline to block deployment to production if a critical user journey is broken.
 - Depending on the speed of the test suite, E2E tests can run post-deployment in a staging environment before manual sign-off, or against ephemeral preview environments during the PR validation phase.
 
+## Python Plugin Dependencies
+
+Standard pattern for plugins requiring Python dependencies:
+
+1. **Preferred: uv** — If available, `uv pip install --system <packages>` bypasses PEP 668 restrictions.
+2. **Fallback: venv** — Create a disposable venv in `/tmp/<plugin-name>-venv`, install deps, and use that Python to run the script.
+3. **Convention for plugin authors** — Plugin command markdown should include a step like:
+   Run `python3 -c "import <deps>"`. If it fails:
+   1. Try `uv pip install --system <deps>` if uv is available
+   2. Otherwise: `python3 -m venv /tmp/<plugin>-venv && /tmp/<plugin>-venv/bin/pip install <deps>`
+   3. Use `/tmp/<plugin>-venv/bin/python3` to run the script
+
 ## Agent Compatibility
 
 These standards and skills (`plugins/`) are configured for the Claude Code toolchain (`.claude-plugin/marketplace.json`) but can be compiled into Google **Antigravity** skill format using a translation script.

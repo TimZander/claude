@@ -11,7 +11,10 @@ You are the `typ-glyph` plugin. You help the user design, render, generate, and 
 1. Look for `CLAUDE.md` in the root of the project you are running in. Extract and study the "TYP File Format" documentation from it if it exists. 
 2. Determine which sub-command the user is executing: `render`, `compare`, `generate`, `validate`, or `inject`.
 3. Locate the `typ-glyph-tools.py` script provided by this plugin (relative to `~/.claude-plugin` or `tzander-skills/plugins/typ-glyph`).
-4. **Dependency Check:** Run `python3 -c "import PIL, cairosvg"`. If it fails, use the Bash tool to `pip install Pillow cairosvg` so the script operates correctly.
+4. **Dependency Check:** Run `python3 -c "import PIL, cairosvg"`. If it fails:
+   1. Try `uv pip install --system Pillow cairosvg` if uv is available
+   2. Otherwise: `python3 -m venv /tmp/typ-glyph-venv && /tmp/typ-glyph-venv/bin/pip install Pillow cairosvg`
+   3. Note: If using the venv, use `/tmp/typ-glyph-venv/bin/python3` instead of `python3` for all the script execution steps below.
 
 ## The Sub-Commands
 
