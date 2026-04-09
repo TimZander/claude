@@ -6,7 +6,7 @@ import glob
 def sync_plugins_to_antigravity():
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     plugins_dir = os.path.join(repo_root, "plugins")
-    agents_skills_dir = os.path.join(repo_root, ".agents", "skills")
+    agents_skills_dir = os.path.join(repo_root, ".agent", "skills")
 
     os.makedirs(agents_skills_dir, exist_ok=True)
     compiled_count = 0

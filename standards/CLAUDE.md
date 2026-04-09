@@ -123,11 +123,11 @@ fi
 
 ## Agent Compatibility
 
-While these standards and skills (`plugins/`) were initially configured exclusively for the Claude Code toolchain (`.claude-plugin/marketplace.json`), they are completely natively integrated with Google Deepmind's **Antigravity** architecture using our translation script.
+These standards and skills (`plugins/`) are configured for the Claude Code toolchain (`.claude-plugin/marketplace.json`) but can be compiled into Google **Antigravity** skill format using a translation script.
 
-- **To compile Claude plugins into Antigravity `SKILL.md` structures**, simply run `python scripts/antigravity-sync.py`.
-- This will cleanly compile and symlink the native tool endpoints to `.agents/skills/<name>`.
-- **DO NOT** manually edit files in `.agents/skills/`. They are overwritten on compilation. Edit the primary sources in `plugins/`!
+- **To compile Claude plugins into Antigravity `SKILL.md` structures**, run `python scripts/antigravity-sync.py`.
+- This compiles and symlinks plugin sources to `.agent/skills/<name>`.
+- **DO NOT** manually edit files in `.agent/skills/`. They are overwritten on compilation. Edit the primary sources in `plugins/`!
 
 ## Model Selection and Token Efficiency
 
