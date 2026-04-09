@@ -126,8 +126,8 @@ fi
 These standards and skills (`plugins/`) are configured for the Claude Code toolchain (`.claude-plugin/marketplace.json`) but can be compiled into Google **Antigravity** skill format using a translation script.
 
 - **To compile Claude plugins into Antigravity `SKILL.md` structures**, run `python scripts/antigravity-sync.py`.
-- This compiles and symlinks plugin sources to `.agent/skills/<name>`.
-- **DO NOT** manually edit files in `.agent/skills/`. They are overwritten on compilation. Edit the primary sources in `plugins/`!
+- This compiles plugin sources to `~/.gemini/antigravity/skills/<name>` (user-global, available in every workspace).
+- **DO NOT** manually edit files in `~/.gemini/antigravity/skills/`. They are overwritten on compilation. Edit the primary sources in `plugins/`!
 
 ## Model Selection and Token Efficiency
 

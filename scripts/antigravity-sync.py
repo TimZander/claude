@@ -21,7 +21,9 @@ def _yaml_quote(value: str) -> str:
 def sync_plugins_to_antigravity():
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     plugins_dir = os.path.join(repo_root, "plugins")
-    agents_skills_dir = os.path.join(repo_root, ".agent", "skills")
+    agents_skills_dir = os.path.join(
+        os.path.expanduser("~"), ".gemini", "antigravity", "skills"
+    )
 
     # Wipe stale output so renamed/deleted plugins don't linger
     if os.path.isdir(agents_skills_dir):
@@ -43,7 +45,7 @@ def sync_plugins_to_antigravity():
         found_plugin_dirs.add(os.path.basename(plugin_root_dir))
 
         try:
-            with open(plugin_file, "r") as f:
+            with open(plugin_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
 
             name = data.get("name")
@@ -68,7 +70,7 @@ def sync_plugins_to_antigravity():
                 print(f"Warning: Prompt markdown not found for {name}")
                 continue
 
-            with open(md_path, "r") as f:
+            with open(md_path, "r", encoding="utf-8") as f:
                 md_content = f.read()
 
             skill_dir = os.path.join(agents_skills_dir, name)
@@ -84,7 +86,7 @@ def sync_plugins_to_antigravity():
                     content_body = parts[2].strip()
 
             # Use _yaml_quote for safe YAML serialization (handles quotes, colons, etc.)
-            with open(skill_file_path, "w") as f:
+            with open(skill_file_path, "w", encoding="utf-8") as f:
                 f.write("---\n")
                 f.write(f"name: {_yaml_quote(name)}\n")
                 f.write(f"description: {_yaml_quote(description)}\n")
