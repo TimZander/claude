@@ -11,16 +11,15 @@ def ensure_dependencies():
         from PIL import Image
         import cairosvg
     except ImportError:
-        print("Missing dependencies. The agent must run: pip install Pillow cairosvg", file=sys.stderr)
+        print("Missing dependencies. Install via: pip install --break-system-packages Pillow cairosvg\n"
+              "Or use a venv: python3 -m venv /tmp/typ-venv && /tmp/typ-venv/bin/pip install Pillow cairosvg",
+              file=sys.stderr)
         sys.exit(1)
     return Image, cairosvg
 
-def parse_xpm(xpm_lines):
-    # Extremely naive XPM parser for TYP
-    # Find dimensions
-    header = None
+def parse_xpm(xpm_lines, Image):
+    """Parse XPM lines into a PIL Image. Caller must pass the PIL Image module."""
     colors = {}
-    pixels = []
     
     # Clean up quotes and commas
     lines = [line.strip().strip(',').strip('"') for line in xpm_lines if '"' in line]
@@ -29,13 +28,16 @@ def parse_xpm(xpm_lines):
         raise ValueError("No valid XPM data found")
         
     header_parts = lines[0].split()
-    if len(header_parts) < 3:
-        raise ValueError("Invalid XPM header")
+    if len(header_parts) < 4:
+        raise ValueError("Invalid XPM header (need width, height, num_colors, chars_per_pixel)")
     
     width = int(header_parts[0])
     height = int(header_parts[1])
     num_colors = int(header_parts[2])
     chars_per_pixel = int(header_parts[3])
+    
+    if len(lines) < 1 + num_colors:
+        raise ValueError(f"Header declares {num_colors} colors but only {len(lines) - 1} lines follow")
     
     for i in range(1, num_colors + 1):
         color_def = lines[i]
@@ -52,14 +54,12 @@ def parse_xpm(xpm_lines):
                 # Extract RGB
                 color_val = color_val.lstrip('#')
                 if len(color_val) == 6:
-                    colors[char] = tuple(int(color_val[i:i+2], 16) for i in (0, 2, 4)) + (255,)
+                    colors[char] = tuple(int(color_val[j:j+2], 16) for j in (0, 2, 4)) + (255,)
                 else:
-                    colors[char] = (0, 0, 0, 255) # Fallback
+                    colors[char] = (0, 0, 0, 255)  # Fallback
             else:
-                 colors[char] = (0, 0, 0, 255) # Fallback
-                 
+                colors[char] = (0, 0, 0, 255)  # Fallback
     # Parse pixels
-    Image, _ = ensure_dependencies()
     img = Image.new('RGBA', (width, height))
     pixels_obj = img.load()
     
@@ -77,7 +77,7 @@ def parse_xpm(xpm_lines):
 def render_cmd(args):
     Image, _ = ensure_dependencies()
     text = sys.stdin.read()
-    img = parse_xpm(text.splitlines())
+    img = parse_xpm(text.splitlines(), Image)
     # Scale up
     scale = args.scale
     if scale > 1:
@@ -99,9 +99,8 @@ def generate_cmd(args):
     
     img = Image.open(io.BytesIO(png_data)).convert("RGBA")
     
-    # Quantize to Garmin pallet: ! (black), o (white), . (transparent/none)
+    # Quantize to Garmin palette: ! (black), o (white), . (transparent/none)
     # Background must be none if alpha is 0
-    
     xpm_lines = []
     xpm_lines.append(f'"{args.width} {args.height} 3 1"')
     xpm_lines.append('"! c #000000"')
