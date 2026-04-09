@@ -95,13 +95,17 @@ def sync_plugins_to_antigravity():
             original_scripts_dir = os.path.join(plugin_root_dir, "scripts")
             target_scripts_dir = os.path.join(skill_dir, "scripts")
             if os.path.isdir(original_scripts_dir):
-                # Use a relative symlink so it works regardless of clone location
-                rel_path = os.path.relpath(original_scripts_dir, skill_dir)
-                # Remove stale/broken symlinks before recreating
+                # Remove stale/broken symlinks or copies before recreating
                 if os.path.islink(target_scripts_dir):
                     os.unlink(target_scripts_dir)
-                if not os.path.exists(target_scripts_dir):
-                    os.symlink(rel_path, target_scripts_dir)
+                elif os.path.isdir(target_scripts_dir):
+                    shutil.rmtree(target_scripts_dir)
+                # Prefer relative symlink; fall back to copy on Windows without Developer Mode
+                rel_path = os.path.relpath(original_scripts_dir, skill_dir)
+                try:
+                    os.symlink(rel_path, target_scripts_dir, target_is_directory=True)
+                except OSError:
+                    shutil.copytree(original_scripts_dir, target_scripts_dir)
 
             compiled_count += 1
             print(f"  Compiled: {name}")
