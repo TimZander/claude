@@ -160,8 +160,19 @@ Output the full markdown description in a code block:
      <full PR description from Step 4 — nothing else>
      ENDOFBODY
      ```
-   - **`Linux`:** Same pattern but pipe to `xclip -selection clipboard` (falls back to `xsel --clipboard --input` if `xclip` is not installed)
-   - **`MINGW`/`MSYS`/`CYGWIN` (Windows):** Same pattern but pipe to `clip`
+   - **`Linux`:**
+     ```bash
+     cat << 'ENDOFBODY' | xclip -selection clipboard
+     <full PR description from Step 4 — nothing else>
+     ENDOFBODY
+     ```
+     Falls back to `xsel --clipboard --input` if `xclip` is not installed.
+   - **`MINGW`/`MSYS`/`CYGWIN` (Windows):**
+     ```bash
+     cat << 'ENDOFBODY' | clip
+     <full PR description from Step 4 — nothing else>
+     ENDOFBODY
+     ```
 3. Tell the user the PR description has been copied to their clipboard. Do not create the PR. Stop here.
 
 ## Step 7: Create PR (only when `--create` flag is provided)
