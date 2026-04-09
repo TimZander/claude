@@ -83,7 +83,9 @@ def render_cmd(args):
     if scale > 1:
         img = img.resize((img.width * scale, img.height * scale), Image.Resampling.NEAREST)
         
-    out_path = "/tmp/typ_preview.png"
+    out = tempfile.NamedTemporaryFile(suffix=".png", prefix="typ_preview_", delete=False)
+    out_path = out.name
+    out.close()
     img.save(out_path)
     print(f"Rendered to {out_path}")
     open_file(out_path)
@@ -96,7 +98,6 @@ def generate_cmd(args):
     png_data = cairosvg.svg2png(bytestring=svg_data, output_width=args.width, output_height=args.height)
     
     img = Image.open(io.BytesIO(png_data)).convert("RGBA")
-    img = img.resize((args.width, args.height), Image.Resampling.BICUBIC)
     
     # Quantize to Garmin pallet: ! (black), o (white), . (transparent/none)
     # Background must be none if alpha is 0
@@ -132,6 +133,58 @@ def open_file(path):
     else:
         subprocess.run(["xdg-open", path])
 
+def validate_cmd(args):
+    """Validate XPM data read from stdin."""
+    text = sys.stdin.read()
+    lines = [line.strip().strip(',').strip('"') for line in text.splitlines() if '"' in line]
+
+    if not lines:
+        print("ERROR: No valid XPM data found.", file=sys.stderr)
+        sys.exit(1)
+
+    header_parts = lines[0].split()
+    if len(header_parts) < 4:
+        print(f"ERROR: Invalid XPM header: {lines[0]!r}", file=sys.stderr)
+        sys.exit(1)
+
+    width, height, num_colors, cpp = (int(v) for v in header_parts[:4])
+    errors = []
+
+    # Validate color definitions
+    if len(lines) < 1 + num_colors:
+        errors.append(f"Header declares {num_colors} colors but only {len(lines) - 1} lines follow.")
+    else:
+        defined_chars = set()
+        for i in range(1, num_colors + 1):
+            color_def = lines[i]
+            if ' c ' not in color_def:
+                errors.append(f"Color line {i} missing ' c ' marker: {color_def!r}")
+            else:
+                defined_chars.add(color_def[:cpp])
+
+        # Validate pixel rows
+        pixel_lines = lines[1 + num_colors:]
+        if len(pixel_lines) != height:
+            errors.append(f"Declared height={height} but found {len(pixel_lines)} pixel rows.")
+
+        for row_idx, row in enumerate(pixel_lines):
+            if len(row) != width * cpp:
+                errors.append(f"Row {row_idx}: expected width {width * cpp} chars, got {len(row)}.")
+            if defined_chars:
+                for x in range(0, len(row), cpp):
+                    ch = row[x:x + cpp]
+                    if ch not in defined_chars:
+                        errors.append(f"Row {row_idx}, col {x // cpp}: undefined char {ch!r}.")
+                        break  # One error per row is enough
+
+    if errors:
+        for err in errors:
+            print(f"ERROR: {err}", file=sys.stderr)
+        sys.exit(1)
+    else:
+        print(f"OK: {width}x{height}, {num_colors} colors, {cpp} char(s)/pixel — all valid.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="TYP Glyph Tools")
     subparsers = parser.add_subparsers(dest="command")
@@ -142,6 +195,8 @@ def main():
     gen_parser = subparsers.add_parser("generate")
     gen_parser.add_argument("--width", type=int, required=True)
     gen_parser.add_argument("--height", type=int, required=True)
+
+    subparsers.add_parser("validate")
     
     args = parser.parse_args()
     
@@ -149,6 +204,8 @@ def main():
         render_cmd(args)
     elif args.command == "generate":
         generate_cmd(args)
+    elif args.command == "validate":
+        validate_cmd(args)
     else:
         parser.print_help()
 
