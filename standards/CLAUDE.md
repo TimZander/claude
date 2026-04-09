@@ -121,6 +121,14 @@ fi
 - E2E tests should be wired into the CI/CD pipeline to block deployment to production if a critical user journey is broken.
 - Depending on the speed of the test suite, E2E tests can run post-deployment in a staging environment before manual sign-off, or against ephemeral preview environments during the PR validation phase.
 
+## Agent Compatibility
+
+While these standards and skills (`plugins/`) were initially configured exclusively for the Claude Code toolchain (`.claude-plugin/marketplace.json`), they are completely natively integrated with Google Deepmind's **Antigravity** architecture using our translation script.
+
+- **To compile Claude plugins into Antigravity `SKILL.md` structures**, simply run `python scripts/antigravity-sync.py`.
+- This will cleanly compile and symlink the native tool endpoints to `.agents/skills/<name>`.
+- **DO NOT** manually edit files in `.agents/skills/`. They are overwritten on compilation. Edit the primary sources in `plugins/`!
+
 ## Model Selection and Token Efficiency
 
 ### Task-to-model mapping
