@@ -163,6 +163,14 @@ These standards and skills (`plugins/`) are configured for the Claude Code toolc
 
 - Prefer core tools (e.g., Read, Edit, Write, Grep, Glob, Agent, Bash) over MCP or other tools that require permission prompts — minimize interruptions to maximize velocity
 - When core tools are insufficient or significantly less efficient, external tools and custom scripts (Python, etc.) are acceptable
+- **Avoid writing temp files to pass text to CLI commands.** Each file write triggers its own permission prompt. Instead, use a heredoc to pass content inline:
+  ```bash
+  gh issue edit 42 --body "$(cat <<'ENDOFBODY'
+  Markdown body with `backticks`, $variables, and "quotes" preserved.
+  ENDOFBODY
+  )"
+  ```
+  The single-quoted `'ENDOFBODY'` delimiter prevents shell expansion. Use a unique delimiter (`ENDOFBODY`, not `EOF`) to avoid early termination if the content itself contains shell examples with `EOF`. When a tool genuinely requires a file path (e.g., `--body-file`, `@file`), combine the file write and the consuming command in a single Bash call to avoid a separate permission prompt for the write.
 - If a particular external tool or workflow pattern is used repeatedly across multiple sessions, suggest creating a skill to wrap the common usage
 - **ADO MCP: always resolve repository GUIDs before creating PRs.** `repo_create_pull_request` requires a repository GUID for `repositoryId` — passing a name or `Project/Name` produces misleading errors. Call `repo_get_repo_by_name_or_id` first to resolve the name to a GUID.
 
