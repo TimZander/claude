@@ -291,7 +291,14 @@ Before updating each item, verify:
 - Do NOT begin implementation — the deliverable is the updated description.
 - If an update fails, report the error and continue with the remaining items.
 
-**GitHub:** Write the new body to a temp file, then use `gh issue edit <number> --body-file /tmp/issue-body.md` to update the issue. This avoids shell escaping issues with quotes, backticks, and `$` in markdown content. After each successful update, add an audit trail comment with `gh issue comment <number> --body "Description restructured — added [what was added] based on codebase research."`.
+**GitHub:** Use a heredoc to pass the body inline, avoiding temp file writes (which trigger extra permission prompts):
+```bash
+gh issue edit <number> --body "$(cat <<'EOF'
+<full updated description>
+EOF
+)"
+```
+The single-quoted `'EOF'` delimiter prevents shell expansion, so backticks, `$`, and quotes in the markdown are preserved. After each successful update, add an audit trail comment with `gh issue comment <number> --body "Description restructured — added [what was added] based on codebase research."`.
 
 **ADO:** Write the updated description to each ADO work item using the update tool. After each successful update, add a brief work item comment noting what was changed (e.g., "Description restructured — added root cause analysis, acceptance criteria, and proposed fix based on codebase research."). This creates an audit trail so reviewers know the description was reworked.
 
