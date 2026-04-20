@@ -174,6 +174,20 @@ These standards and skills (`plugins/`) are configured for the Claude Code toolc
 - If a particular external tool or workflow pattern is used repeatedly across multiple sessions, suggest creating a skill to wrap the common usage
 - **ADO MCP: always resolve repository GUIDs before creating PRs.** `repo_create_pull_request` requires a repository GUID for `repositoryId` — passing a name or `Project/Name` produces misleading errors. Call `repo_get_repo_by_name_or_id` first to resolve the name to a GUID.
 
+## Pasted Log Handling
+
+When the user pastes a log longer than ~100 lines (device log, server log, CI log, stack trace, config dump, test output, etc.), the **first action** should be to `Write` the content to a scratch file so later turns can `Grep` / `Read` against it rather than re-tokenizing the full paste. The ~100 line threshold is approximate — below that size the write + grep overhead exceeds the benefit. (This is distinct from the "avoid temp files" rule in Tool Usage above, which governs passing text to CLI commands; here the file is for Claude's own later analysis.)
+
+**Where to write:** default to the system temp directory — `/tmp/pastedlog-<unix-epoch-seconds>.txt` on Unix/macOS (e.g. `/tmp/pastedlog-1714567890.txt`), or `$env:TEMP\pastedlog-<unix-epoch-seconds>.txt` on Windows. When the user wants cross-session persistence ("come back to this log tomorrow"), write to `.claude-scratch/` in the repo root instead — and before the first write, verify `.claude-scratch/` is listed in the repo's `.gitignore` and append it if not. Pasted logs frequently contain tokens, connection strings, and PII; `/tmp/` is world-readable on multi-user hosts, so when the paste is likely to contain secrets prefer `.claude-scratch/`.
+
+**Correlation tasks:** for work spanning many events, delegate to an `Agent({subagent_type: "general-purpose"})` with just the file path. The sub-agent reads and summarizes inside its own context window; only the compact result comes back to the main thread.
+
+**Multi-turn pastes:** when the user pastes additional chunks of the same log across multiple turns, append to the existing scratch file with a short `--- chunk N ---` separator rather than creating new files.
+
+**Cleanup:** delete the scratch file when the investigation wraps. `/tmp/` typically self-cleans on reboot; `.claude-scratch/` does not.
+
+The first-paste token cost is unavoidable, but every follow-up query avoids re-tokenizing the full paste.
+
 ## Troubleshooting Failures
 
 When a deployment, infrastructure operation, or third-party integration fails with an unexpected error:
