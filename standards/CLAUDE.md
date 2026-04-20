@@ -352,9 +352,15 @@ Before starting any new unit of work (picking up an issue, beginning a task that
 2. If not on `main`, switch to `main` (stash uncommitted changes if needed)
 3. Run `git fetch origin main` and compare local `main` to `origin/main`
 4. If local `main` is behind, run `git pull` to catch up
-5. Create a new branch from the up-to-date `main`
+5. Create a new branch from the up-to-date `main` (see **Branch Naming and PR Linking** below for the format)
 
 Do not start work on an existing feature branch unless the user explicitly asks to continue work on that branch.
+
+## Branch Naming and PR Linking
+
+**Branch naming:** Create branches as `branches/<issue-number>-<kebab-case-slug>` (illustrative: `branches/305-duplicate-notifications-ios`). Include the issue or work-item number when one exists; when no tracked item exists, use `branches/<kebab-case-slug>` with no numeric prefix. If a branch resolves multiple issues, use the primary issue number in the branch name and list the rest in the PR body via additional `Closes #N` lines. Use only lowercase letters, numbers, and hyphens — compatible with both GitHub and Azure DevOps. Keep slugs under ~50 characters so they don't trip shell tab-completion or filename-length limits.
+
+**PR linking:** When a PR resolves an existing issue, include `Closes #<number>` or `Fixes #<number>` in the PR body so GitHub auto-closes the issue when the PR merges into the default branch. GitHub also honors `Resolves`, `Closed`, and `Fixed` — prefer `Closes`/`Fixes` for team consistency. For ADO work items, include `AB#<id>` in commit messages or the PR description to create a work-item link. Note that `AB#<id>` alone does **not** auto-close the work item — auto-close requires the PR to be set to auto-complete with the appropriate work-item transition rules configured.
 
 ## Mark Work Items Active
 
