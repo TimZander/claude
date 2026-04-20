@@ -176,13 +176,17 @@ These standards and skills (`plugins/`) are configured for the Claude Code toolc
 
 ## Pasted Log Handling
 
-When the user pastes a log longer than ~100 lines (device log, server log, CI log, stack trace, config dump, etc.), the **first action** should be to `Write` the content to a scratch file under `/tmp/` (e.g. `/tmp/pastedlog-<epoch>.txt`). All subsequent analysis uses `Grep` / `Read` on that file rather than re-scanning the paste in context.
+When the user pastes a log longer than ~100 lines (device log, server log, CI log, stack trace, config dump, test output, etc.), the **first action** should be to `Write` the content to a scratch file so later turns can `Grep` / `Read` against it rather than re-tokenizing the full paste. The ~100 line threshold is approximate — below that size the write + grep overhead exceeds the benefit. (This is distinct from the "avoid temp files" rule in Tool Usage above, which governs passing text to CLI commands; here the file is for Claude's own later analysis.)
 
-For broad correlation tasks spanning many events, delegate to an `Agent({subagent_type: "Explore"})` with just the file path. This keeps the full log out of the main conversation's context window — the sub-agent burns its own context on the read-and-summarize work and returns only a compact structured result.
+**Where to write:** default to the system temp directory — `/tmp/pastedlog-<unix-epoch-seconds>.txt` on Unix/macOS (e.g. `/tmp/pastedlog-1714567890.txt`), or `$env:TEMP\pastedlog-<unix-epoch-seconds>.txt` on Windows. When the user wants cross-session persistence ("come back to this log tomorrow"), write to `.claude-scratch/` in the repo root instead — and before the first write, verify `.claude-scratch/` is listed in the repo's `.gitignore` and append it if not. Pasted logs frequently contain tokens, connection strings, and PII; `/tmp/` is world-readable on multi-user hosts, so when the paste is likely to contain secrets prefer `.claude-scratch/`.
 
-This pattern preserves the user's paste-based workflow (no behavior change on the user's side) while avoiding repeated context costs from re-scanning the same log for different questions. The first-paste cost is unavoidable, but every subsequent query becomes near-free.
+**Correlation tasks:** for work spanning many events, delegate to an `Agent({subagent_type: "general-purpose"})` with just the file path. The sub-agent reads and summarizes inside its own context window; only the compact result comes back to the main thread.
 
-**When to use repo-relative scratch instead of `/tmp/`:** if the user indicates they want cross-session persistence ("come back to this log tomorrow"), write to `.claude-scratch/` in the repo root and ensure it is in `.gitignore`. Default to `/tmp/` otherwise.
+**Multi-turn pastes:** when the user pastes additional chunks of the same log across multiple turns, append to the existing scratch file with a short `--- chunk N ---` separator rather than creating new files.
+
+**Cleanup:** delete the scratch file when the investigation wraps. `/tmp/` typically self-cleans on reboot; `.claude-scratch/` does not.
+
+The first-paste token cost is unavoidable, but every follow-up query avoids re-tokenizing the full paste.
 
 ## Troubleshooting Failures
 

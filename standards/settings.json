@@ -1,6 +1,9 @@
 {
   "permissions": {
-    "allow": [],
+    "allow": [
+      "Write(/tmp/pastedlog-*)",
+      "Write(.claude-scratch/**)"
+    ],
     "deny": []
   }
 }
