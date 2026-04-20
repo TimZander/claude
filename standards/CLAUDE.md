@@ -346,6 +346,12 @@ Before starting any new unit of work (picking up an issue, beginning a task that
 
 Do not start work on an existing feature branch unless the user explicitly asks to continue work on that branch.
 
+## Branch Naming and PR Linking
+
+**Branch naming:** Create branches as `branches/<issue-number>-<kebab-case-slug>` (e.g., `branches/305-duplicate-notifications-ios`). Include the issue or work-item number when one exists; drop the prefix number if no tracked item exists. Use only lowercase letters, numbers, and hyphens — compatible with both GitHub and Azure DevOps.
+
+**PR linking:** When a PR resolves an existing issue, include `Closes #<number>` or `Fixes #<number>` in the PR body so GitHub auto-closes the issue on merge. For ADO work items, use the equivalent work-item link in the PR description or the `AB#<id>` commit-message syntax.
+
 ## Mark Work Items Active
 
 After creating the feature branch but before any code research or changes, update the work item state:
