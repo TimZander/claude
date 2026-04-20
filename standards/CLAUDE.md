@@ -126,8 +126,8 @@ fi
 These standards and skills (`plugins/`) are configured for the Claude Code toolchain (`.claude-plugin/marketplace.json`) but can be compiled into Google **Antigravity** skill format using a translation script.
 
 - **To compile Claude plugins into Antigravity `SKILL.md` structures**, run `python scripts/antigravity-sync.py`.
-- This compiles and symlinks plugin sources to `.agent/skills/<name>`.
-- **DO NOT** manually edit files in `.agent/skills/`. They are overwritten on compilation. Edit the primary sources in `plugins/`!
+- This compiles plugin sources to `~/.gemini/antigravity/skills/<name>` (user-global, available in every workspace).
+- **DO NOT** manually edit files in `~/.gemini/antigravity/skills/`. They are overwritten on compilation. Edit the primary sources in `plugins/`!
 
 ## Model Selection and Token Efficiency
 
@@ -163,6 +163,14 @@ These standards and skills (`plugins/`) are configured for the Claude Code toolc
 
 - Prefer core tools (e.g., Read, Edit, Write, Grep, Glob, Agent, Bash) over MCP or other tools that require permission prompts — minimize interruptions to maximize velocity
 - When core tools are insufficient or significantly less efficient, external tools and custom scripts (Python, etc.) are acceptable
+- **Avoid writing temp files to pass text to CLI commands.** Each file write triggers its own permission prompt. Instead, use a heredoc to pass content inline:
+  ```bash
+  gh issue edit 42 --body "$(cat <<'ENDOFBODY'
+  Markdown body with `backticks`, $variables, and "quotes" preserved.
+  ENDOFBODY
+  )"
+  ```
+  The single-quoted `'ENDOFBODY'` delimiter prevents shell expansion. Use a unique delimiter (`ENDOFBODY`, not `EOF`) to avoid early termination if the content itself contains shell examples with `EOF`. When a tool genuinely requires a file path (e.g., `--body-file`, `@file`), combine the file write and the consuming command in a single Bash call to avoid a separate permission prompt for the write.
 - If a particular external tool or workflow pattern is used repeatedly across multiple sessions, suggest creating a skill to wrap the common usage
 - **ADO MCP: always resolve repository GUIDs before creating PRs.** `repo_create_pull_request` requires a repository GUID for `repositoryId` — passing a name or `Project/Name` produces misleading errors. Call `repo_get_repo_by_name_or_id` first to resolve the name to a GUID.
 
@@ -334,9 +342,15 @@ Before starting any new unit of work (picking up an issue, beginning a task that
 2. If not on `main`, switch to `main` (stash uncommitted changes if needed)
 3. Run `git fetch origin main` and compare local `main` to `origin/main`
 4. If local `main` is behind, run `git pull` to catch up
-5. Create a new branch from the up-to-date `main`
+5. Create a new branch from the up-to-date `main` (see **Branch Naming and PR Linking** below for the format)
 
 Do not start work on an existing feature branch unless the user explicitly asks to continue work on that branch.
+
+## Branch Naming and PR Linking
+
+**Branch naming:** Create branches as `branches/<issue-number>-<kebab-case-slug>` (illustrative: `branches/305-duplicate-notifications-ios`). Include the issue or work-item number when one exists; when no tracked item exists, use `branches/<kebab-case-slug>` with no numeric prefix. If a branch resolves multiple issues, use the primary issue number in the branch name and list the rest in the PR body via additional `Closes #N` lines. Use only lowercase letters, numbers, and hyphens — compatible with both GitHub and Azure DevOps. Keep slugs under ~50 characters so they don't trip shell tab-completion or filename-length limits.
+
+**PR linking:** When a PR resolves an existing issue, include `Closes #<number>` or `Fixes #<number>` in the PR body so GitHub auto-closes the issue when the PR merges into the default branch. GitHub also honors `Resolves`, `Closed`, and `Fixed` — prefer `Closes`/`Fixes` for team consistency. For ADO work items, include `AB#<id>` in commit messages or the PR description to create a work-item link. Note that `AB#<id>` alone does **not** auto-close the work item — auto-close requires the PR to be set to auto-complete with the appropriate work-item transition rules configured.
 
 ## Mark Work Items Active
 

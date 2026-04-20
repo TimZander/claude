@@ -153,18 +153,27 @@ Output the full markdown description in a code block:
 
 **If the user did NOT pass `--create`**:
 1. Run `echo "OS=$(uname -s)"` to detect the user's operating system.
-2. Write the description to a temp file using a heredoc so special characters are preserved:
-   ```bash
-   BODY_FILE=$(mktemp)
-   cat > "$BODY_FILE" << 'ENDOFBODY'
-   <full PR description from Step 4 — nothing else>
-   ENDOFBODY
-   ```
-3. Use Bash to pipe the temp file to the clipboard based on the detected OS:
-   - **`Darwin` (macOS):** `cat "$BODY_FILE" | pbcopy`
-   - **`Linux`:** `cat "$BODY_FILE" | xclip -selection clipboard` (falls back to `xsel --clipboard --input` if `xclip` is not installed)
-   - **`MINGW`/`MSYS`/`CYGWIN` (Windows):** `cat "$BODY_FILE" | clip`
-4. Tell the user the PR description has been copied to their clipboard. Do not create the PR. Stop here.
+2. Pipe the description directly to the clipboard using a heredoc — no temp file needed:
+   - **`Darwin` (macOS):**
+     ```bash
+     cat << 'ENDOFBODY' | pbcopy
+     <full PR description from Step 4 — nothing else>
+     ENDOFBODY
+     ```
+   - **`Linux`:**
+     ```bash
+     cat << 'ENDOFBODY' | xclip -selection clipboard
+     <full PR description from Step 4 — nothing else>
+     ENDOFBODY
+     ```
+     Falls back to `xsel --clipboard --input` if `xclip` is not installed.
+   - **`MINGW`/`MSYS`/`CYGWIN` (Windows):**
+     ```bash
+     cat << 'ENDOFBODY' | clip
+     <full PR description from Step 4 — nothing else>
+     ENDOFBODY
+     ```
+3. Tell the user the PR description has been copied to their clipboard. Do not create the PR. Stop here.
 
 ## Step 7: Create PR (only when `--create` flag is provided)
 
@@ -172,31 +181,26 @@ Output the full markdown description in a code block:
 
 The `create-pr.sh` script handles platform detection, pre-flight checks, pushing, and PR creation. You provide the title and description; the script does the rest.
 
-### 7a: Write description to a temp file
+### 7a: Write description and locate the script
 
-Shell escaping a multi-line markdown body is unreliable. Write the description to a temp file first:
+Combine the temp file write and script lookup in a single Bash call to avoid a separate permission prompt for the file write:
 
 ```bash
-BODY_FILE=$(mktemp)
-cat > "$BODY_FILE" << 'ENDOFBODY'
+BODY_FILE=$(mktemp) && cat > "$BODY_FILE" << 'ENDOFBODY'
 <full PR description from Step 4 — nothing else>
 ENDOFBODY
-echo "$BODY_FILE"
+SCRIPT=$(find ~/.claude -name create-pr.sh -path "*/craft-pr/*" -type f 2>/dev/null | head -1)
+echo "BODY_FILE=$BODY_FILE"
+echo "SCRIPT=$SCRIPT"
 ```
 
-Use a heredoc with **single-quoted delimiter** (`<< 'ENDOFBODY'`) so the shell does not interpret special characters. The `echo` prints the temp file path to stdout.
+Use a heredoc with **single-quoted delimiter** (`<< 'ENDOFBODY'`) so the shell does not interpret special characters. The script handles cleanup of the temp file on exit.
 
-### 7b: Locate the script
+### 7b: Run the script
 
-```bash
-find ~/.claude -name create-pr.sh -path "*/craft-pr/*" -type f 2>/dev/null | head -1
-```
+If the script was not found in 7a, stop and tell the user: "Could not locate `create-pr.sh`. Re-install the craft-pr plugin: `/plugin install craft-pr@tzander-skills`."
 
-If the script is not found, stop and tell the user: "Could not locate `create-pr.sh`. Re-install the craft-pr plugin: `/plugin install craft-pr@tzander-skills`."
-
-### 7c: Run the script
-
-**Important:** Shell state does not persist between Bash tool calls. Use the literal paths printed by the previous steps — do not rely on shell variables.
+**Important:** Shell state does not persist between Bash tool calls. Use the literal paths printed by Step 7a — do not rely on shell variables.
 
 ```bash
 bash "<script-path>" --title "<title>" --body-file "<body-file-path>" [--draft]
@@ -204,7 +208,7 @@ bash "<script-path>" --title "<title>" --body-file "<body-file-path>" [--draft]
 
 If the user passed `--draft`, include the `--draft` flag.
 
-### 7d: Handle the result
+### 7c: Handle the result
 
 - **Exit code 0** — PR created successfully. Report the URL from the script output.
 - **Exit code 2** — Uncommitted changes detected. The body file was preserved. Use AskUserQuestion to ask the user whether to proceed (the remote will not include uncommitted changes). If yes, re-run the script with `--skip-dirty-check` and the **same `--body-file` path**:
