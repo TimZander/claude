@@ -174,6 +174,16 @@ These standards and skills (`plugins/`) are configured for the Claude Code toolc
 - If a particular external tool or workflow pattern is used repeatedly across multiple sessions, suggest creating a skill to wrap the common usage
 - **ADO MCP: always resolve repository GUIDs before creating PRs.** `repo_create_pull_request` requires a repository GUID for `repositoryId` — passing a name or `Project/Name` produces misleading errors. Call `repo_get_repo_by_name_or_id` first to resolve the name to a GUID.
 
+## Pasted Log Handling
+
+When the user pastes a log longer than ~100 lines (device log, server log, CI log, stack trace, config dump, etc.), the **first action** should be to `Write` the content to a scratch file under `/tmp/` (e.g. `/tmp/pastedlog-<epoch>.txt`). All subsequent analysis uses `Grep` / `Read` on that file rather than re-scanning the paste in context.
+
+For broad correlation tasks spanning many events, delegate to an `Agent({subagent_type: "Explore"})` with just the file path. This keeps the full log out of the main conversation's context window — the sub-agent burns its own context on the read-and-summarize work and returns only a compact structured result.
+
+This pattern preserves the user's paste-based workflow (no behavior change on the user's side) while avoiding repeated context costs from re-scanning the same log for different questions. The first-paste cost is unavoidable, but every subsequent query becomes near-free.
+
+**When to use repo-relative scratch instead of `/tmp/`:** if the user indicates they want cross-session persistence ("come back to this log tomorrow"), write to `.claude-scratch/` in the repo root and ensure it is in `.gitignore`. Default to `/tmp/` otherwise.
+
 ## Troubleshooting Failures
 
 When a deployment, infrastructure operation, or third-party integration fails with an unexpected error:
