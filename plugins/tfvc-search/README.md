@@ -49,13 +49,16 @@ Consider documenting your mirror path and org/project defaults in your repo's `C
 
 ## Path-escaping note
 
-TFVC paths start with `$` and often contain spaces. Always single-quote them in Bash:
+TFVC paths start with `$` and often contain spaces. Two rules on Bash:
+
+1. **Always single-quote the path:** `'$/BGV Databases/RedGate/BGVTSWCustom'`. Double quotes will make the shell try to expand `$/…` as a variable.
+2. **On Git Bash / MSYS, always prefix the command with `MSYS_NO_PATHCONV=1`.** Without it, MSYS rewrites `'$/Foo/Bar'` into `'$C:/Program Files/Git/Foo/Bar'` before Python receives the arg, and ADO rejects the call. The variable is harmless on non-MSYS shells, so you can always include it.
 
 ```bash
---scope '$/BGV Databases/RedGate/BGVTSWCustom'
+MSYS_NO_PATHCONV=1 python tfvc-search.py ls \
+  --org bgvone --project "BGV Databases" \
+  --scope '$/BGV Databases/RedGate/BGVTSWCustom'
 ```
-
-Double quotes will make the shell try to expand `$/…` as a variable.
 
 ## Scope (v1)
 

@@ -38,8 +38,10 @@ Locate the script and run the appropriate subcommand — Bash shell state does n
 
 ```bash
 SCRIPT=$(find ~/.claude -name tfvc-search.py -path "*/tfvc-search/*" -type f 2>/dev/null | head -1)
-python "$SCRIPT" <subcommand> --org <ORG> --project "<PROJECT>" ...
+MSYS_NO_PATHCONV=1 python "$SCRIPT" <subcommand> --org <ORG> --project "<PROJECT>" ...
 ```
+
+**Always prefix with `MSYS_NO_PATHCONV=1` on Windows/Git Bash.** Without it, Git Bash rewrites the TFVC `$/...` path into `$<drive>:<mount>/...` before Python receives it — the script detects this mangling and errors out clearly, but prevention is cheaper than recovery. The env var is harmless on non-MSYS shells.
 
 Org and project must come from the user's repo/project `CLAUDE.md` (often stored under `## SQL Database Reference` or similar), or from the user directly. Do not guess.
 
@@ -48,14 +50,14 @@ Org and project must come from the user's repo/project `CLAUDE.md` (often stored
 TFVC paths start with `$` and often contain spaces — e.g. `$/BGV Databases/RedGate/BGVTSWCustom`. In Bash:
 
 - **Always single-quote the path:** `'$/BGV Databases/RedGate/BGVTSWCustom'`. Double-quoting will make the shell try to expand `$/...` as a variable.
-- On Git Bash / MSYS, if a path arg starts with `/` and is being passed to a Windows-side binary, MSYS may rewrite it. This skill's Python wrapper avoids that layer, but if you see path mangling, prefix the whole command with `MSYS_NO_PATHCONV=1`.
+- **On Git Bash / MSYS, always prefix with `MSYS_NO_PATHCONV=1`** (as shown in the invocation block above). MSYS silently rewrites args that start with `/` into Windows-style paths *before* Python receives them — so `'$/BGV Databases/...'` becomes `'$C:/Program Files/Git/BGV Databases/...'` and the ADO API rejects it with `InvalidPathException`. The env var is harmless on non-MSYS shells, so it's safe to always include.
 
 ## Local mirror (optional, much faster)
 
 If the user has a read-only local mirror of the TFVC subtree (e.g. `C:/temp/bgvtsw-tfvc-readonly/` mapped to `$/BGV Databases/RedGate/BGVTSWCustom`), pass `--mirror` and `--mirror-prefix`:
 
 ```bash
-python "$SCRIPT" grep \
+MSYS_NO_PATHCONV=1 python "$SCRIPT" grep \
   --org bgvone --project "BGV Databases" \
   --scope '$/BGV Databases/RedGate/BGVTSWCustom' \
   --pattern 'ColumnX' --file-glob '*.sql' \

@@ -75,6 +75,24 @@ class CliValidationTests(unittest.TestCase):
                 "--path", "$/S/F.sql", "--mirror-prefix", "$/S",
             ])
 
+    def test_msys_mangled_scope_is_rejected_with_fix_hint(self):
+        # MSYS/Git-Bash rewrites '$/Foo' into '$C:/Program Files/Git/Foo' before Python
+        # sees the arg. Detect that shape and point the user at MSYS_NO_PATHCONV=1.
+        with self.assertRaises(SystemExit) as cm:
+            tfvc.main([
+                "ls", "--org", "o", "--project", "p",
+                "--scope", "$C:/Program Files/Git/Foo/Bar",
+            ])
+        self.assertIn("MSYS_NO_PATHCONV=1", str(cm.exception))
+
+    def test_msys_mangled_path_is_rejected_with_fix_hint(self):
+        with self.assertRaises(SystemExit) as cm:
+            tfvc.main([
+                "read", "--org", "o", "--project", "p",
+                "--path", "$C:/Program Files/Git/Foo/F.sql",
+            ])
+        self.assertIn("MSYS_NO_PATHCONV=1", str(cm.exception))
+
     @mock.patch("subprocess.run")
     @mock.patch("urllib.request.urlopen")
     def test_org_url_is_normalized_at_runtime(self, urlopen, run):
@@ -133,9 +151,10 @@ class AuthTests(unittest.TestCase):
     def setUp(self):
         tfvc.get_access_token.cache_clear()
 
-    @mock.patch("subprocess.run", side_effect=FileNotFoundError())
-    def test_missing_az_cli_exits_with_hint(self, _run):
-        # Any REST call triggers token fetch, which should exit clearly.
+    @mock.patch("shutil.which", return_value=None)
+    def test_missing_az_cli_exits_with_hint(self, _which):
+        # Any REST call triggers token fetch; shutil.which returning None is the
+        # real-world "az not installed" signal on both POSIX and Windows.
         with self.assertRaises(SystemExit) as cm:
             tfvc.main(["ls", "--org", "o", "--project", "p", "--scope", "$/S"])
         self.assertIn("'az' CLI not found", str(cm.exception))

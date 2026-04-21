@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -31,10 +32,15 @@ DEFAULT_HTTP_TIMEOUT = 30
 
 @lru_cache(maxsize=1)
 def get_access_token():
+    # Resolve via shutil.which so PATHEXT is honored on Windows — subprocess.run(["az", ...])
+    # won't find `az.cmd` by its base name alone, even though shells do.
+    az = shutil.which("az")
+    if az is None:
+        sys.exit("Error: 'az' CLI not found in PATH. Install the Azure CLI or ensure 'az' is available.")
     try:
         result = subprocess.run(
             [
-                "az", "account", "get-access-token",
+                az, "account", "get-access-token",
                 "--resource", ADO_RESOURCE_ID,
                 "--query", "accessToken",
                 "-o", "tsv",
@@ -42,8 +48,6 @@ def get_access_token():
             capture_output=True, text=True, check=True,
         )
         return result.stdout.strip()
-    except FileNotFoundError:
-        sys.exit("Error: 'az' CLI not found in PATH. Install the Azure CLI or ensure 'az' is available.")
     except subprocess.CalledProcessError as e:
         sys.exit(
             "Error: 'az account get-access-token' failed.\n"
@@ -249,6 +253,22 @@ def build_parser():
     return parser
 
 
+def _check_msys_mangle(value, flag_name):
+    """Detect MSYS/Git-Bash path mangling of TFVC '$/...' args.
+
+    MSYS rewrites '$/Foo/Bar' → '$<drive>:<mount>/Foo/Bar' before the script
+    ever sees it. The mangled form always starts with '$<letter>:' followed by
+    a slash, which is never a valid TFVC path — safe to reject.
+    """
+    if re.match(r"^\$[A-Za-z]:[\\/]", value):
+        sys.exit(
+            f"Error: {flag_name} looks MSYS/Git-Bash-mangled: {value!r}\n"
+            f"TFVC paths must start with '$/' but MSYS rewrote yours to '$<drive>:...'.\n"
+            f"Fix: prefix the command with MSYS_NO_PATHCONV=1. Example:\n"
+            f"  MSYS_NO_PATHCONV=1 python <script> <subcommand> ..."
+        )
+
+
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -262,6 +282,12 @@ def main(argv=None):
     # Accept either 'myorg' or 'https://dev.azure.com/myorg'
     if args.org.startswith(("http://", "https://")):
         args.org = args.org.rstrip("/").rsplit("/", 1)[-1]
+
+    # Catch MSYS path mangling on any TFVC-path argument before we make a REST call.
+    for attr in ("scope", "path", "mirror_prefix"):
+        val = getattr(args, attr, None)
+        if val:
+            _check_msys_mangle(val, f"--{attr.replace('_', '-')}")
 
     args.func(args)
 
