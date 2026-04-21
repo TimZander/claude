@@ -19,18 +19,18 @@ Search and read Azure DevOps TFVC content (typically SQL schema scripts — stor
 Invoke via `/tfvc-search` with a natural-language query, or run the script directly:
 
 ```bash
-python3 path/to/tfvc-search.py grep \
+python path/to/tfvc-search.py grep \
   --org <ORG> --project "<PROJECT>" \
   --scope '$/Path/To/Scope' \
   --pattern 'RegexHere' \
   [--file-glob '*.sql'] \
   [--mirror /local/path --mirror-prefix '$/Matching/Tfvc/Path']
 
-python3 path/to/tfvc-search.py read \
+python path/to/tfvc-search.py read \
   --org <ORG> --project "<PROJECT>" \
   --path '$/Path/To/File.sql'
 
-python3 path/to/tfvc-search.py ls \
+python path/to/tfvc-search.py ls \
   --org <ORG> --project "<PROJECT>" \
   --scope '$/Path/To/Scope' [--recursive]
 ```
@@ -64,7 +64,7 @@ Read-only: `grep`, `read`, `ls`. No check-ins, edits, branching, or changeset hi
 ## Tests
 
 ```bash
-python3 plugins/tfvc-search/scripts/test_tfvc-search.py
+python plugins/tfvc-search/scripts/test_tfvc-search.py
 ```
 
 Tests mock both `az` and `urllib.request.urlopen` — no network required.

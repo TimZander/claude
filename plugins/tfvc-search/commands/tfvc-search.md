@@ -38,7 +38,7 @@ Locate the script and run the appropriate subcommand — Bash shell state does n
 
 ```bash
 SCRIPT=$(find ~/.claude -name tfvc-search.py -path "*/tfvc-search/*" -type f 2>/dev/null | head -1)
-python3 "$SCRIPT" <subcommand> --org <ORG> --project "<PROJECT>" ...
+python "$SCRIPT" <subcommand> --org <ORG> --project "<PROJECT>" ...
 ```
 
 Org and project must come from the user's repo/project `CLAUDE.md` (often stored under `## SQL Database Reference` or similar), or from the user directly. Do not guess.
@@ -55,7 +55,7 @@ TFVC paths start with `$` and often contain spaces — e.g. `$/BGV Databases/Red
 If the user has a read-only local mirror of the TFVC subtree (e.g. `C:/temp/bgvtsw-tfvc-readonly/` mapped to `$/BGV Databases/RedGate/BGVTSWCustom`), pass `--mirror` and `--mirror-prefix`:
 
 ```bash
-python3 "$SCRIPT" grep \
+python "$SCRIPT" grep \
   --org bgvone --project "BGV Databases" \
   --scope '$/BGV Databases/RedGate/BGVTSWCustom' \
   --pattern 'ColumnX' --file-glob '*.sql' \

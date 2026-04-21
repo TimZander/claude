@@ -26,6 +26,7 @@ from pathlib import Path
 
 ADO_RESOURCE_ID = "499b84ac-1321-427f-aa17-267ca6975798"
 DEFAULT_API_VERSION = "7.1"
+DEFAULT_HTTP_TIMEOUT = 30
 
 
 @lru_cache(maxsize=1)
@@ -51,7 +52,17 @@ def get_access_token():
         )
 
 
-def _ado_request(url, accept):
+def _tfvc_items_base_url(org, project):
+    """Build the /_apis/tfvc/items base URL with org and project URL-encoded."""
+    return (
+        f"https://dev.azure.com/{urllib.parse.quote(org, safe='')}"
+        f"/{urllib.parse.quote(project, safe='')}/_apis/tfvc/items"
+    )
+
+
+def _ado_request(url, accept, *, fatal=True):
+    """GET a TFVC URL. Returns response bytes on success, or None on error when fatal=False.
+    When fatal=True (default), exits the process on any HTTP/network error."""
     req = urllib.request.Request(
         url,
         headers={
@@ -60,18 +71,22 @@ def _ado_request(url, accept):
         },
     )
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=DEFAULT_HTTP_TIMEOUT) as resp:
             return resp.read()
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="replace") if e.fp else ""
-        sys.exit(f"Error: TFVC API call failed: {e.code} {e.reason}\nURL: {url}\nResponse: {body}")
+        msg = f"Error: TFVC API call failed: {e.code} {e.reason}\nURL: {url}\nResponse: {body}"
     except urllib.error.URLError as e:
-        sys.exit(f"Error: TFVC API call failed to reach server: {e.reason}\nURL: {url}")
+        msg = f"Error: TFVC API call failed to reach server: {e.reason}\nURL: {url}"
+    if fatal:
+        sys.exit(msg)
+    print(msg, file=sys.stderr)
+    return None
 
 
 def tfvc_items_list(org, project, scope_path, recursion_level):
     """Enumerate items under a scope. Returns list of item dicts with at least 'path' and 'isFolder'."""
-    base_url = f"https://dev.azure.com/{org}/{project}/_apis/tfvc/items"
+    base_url = _tfvc_items_base_url(org, project)
     query = urllib.parse.urlencode({
         "scopePath": scope_path,
         "recursionLevel": recursion_level,
@@ -81,11 +96,13 @@ def tfvc_items_list(org, project, scope_path, recursion_level):
     return data.get("value", [])
 
 
-def tfvc_item_content(org, project, path):
-    """Fetch raw content of a single TFVC item. Returns decoded text."""
-    base_url = f"https://dev.azure.com/{org}/{project}/_apis/tfvc/items"
+def tfvc_item_content(org, project, path, *, fatal=True):
+    """Fetch raw content of a single TFVC item. Returns decoded text, or None when fatal=False and the fetch fails."""
+    base_url = _tfvc_items_base_url(org, project)
     query = urllib.parse.urlencode({"path": path, "api-version": DEFAULT_API_VERSION})
-    raw = _ado_request(f"{base_url}?{query}", "text/plain")
+    raw = _ado_request(f"{base_url}?{query}", "text/plain", fatal=fatal)
+    if raw is None:
+        return None
     return _decode_content(raw)
 
 
@@ -111,6 +128,15 @@ def mirror_lookup(mirror, mirror_prefix, tfvc_path):
     return local if local.is_file() else None
 
 
+def _paths_equal_ci(a, b):
+    """Compare TFVC paths case-insensitively and ignoring trailing slashes.
+
+    ADO normalizes scope paths in responses but the exact shape (case, trailing slash)
+    varies across endpoints and API versions — normalize both sides to be safe.
+    """
+    return a.rstrip("/").lower() == b.rstrip("/").lower()
+
+
 def cmd_ls(args):
     items = tfvc_items_list(
         args.org, args.project, args.scope,
@@ -119,7 +145,7 @@ def cmd_ls(args):
     for item in items:
         path = item.get("path", "")
         # The scope itself is included in the response — skip it to mirror 'ls' semantics.
-        if path == args.scope:
+        if _paths_equal_ci(path, args.scope):
             continue
         suffix = "/" if item.get("isFolder") else ""
         print(f"{path}{suffix}")
@@ -134,7 +160,10 @@ def cmd_read(args):
 
 
 def cmd_grep(args):
-    pattern = re.compile(args.pattern)
+    try:
+        pattern = re.compile(args.pattern)
+    except re.error as e:
+        sys.exit(f"Error: invalid regex {args.pattern!r}: {e}")
 
     # Fast path: if mirror covers the full scope, walk it directly (no REST)
     if args.mirror and args.mirror_prefix and args.scope.startswith(args.mirror_prefix):
@@ -144,7 +173,9 @@ def cmd_grep(args):
             _grep_local(root, args, pattern)
             return
 
-    # REST path: enumerate, then fetch each file, preferring mirror on a per-file basis
+    # REST path: enumerate, then fetch each file, preferring mirror on a per-file basis.
+    # Per-file failures (404 from a race, 403 on an ACL'd file) log to stderr and skip
+    # rather than aborting the whole operation — partial results beat total failure.
     items = tfvc_items_list(args.org, args.project, args.scope, "Full")
     for item in items:
         if item.get("isFolder"):
@@ -153,7 +184,12 @@ def cmd_grep(args):
         if args.file_glob and not fnmatch(Path(path).name, args.file_glob):
             continue
         local = mirror_lookup(args.mirror, args.mirror_prefix, path)
-        content = _decode_content(local.read_bytes()) if local else tfvc_item_content(args.org, args.project, path)
+        if local:
+            content = _decode_content(local.read_bytes())
+        else:
+            content = tfvc_item_content(args.org, args.project, path, fatal=False)
+            if content is None:
+                continue
         _emit_matches(path, content, pattern)
 
 
