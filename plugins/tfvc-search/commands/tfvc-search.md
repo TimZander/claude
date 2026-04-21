@@ -54,7 +54,16 @@ TFVC paths start with `$` and often contain spaces — e.g. `$/BGV Databases/Red
 
 ## Local mirror (optional, much faster)
 
-If the user has a read-only local mirror of the TFVC subtree (e.g. `C:/temp/bgvtsw-tfvc-readonly/` mapped to `$/BGV Databases/RedGate/BGVTSWCustom`), pass `--mirror` and `--mirror-prefix`:
+**Before making any REST call, check the conversation's loaded CLAUDE.md context for a documented TFVC mirror** — both the project-level `CLAUDE.md` and the user-global `~/.claude/CLAUDE.md`. Users commonly maintain a read-only local mirror of their TFVC subtree and want the skill to use it automatically without having to pass flags on every invocation.
+
+Look for a section headed `## TFVC Mirror` (or similar) with two pieces of information:
+
+- A **mirror path** — a local directory containing a checked-out copy of some TFVC subtree (e.g. `C:/temp/bgvtsw-tfvc-readonly` or `/c/temp/bgvtsw-tfvc-readonly`).
+- A **mirror prefix** — the TFVC path that the mirror's root corresponds to (e.g. `$/BGV Databases/RedGate/BGVTSWCustom`).
+
+If both are present in CLAUDE.md, **always pass `--mirror` and `--mirror-prefix` on every invocation** — no need to ask the user or mention it. Project-level CLAUDE.md wins over the user-global one if they disagree. If only one of the two values is documented, treat the mirror as absent and fall back to REST.
+
+Full invocation with mirror:
 
 ```bash
 MSYS_NO_PATHCONV=1 python "$SCRIPT" grep \
@@ -67,7 +76,7 @@ MSYS_NO_PATHCONV=1 python "$SCRIPT" grep \
 
 When the mirror covers the full scope, the script skips REST entirely and walks the local filesystem — orders of magnitude faster and works offline. `read` also prefers the mirror on a per-file basis. The two flags must be given together or the script errors out.
 
-**Check the user's repo `CLAUDE.md` for a mirror path before making REST calls.** If a mirror is documented, use it unconditionally — it avoids network round-trips and respects any org policy against reaching the live DB or live TFVC during investigation.
+If no mirror is documented and the user asks for a large or recursive grep, mention once that adding a mirror block to `~/.claude/CLAUDE.md` will speed future runs — then proceed with REST. Do not pester on every call.
 
 ## Output format
 

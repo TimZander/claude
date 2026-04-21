@@ -37,9 +37,22 @@ python path/to/tfvc-search.py ls \
 
 ## Optional: local mirror
 
-If your team keeps a read-only local mirror of the TFVC subtree (e.g. `C:/temp/bgvtsw-tfvc-readonly/`), pass `--mirror` and `--mirror-prefix` together. When the mirror covers the full scope, the skill skips REST and walks the filesystem — orders of magnitude faster and works offline. On a per-file basis, `read` also prefers the mirror.
+If your team keeps a read-only local mirror of the TFVC subtree (e.g. `C:/temp/bgvtsw-tfvc-readonly/`), the skill can use it automatically instead of REST — orders of magnitude faster, works offline, and avoids any org policy against reaching live TFVC during investigation.
 
-Consider documenting your mirror path and org/project defaults in your repo's `CLAUDE.md` so the skill picks them up automatically.
+**Setup (one-time):** add a `## TFVC Mirror` block to your `~/.claude/CLAUDE.md` with your mirror path and the TFVC scope it mirrors. The skill's command markdown instructs Claude to pick these up on every invocation — no flags needed after that.
+
+```markdown
+## TFVC Mirror
+
+- Mirror path: /c/temp/bgvtsw-tfvc-readonly
+- Mirror prefix: $/BGV Databases/RedGate/BGVTSWCustom
+```
+
+Once that's in place, `/tfvc-search find procs referencing ColumnX` will walk the local mirror instead of hitting ADO. No per-call flags, no re-explaining the mirror each session.
+
+If you only have a mirror for some subtrees, document just those — the skill falls back to REST when the requested scope isn't under the mirror prefix.
+
+**Manual override:** you can still pass `--mirror` and `--mirror-prefix` explicitly on the command line if you want to point at a different mirror for a one-off call. The two flags must be given together.
 
 ## Output
 
