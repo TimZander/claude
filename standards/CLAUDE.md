@@ -121,78 +121,27 @@ fi
 - E2E tests should be wired into the CI/CD pipeline to block deployment to production if a critical user journey is broken.
 - Depending on the speed of the test suite, E2E tests can run post-deployment in a staging environment before manual sign-off, or against ephemeral preview environments during the PR validation phase.
 
+## Plugin Logic: Prefer Scripts Over Inline Markdown
+
+When a plugin command needs non-trivial logic (dependency resolution, multi-step conditionals, file manipulation beyond one command, error handling with specific remediation), put it in a concrete script under `plugins/<plugin>/scripts/` and invoke it from the command markdown. The agent should act as a **handler**: decide what script to call, pass arguments, and interpret the result — not re-execute the logic step-by-step.
+
+Inline bash in markdown is re-interpreted by the agent on every run, can't be tested outside the agent, and tends to grow unboundedly as review cycles surface edge cases. A committed script is deterministic, shell-testable (`bash -n` for syntax, a smoke-test script for behavior), and copy-pastable between plugins.
+
+Ship a minimal smoke test (even ~20 lines) alongside any script that encodes non-trivial logic — verify the usage error and the happy path at minimum. The first time the script is edited, the test pays for itself.
+
 ## Python Plugin Dependencies
 
-Standard pattern for plugins that depend on Python packages at runtime. The pattern resolves a single interpreter — the **plugin python** — that the plugin uses for every subsequent `python`/`python3` invocation. Shell variables do not persist across separate tool invocations, so the resolved interpreter path must be captured as a literal string after the cascade runs.
+Plugins with Python runtime dependencies should resolve them via a cascade: (1) check if the current system interpreter already satisfies the deps; (2) install via `uv pip install --python <PY> --system` if `uv` is available, retrying with `--break-system-packages` on failure; (3) fall back to a user-local disposable venv at `${TMPDIR:-/tmp}/<plugin-name>-venv-$(id -u)`, probing for the interpreter at `bin/python` (Unix) or `Scripts/python.exe` (Windows); (4) verify the imports before proceeding.
 
-### Resolution cascade
-
-Run the entire cascade in **one** bash invocation so shell variables stay alive. Stop at the first step that succeeds. The final `echo` lets the caller capture the resolved interpreter for use in later tool calls.
+A reference implementation lives at [`plugins/typ-glyph/scripts/dependency-check.sh`](../plugins/typ-glyph/scripts/dependency-check.sh). Plugin authors should copy it into their plugin and invoke it from their command markdown:
 
 ```bash
-# Resolve a base interpreter once — the cascade installs into this one.
-PY="$(command -v python3 || command -v python)"
-[ -z "$PY" ] && { echo "No python3/python on PATH"; exit 1; }
-
-# 1. System interpreter already satisfies the deps?
-if "$PY" -c "import <deps>" 2>/dev/null; then
-    PLUGIN_PY="$PY"
-
-# 2. Preferred: install via uv into the same interpreter.
-elif command -v uv >/dev/null 2>&1 \
-     && { uv pip install --python "$PY" --system <packages> \
-          || uv pip install --python "$PY" --system --break-system-packages <packages>; }; then
-    PLUGIN_PY="$PY"
-
-# 3. Fallback: disposable user-local venv.
-else
-    VENV_DIR="${TMPDIR:-/tmp}/<plugin-name>-venv-$(id -u 2>/dev/null || echo default)"
-    # Recreate if missing or corrupted (e.g., previous run interrupted before pip finished).
-    if ! [ -x "$VENV_DIR/bin/python" ] \
-       && ! [ -x "$VENV_DIR/bin/python3" ] \
-       && ! [ -x "$VENV_DIR/Scripts/python.exe" ]; then
-        rm -rf "$VENV_DIR"
-        "$PY" -m venv "$VENV_DIR" \
-            || { echo "venv creation failed — ensure the venv module is installed (e.g., 'apt install python3-venv' on Debian/Ubuntu)"; exit 1; }
-    fi
-    # Probe for the venv interpreter — differs by OS.
-    if   [ -x "$VENV_DIR/bin/python" ];         then PLUGIN_PY="$VENV_DIR/bin/python"
-    elif [ -x "$VENV_DIR/bin/python3" ];        then PLUGIN_PY="$VENV_DIR/bin/python3"
-    elif [ -x "$VENV_DIR/Scripts/python.exe" ]; then PLUGIN_PY="$VENV_DIR/Scripts/python.exe"
-    else echo "venv interpreter not found under $VENV_DIR (expected bin/python, bin/python3, or Scripts/python.exe)"; exit 1
-    fi
-    "$PLUGIN_PY" -m pip install <packages> || { echo "pip install failed in venv"; exit 1; }
-fi
-
-# 4. Verify — if this fails after an apparent install success, the package likely
-#    depends on a system C library (e.g., libcairo, libxml2) that pip cannot install.
-"$PLUGIN_PY" -c "import <deps>" \
-    || { echo "verify failed: check for missing system libraries (e.g., 'brew install cairo' or 'apt install libcairo2-dev')"; exit 1; }
-
-# 5. Emit the resolved path so later tool calls can substitute it literally.
-echo "PLUGIN_PY=$PLUGIN_PY"
+bash <plugin-script-dir>/dependency-check.sh <plugin-name> "<import-expr>" <pkg>...
 ```
 
-### Notes
+The script writes `PLUGIN_PY=<path>` as its last stdout line on success. Since shell variables don't survive across separate Bash tool invocations, capture that path and substitute the literal value for `<PLUGIN_PY>` in every subsequent script-execution step.
 
-- `$(id -u)` scopes the venv per-user so shared-host users don't collide.
-- `${TMPDIR:-/tmp}` works on macOS (per-user `/var/folders/...`), Linux (usually unset → `/tmp`), and Windows Git Bash (`/tmp` maps to the user's temp). On native Windows shells (PowerShell/cmd), this whole cascade is bash-only; a native-shell equivalent would substitute `$env:TEMP`, drop `$(id -u)`, and replace `[ -x ]` with `Test-Path`.
-- Venv interpreter paths differ by OS: `bin/python` on Unix/macOS, `Scripts/python.exe` on Windows — always probe, never hard-code.
-- `uv pip install --system` doesn't work on every managed Python without `--break-system-packages`; the cascade retries unconditionally on non-zero exit, which is simpler and more robust than matching error strings.
-- `pip install` is idempotent — re-runs that hit existing packages are fast (`already satisfied`). `/tmp` is typically cleared on reboot on macOS and on Linux distros with `systemd-tmpfiles`, but not universally; treat the venv as cache and reclaim space with `rm -rf ${TMPDIR:-/tmp}/*-venv-$(id -u)` when needed.
-- Packages with native C extensions (`cairosvg`, `lxml`, `psycopg2`, `Pillow` for some formats) depend on system libraries that `pip` cannot install. If Verify fails with a missing-library message, the remediation is an OS-level package install (`brew install cairo pango`, `apt install libcairo2-dev`, etc.), not another `pip install`.
-- Shell variables don't survive across separate Bash tool invocations — the closing `echo "PLUGIN_PY=..."` prints the path so the caller can capture it and substitute the literal value in later commands.
-
-### Convention for plugin authors
-
-Plugin command markdown should embed the cascade above as an early step (adapt `<plugin-name>`, `<deps>`, and `<packages>`) and refer to the captured path in every subsequent script-execution step. Example:
-
-```markdown
-4. **Dependency Check:** Run the cascade … capture `PLUGIN_PY` from the final `echo`.
-5. Invoke the plugin script as:  
-   `<PLUGIN_PY> <script_path>/plugin-tool.py --flag value`  
-   where `<PLUGIN_PY>` is the literal path captured in step 4 (e.g., `/tmp/myplugin-venv-1000/bin/python`).
-```
+Packages with native C extensions (`cairosvg` → libcairo, `lxml` → libxml2, `psycopg2` → libpq) depend on system libraries that `pip` cannot install; the verify step surfaces a remediation hint if that's the failure mode.
 
 ## Agent Compatibility
 
