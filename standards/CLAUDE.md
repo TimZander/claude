@@ -188,6 +188,21 @@ When the user pastes a log longer than ~100 lines (device log, server log, CI lo
 
 The first-paste token cost is unavoidable, but every follow-up query avoids re-tokenizing the full paste.
 
+## Log Timezone Conventions
+
+When cross-referencing logs from multiple sources (client ↔ server, CI ↔ deploy target, monitoring ↔ application, etc.), **always normalize all timestamps to UTC before building a timeline or drawing causal conclusions.**
+
+Before using any timestamp from a log dump, explicitly identify its timezone:
+
+- **Server logs:** assume UTC unless proven otherwise.
+- **Client/device logs:** look for a timezone marker in the log itself (diagnostic context blocks, configuration dumps, log header metadata). If no marker is present, ask the user before proceeding — do not guess.
+- **CI logs:** check the CI runner's timezone setting (usually UTC, but some self-hosted runners differ).
+- **Application logs from libraries:** check the library's default (some log in local time, others in UTC).
+
+When reporting a correlated timeline back to the user, always label timestamps explicitly with their timezone (e.g. `22:35:14 UTC`, `16:35:14 MDT`) to avoid downstream ambiguity. Prefer UTC in final timelines; include local-time annotation only when it adds clarity (e.g. "business hours" reasoning).
+
+A common source of bug-report confusion is a user reporting an event time in their local timezone and a developer comparing it against server UTC without realizing the offset. Treat every user-reported time as local unless the user explicitly says "UTC".
+
 ## Troubleshooting Failures
 
 When a deployment, infrastructure operation, or third-party integration fails with an unexpected error:
