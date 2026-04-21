@@ -11,8 +11,6 @@
 #          (3) create a user-local venv under $TMPDIR
 #          (4) verify — a post-install import failure usually means a native system
 #              library is missing (e.g., libcairo for cairosvg).
-#
-# See the repo CLAUDE.md, section "Python Plugin Dependencies", for rationale.
 
 if [ "$#" -lt 3 ]; then
     echo "usage: $0 <plugin-name> '<import-expr>' <package> [<package>...]" >&2
