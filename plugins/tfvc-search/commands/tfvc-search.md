@@ -38,6 +38,7 @@ Locate the script and run the appropriate subcommand — Bash shell state does n
 
 ```bash
 SCRIPT=$(find ~/.claude -name tfvc-search.py -path "*/tfvc-search/*" -type f 2>/dev/null | head -1)
+[ -n "$SCRIPT" ] || { echo "tfvc-search.py not found under ~/.claude — re-install: /plugin install tfvc-search@tzander-skills" >&2; exit 1; }
 MSYS_NO_PATHCONV=1 python "$SCRIPT" <subcommand> --org <ORG> --project "<PROJECT>" ...
 ```
 
