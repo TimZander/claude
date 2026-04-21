@@ -194,14 +194,17 @@ When cross-referencing logs from multiple sources (client ↔ server, CI ↔ dep
 
 Before using any timestamp from a log dump, explicitly identify its timezone:
 
-- **Server logs:** assume UTC unless proven otherwise.
-- **Client/device logs:** look for a timezone marker in the log itself (diagnostic context blocks, configuration dumps, log header metadata). If no marker is present, ask the user before proceeding — do not guess.
+- **Server logs:** assume UTC for cloud-managed services (Azure/AWS/GCP); for on-prem servers (journald, Windows Event Log), check the host's timezone — defaults are typically server local time, not UTC.
+- **Client/device logs:** look for a timezone marker in the log itself — e.g., a line like `Timezone: America/Denver (UTC-0700)` in a diagnostic context block, a config dump header, or log metadata. If no marker is present, ask the user before proceeding — do not infer it from surrounding context.
 - **CI logs:** check the CI runner's timezone setting (usually UTC, but some self-hosted runners differ).
+- **Container/Kubernetes logs:** check the pod/container `TZ` env var (usually UTC but not guaranteed).
 - **Application logs from libraries:** check the library's default (some log in local time, others in UTC).
 
-When reporting a correlated timeline back to the user, always label timestamps explicitly with their timezone (e.g. `22:35:14 UTC`, `16:35:14 MDT`) to avoid downstream ambiguity. Prefer UTC in final timelines; include local-time annotation only when it adds clarity (e.g. "business hours" reasoning).
+When reporting a correlated timeline back to the user, always label timestamps explicitly with their timezone (e.g. `22:35:14 UTC`, `16:35:14 MDT (America/Denver)`) — pair common abbreviations with an IANA identifier when precision matters. Prefer UTC in final timelines; include local-time annotation only when it adds clarity (e.g. "business hours" reasoning).
 
 A common source of bug-report confusion is a user reporting an event time in their local timezone and a developer comparing it against server UTC without realizing the offset. Treat every user-reported time as local unless the user explicitly says "UTC".
+
+Combined with the scratch-file pattern above, timezone normalization becomes a step during extraction rather than a retrofit during correlation.
 
 ## Troubleshooting Failures
 
