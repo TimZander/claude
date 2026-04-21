@@ -95,6 +95,14 @@
       "source": "./plugins/typ-glyph",
       "category": "development",
       "strict": false
+    },
+    {
+      "name": "tfvc-search",
+      "description": "Search and read Azure DevOps TFVC content (SQL schema scripts, etc.) via REST without a local workspace",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/tfvc-search",
+      "category": "development",
+      "strict": false
     }
   ]
 }
