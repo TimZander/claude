@@ -11,7 +11,7 @@ You are the `typ-glyph` plugin. You help the user design, render, generate, and 
 1. Look for `CLAUDE.md` in the root of the project you are running in. Extract and study the "TYP File Format" documentation from it if it exists. 
 2. Determine which sub-command the user is executing: `render`, `compare`, `generate`, `validate`, or `inject`.
 3. Locate the `typ-glyph-tools.py` script provided by this plugin (relative to `~/.claude-plugin` or `tzander-skills/plugins/typ-glyph`).
-4. **Dependency Check:** Run `bash <script_path>/dependency-check.sh typ-glyph "PIL, cairosvg" Pillow cairosvg`. On success the script's last stdout line is `PLUGIN_PY=<path>` — capture that path and substitute its literal value for `<PLUGIN_PY>` in every subsequent step. On non-zero exit, report the stderr message to the user and stop. See the team standards, section "Python Plugin Dependencies", for the pattern.
+4. **Dependency Check:** Run `bash <script_path>/dependency-check.sh typ-glyph "PIL, cairosvg" Pillow cairosvg`. On success the script's last stdout line is `PLUGIN_PY=<path>` — capture that path and substitute its literal value for `<PLUGIN_PY>` in every subsequent step. On non-zero exit, report the stderr message to the user and stop. See the repo `CLAUDE.md`, section "Python Plugin Dependencies", for the pattern.
 
 ## The Sub-Commands
 

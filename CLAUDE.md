@@ -56,6 +56,28 @@ The `pre-push` hook blocks pushes to `main`/`master` globally. To opt out for a 
    ```
 3. The `source` path must be relative to the repository root.
 
+## Plugin Logic: Prefer Scripts Over Inline Markdown
+
+When a plugin command needs non-trivial logic (dependency resolution, multi-step conditionals, file manipulation beyond one command, error handling with specific remediation), put it in a concrete script under `plugins/<plugin>/scripts/` and invoke it from the command markdown. The agent should act as a **handler**: decide what script to call, pass arguments, and interpret the result — not re-execute the logic step-by-step.
+
+Inline bash in markdown is re-interpreted by the agent on every run, can't be tested outside the agent, and tends to grow unboundedly as review cycles surface edge cases. A committed script is deterministic, shell-testable (`bash -n` for syntax, a smoke-test script for behavior), and copy-pastable between plugins.
+
+Ship a minimal smoke test (even ~20 lines) alongside any script that encodes non-trivial logic — verify the usage error and the happy path at minimum. The first time the script is edited, the test pays for itself.
+
+## Python Plugin Dependencies
+
+Plugins with Python runtime dependencies should resolve them via a cascade: (1) check if the current system interpreter already satisfies the deps; (2) install via `uv pip install --python <PY> --system` if `uv` is available, retrying with `--break-system-packages` on failure; (3) fall back to a user-local disposable venv at `${TMPDIR:-/tmp}/<plugin-name>-venv-$(id -u)`, probing for the interpreter at `bin/python` (Unix) or `Scripts/python.exe` (Windows); (4) verify the imports before proceeding.
+
+A reference implementation lives at [`plugins/typ-glyph/scripts/dependency-check.sh`](plugins/typ-glyph/scripts/dependency-check.sh). Plugin authors should copy it into their plugin and invoke it from their command markdown:
+
+```bash
+bash <plugin-script-dir>/dependency-check.sh <plugin-name> "<import-expr>" <pkg>...
+```
+
+The script writes `PLUGIN_PY=<path>` as its last stdout line on success. Since shell variables don't survive across separate Bash tool invocations, capture that path and substitute the literal value for `<PLUGIN_PY>` in every subsequent script-execution step.
+
+Packages with native C extensions (`cairosvg` → libcairo, `lxml` → libxml2, `psycopg2` → libpq) depend on system libraries that `pip` cannot install; the verify step surfaces a remediation hint if that's the failure mode.
+
 ## SQL Database Reference
 
 When doing SQL-related work, the database schema is stored in Azure DevOps TFVC.
