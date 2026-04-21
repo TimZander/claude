@@ -71,8 +71,10 @@ Plugins with Python runtime dependencies should resolve them via a cascade: (1) 
 A reference implementation lives at [`plugins/typ-glyph/scripts/dependency-check.sh`](plugins/typ-glyph/scripts/dependency-check.sh). Plugin authors should copy it into their plugin and invoke it from their command markdown:
 
 ```bash
-bash <plugin-script-dir>/dependency-check.sh <plugin-name> "<import-expr>" <pkg>...
+bash <script_path>/dependency-check.sh <plugin-name> "<import-expr>" <pkg>...
 ```
+
+where `<script_path>` is the directory holding the plugin's scripts (i.e., `plugins/<plugin>/scripts/`).
 
 The script writes `PLUGIN_PY=<path>` as its last stdout line on success. Since shell variables don't survive across separate Bash tool invocations, capture that path and substitute the literal value for `<PLUGIN_PY>` in every subsequent script-execution step.
 
