@@ -223,6 +223,13 @@ def build_parser():
     parser = argparse.ArgumentParser(
         prog="tfvc-search",
         description="Search and read Azure DevOps TFVC content without a local workspace.",
+        epilog=(
+            "Local mirror (much faster): add a `## TFVC Mirror` block to "
+            "~/.claude/CLAUDE.md with `Mirror path:` and `Mirror prefix:` lines, "
+            "and the /tfvc-search skill picks them up automatically. "
+            "See the plugin README for the exact format."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
