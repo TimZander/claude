@@ -48,14 +48,17 @@ if [[ ! -f "$BODY_FILE" ]]; then
 fi
 
 # ── Cleanup ──────────────────────────────────────────────────────────
-# Always clean up the body temp file on exit, EXCEPT when exiting with
-# code 2 (dirty worktree) — the caller may re-invoke with --skip-dirty-check.
+# Always clean up temp files on exit, EXCEPT when exiting with code 2
+# (dirty worktree) — the caller may re-invoke with --skip-dirty-check
+# and needs the body file preserved.
 
 KEEP_BODY=false
+LS_REMOTE_ERR=""
 cleanup() {
     if [[ "$KEEP_BODY" == false ]]; then
         rm -f "$BODY_FILE"
     fi
+    [[ -n "$LS_REMOTE_ERR" ]] && rm -f "$LS_REMOTE_ERR"
 }
 trap cleanup EXIT
 
@@ -107,10 +110,8 @@ LS_REMOTE_RC=$?
 set -e
 case "$LS_REMOTE_RC" in
     0)
-        rm -f "$LS_REMOTE_ERR"
         ;;
     2)
-        rm -f "$LS_REMOTE_ERR"
         echo "Error: Base branch '$BASE' does not exist on 'origin'." >&2
         echo "Verify the branch name or push it to the remote first." >&2
         exit 1
@@ -118,10 +119,10 @@ case "$LS_REMOTE_RC" in
     *)
         echo "Error: Could not verify base branch '$BASE' on 'origin' (git ls-remote exit $LS_REMOTE_RC):" >&2
         cat "$LS_REMOTE_ERR" >&2
-        rm -f "$LS_REMOTE_ERR"
         exit 1
         ;;
 esac
+# LS_REMOTE_ERR is cleaned by the EXIT trap
 
 # ── Pre-flight checks ───────────────────────────────────────────────
 

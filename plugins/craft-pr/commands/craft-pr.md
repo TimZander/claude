@@ -27,7 +27,18 @@ If the user's input is ambiguous — e.g., a bare word that could be either a br
 
 Resolve this to a concrete branch name `<base>`. Substitute the literal value everywhere `<base>` appears below (do not type `<base>` into the shell verbatim).
 
-Verify the base exists on the remote: `git ls-remote --exit-code --heads origin <base> >/dev/null`. If the command exits non-zero, stop and tell the user: `Base branch '<base>' does not exist on 'origin'. Verify the branch name or push it first.`
+Verify the base exists on the remote:
+
+```bash
+git ls-remote --exit-code --heads origin <base> >/dev/null 2>/tmp/ls-remote-err.$$
+echo "exit=$?"
+```
+
+Check the reported exit code:
+
+- `0` — the base exists; continue.
+- `2` — the branch is not present on `origin`. Stop and tell the user: `Base branch '<base>' does not exist on 'origin'. Verify the branch name or push it first.`
+- Any other non-zero (typically `128`) — `git` could not reach `origin` (network/auth failure). Read `/tmp/ls-remote-err.$$` and surface the diagnostic to the user: `Could not verify base branch '<base>' on 'origin' (git ls-remote exit N): <stderr contents>. Check your network connection and authentication.` Then stop.
 
 ## Step 1: Gather Context
 
