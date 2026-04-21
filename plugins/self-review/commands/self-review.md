@@ -13,6 +13,14 @@ You are a meta-learning agent analyzing the current development session. Your ta
 - **Context limit:** You do not have a programmatic "session transcript API". You must rely entirely on your in-context memory of the conversation. If the session has been exceedingly long, acknowledge that earlier parts may have fallen out of context.
 - **Cross-Repo Operation:** This skill will almost universally be run in a different repository than the skills repository itself. 
 - **Read-only by default:** Never run write commands (`gh issue create` or file writes) without explicitly listing out the tasks and asking the user via the `AskUserQuestion` tool first. Do not make any changes in the background without explicit approval!
+- **Inline heredoc for `gh issue` bodies:** When running `gh issue create`, `gh issue edit`, or `gh issue comment` — both in the command shown to the user for approval and when executing it afterward — pass the body inline via a heredoc rather than writing a temp file. Each file write triggers its own permission prompt, and shell-quoting long markdown bodies with backticks, `$`, or nested quotes is fragile. Use a single-quoted `ENDOFBODY` delimiter so special characters are preserved verbatim:
+  ```bash
+  gh issue create --repo TimZander/claude --title "<title>" --body "$(cat <<'ENDOFBODY'
+  <full markdown body — code fences, `backticks`, $vars, and "quotes" preserved>
+  ENDOFBODY
+  )"
+  ```
+  Use `ENDOFBODY` (not `EOF`) to avoid early termination when the body itself contains shell examples with `EOF`.
 
 ## Output Format & Actions
 First, silently reflect on your immediate memory of the latest prompts, bugs, and workflows in the session. Present your findings grouped into these three categories. If a category yields no findings, state so.
