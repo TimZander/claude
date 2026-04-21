@@ -5,25 +5,40 @@ description: Generate a PR title and description, optionally creating the PR on 
 disable-model-invocation: true
 allowed-tools: Bash, Read, Grep, Glob, AskUserQuestion, WebFetch
 user-input: optional
-argument-hint: "[--create] [--draft]"
+argument-hint: "[--base <branch>] [--create] [--draft]"
 ---
 
-You are generating a pull request title and description for the current branch compared to origin/main. The title will appear in release notes, so it must be precise and meaningful to someone who hasn't seen the code.
+You are generating a pull request title and description for the current branch compared to a base branch (default: `main`). The title will appear in release notes, so it must be precise and meaningful to someone who hasn't seen the code.
 
 **If the user provided `--create` as input, you will push the branch to origin and create the PR after crafting it.** Otherwise, only output the title and description for the user to copy.
 
 **If the user provided `--draft` alongside `--create`, create the PR as a draft.** The `--draft` flag is only meaningful with `--create` — if used without it, ignore it.
 
+## Step 0: Resolve the Base Branch
+
+Before anything else, determine the base (target) branch for the PR. Accept any of these forms the user may supply:
+
+- `--base <branch>` or `--base=<branch>`
+- `branch=<branch>` or `branch <branch>`
+- A single positional argument that clearly names a branch (contains `/`, matches a known branching pattern like `feature/*`, `release/*`, `hotfix/*`, or matches a branch visible on `origin`)
+- Conversational phrasing that explicitly names a target: "target feature/x", "against feature/x", "base is feature/x"
+
+If the user's input is ambiguous — e.g., a bare word that could be either a branch name or an unrelated argument — use AskUserQuestion to confirm the intended base branch rather than guessing. If no base is supplied, default to `main`.
+
+Resolve this to a concrete branch name `<base>`. Substitute the literal value everywhere `<base>` appears below (do not type `<base>` into the shell verbatim).
+
+Verify the base exists on the remote: `git ls-remote --exit-code --heads origin <base> >/dev/null`. If the command exits non-zero, stop and tell the user: `Base branch '<base>' does not exist on 'origin'. Verify the branch name or push it first.`
+
 ## Step 1: Gather Context
 
-**Run all of these in parallel:**
+**Run all of these in parallel** (substitute the resolved `<base>` from Step 0):
 
-1. Run `git fetch origin main && git log origin/main..HEAD --oneline` to see all commits on this branch.
-2. Run `git diff origin/main...HEAD --stat` to see the summary of changed files.
-3. Run `git diff -U10 origin/main...HEAD` to see the full diff with context.
+1. Run `git fetch origin <base> && git log origin/<base>..HEAD --oneline` to see all commits on this branch.
+2. Run `git diff origin/<base>...HEAD --stat` to see the summary of changed files.
+3. Run `git diff -U10 origin/<base>...HEAD` to see the full diff with context.
 4. Run `git branch --show-current` to get the branch name.
 
-If there are no commits ahead of origin/main, stop immediately and tell the user: "No changes found compared to origin/main. Make sure you're on a feature branch with commits."
+If there are no commits ahead of `origin/<base>`, stop immediately and tell the user: "No changes found compared to origin/<base>. Make sure you're on a feature branch with commits."
 
 ## Step 2: Analyze the Changes
 
@@ -203,16 +218,16 @@ If the script was not found in 7a, stop and tell the user: "Could not locate `cr
 **Important:** Shell state does not persist between Bash tool calls. Use the literal paths printed by Step 7a — do not rely on shell variables.
 
 ```bash
-bash "<script-path>" --title "<title>" --body-file "<body-file-path>" [--draft]
+bash "<script-path>" --title "<title>" --body-file "<body-file-path>" --base "<base>" [--draft]
 ```
 
-If the user passed `--draft`, include the `--draft` flag.
+Always pass `--base "<base>"` with the resolved value from Step 0 (even when it is `main`) — this keeps the command and script in lockstep if defaults ever diverge. If the user passed `--draft`, include the `--draft` flag.
 
 ### 7c: Handle the result
 
 - **Exit code 0** — PR created successfully. Report the URL from the script output.
-- **Exit code 2** — Uncommitted changes detected. The body file was preserved. Use AskUserQuestion to ask the user whether to proceed (the remote will not include uncommitted changes). If yes, re-run the script with `--skip-dirty-check` and the **same `--body-file` path**:
+- **Exit code 2** — Uncommitted changes detected. The body file was preserved. Use AskUserQuestion to ask the user whether to proceed (the remote will not include uncommitted changes). If yes, re-run the script with `--skip-dirty-check` and the **same `--body-file` path** (and the same `--base`/`--draft` flags as before):
   ```bash
-  bash "<script-path>" --title "<title>" --body-file "<body-file-path>" --skip-dirty-check [--draft]
+  bash "<script-path>" --title "<title>" --body-file "<body-file-path>" --skip-dirty-check --base "<base>" [--draft]
   ```
 - **Any other exit code** — An error occurred. Report the error message from the script output.

@@ -6,7 +6,7 @@ set -euo pipefail
 # title and description.
 #
 # Usage:
-#   bash create-pr.sh --title "PR title" --body-file /tmp/body.md [--draft] [--skip-dirty-check]
+#   bash create-pr.sh --title "PR title" --body-file /tmp/body.md [--base <branch>] [--draft] [--skip-dirty-check]
 #
 # Exit codes:
 #   0 — PR created successfully
@@ -17,6 +17,7 @@ set -euo pipefail
 
 TITLE=""
 BODY_FILE=""
+BASE="main"
 DRAFT=false
 SKIP_DIRTY_CHECK=false
 
@@ -24,6 +25,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --title)            TITLE="$2"; shift 2 ;;
         --body-file)        BODY_FILE="$2"; shift 2 ;;
+        --base)             BASE="$2"; shift 2 ;;
         --draft)            DRAFT=true; shift ;;
         --skip-dirty-check) SKIP_DIRTY_CHECK=true; shift ;;
         *)                  echo "Error: Unknown argument: $1" >&2; exit 1 ;;
@@ -88,6 +90,39 @@ if [[ "$BRANCH" == "main" || "$BRANCH" == "master" ]]; then
     exit 1
 fi
 
+if [[ "$BRANCH" == "$BASE" ]]; then
+    echo "Error: Current branch ('$BRANCH') is the same as the base branch. Check out a different branch before creating a PR." >&2
+    exit 1
+fi
+
+# ── Base branch exists on remote ────────────────────────────────────
+# git ls-remote --exit-code returns 2 when the ref is not found, and
+# other non-zero codes (typically 128) for network/auth failures. Split
+# these so offline users don't see a misleading "branch not found."
+
+LS_REMOTE_ERR=$(mktemp)
+set +e
+git ls-remote --exit-code --heads origin "$BASE" >/dev/null 2>"$LS_REMOTE_ERR"
+LS_REMOTE_RC=$?
+set -e
+case "$LS_REMOTE_RC" in
+    0)
+        rm -f "$LS_REMOTE_ERR"
+        ;;
+    2)
+        rm -f "$LS_REMOTE_ERR"
+        echo "Error: Base branch '$BASE' does not exist on 'origin'." >&2
+        echo "Verify the branch name or push it to the remote first." >&2
+        exit 1
+        ;;
+    *)
+        echo "Error: Could not verify base branch '$BASE' on 'origin' (git ls-remote exit $LS_REMOTE_RC):" >&2
+        cat "$LS_REMOTE_ERR" >&2
+        rm -f "$LS_REMOTE_ERR"
+        exit 1
+        ;;
+esac
+
 # ── Pre-flight checks ───────────────────────────────────────────────
 
 if [[ "$PLATFORM" == "github" ]]; then
@@ -100,7 +135,7 @@ if [[ "$PLATFORM" == "github" ]]; then
         exit 1
     }
 
-    EXISTING_PR=$(gh pr list --head "$BRANCH" --base main --state open --json url --jq '.[0].url' 2>/dev/null || true)
+    EXISTING_PR=$(gh pr list --head "$BRANCH" --base "$BASE" --state open --json url --jq '.[0].url' 2>/dev/null || true)
     if [[ -n "$EXISTING_PR" ]]; then
         echo "Error: A PR already exists for this branch: $EXISTING_PR" >&2
         echo "Use 'gh pr edit' to update it." >&2
@@ -121,7 +156,7 @@ elif [[ "$PLATFORM" == "azdo" ]]; then
         exit 1
     }
 
-    EXISTING_PR=$(az repos pr list --detect --source-branch "$BRANCH" --target-branch main --status active --query '[0].pullRequestId' -o tsv 2>/dev/null || true)
+    EXISTING_PR=$(az repos pr list --detect --source-branch "$BRANCH" --target-branch "$BASE" --status active --query '[0].pullRequestId' -o tsv 2>/dev/null || true)
     if [[ -n "$EXISTING_PR" ]]; then
         echo "Error: A PR already exists for this branch (ID: $EXISTING_PR)." >&2
         echo "Use 'az repos pr update --id $EXISTING_PR' to update it." >&2
@@ -149,14 +184,14 @@ git push -u origin HEAD || {
 # ── Create PR ────────────────────────────────────────────────────────
 
 if [[ "$PLATFORM" == "github" ]]; then
-    GH_ARGS=(gh pr create --base main --title "$TITLE" --body-file "$BODY_FILE")
+    GH_ARGS=(gh pr create --base "$BASE" --title "$TITLE" --body-file "$BODY_FILE")
     if [[ "$DRAFT" == true ]]; then
         GH_ARGS+=(--draft)
     fi
     "${GH_ARGS[@]}"
 
 elif [[ "$PLATFORM" == "azdo" ]]; then
-    AZ_ARGS=(az repos pr create --detect --target-branch main --title "$TITLE")
+    AZ_ARGS=(az repos pr create --detect --target-branch "$BASE" --title "$TITLE")
     if [[ "$DRAFT" == true ]]; then
         AZ_ARGS+=(--draft true)
     fi
