@@ -1,10 +1,10 @@
-# investigate-polling-incident
+# investigate-appinsights-logs
 
-Run the standard Azure Functions polling-incident workflow: resolve the *active* Application Insights resource, execute every KQL query discoverable in the repo, optionally correlate a device log, and emit a single UTC timeline with publish-window annotations.
+Pull Azure Functions logs from App Insights and build a correlated UTC timeline. Resolves the *active* Application Insights resource from the Function App's connection string, executes every KQL query discoverable in the repo, optionally correlates a device log, and emits a single timeline with publish-window annotations.
 
 ## What it does
 
-Invoke as `/investigate-polling-incident --time-window 6h` (or any duration / ISO range). The skill:
+Invoke as `/investigate-appinsights-logs --time-window 6h` (or any duration / ISO range). The skill:
 
 1. **Resolves the active App Insights ID** from the Function App's `APPLICATIONINSIGHTS_CONNECTION_STRING` — never via `az resource list` (which is a documented gotcha that can return an inactive resource).
 2. **Discovers queries** in the current repo: every `*.kql` file, plus every ` ```kql ` fenced block in `*.md` files.
@@ -14,7 +14,7 @@ Invoke as `/investigate-polling-incident --time-window 6h` (or any duration / IS
 
 ## Per-repo config
 
-Drop a `.claude/investigate-polling-incident.json` in the repo root to avoid passing flags every time. All keys are optional:
+Drop a `.claude/investigate-appinsights-logs.json` in the repo root to avoid passing flags every time. All keys are optional:
 
 ```json
 {
