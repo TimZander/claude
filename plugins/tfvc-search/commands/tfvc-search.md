@@ -39,10 +39,13 @@ Locate the script and run the appropriate subcommand — Bash shell state does n
 ```bash
 SCRIPT=$(find ~/.claude -name tfvc-search.py -path "*/tfvc-search/*" -type f 2>/dev/null | head -1)
 [ -n "$SCRIPT" ] || { echo "tfvc-search.py not found under ~/.claude — re-install: /plugin install tfvc-search@tzander-skills" >&2; exit 1; }
+# On MSYS/Git Bash: convert the script path to a Windows path so Python can open it,
+# then block MSYS path translation for the TFVC $/... args via MSYS_NO_PATHCONV=1.
+command -v cygpath >/dev/null 2>&1 && { SCRIPT=$(cygpath -m "$SCRIPT") || exit 1; }
 MSYS_NO_PATHCONV=1 python "$SCRIPT" <subcommand> --org <ORG> --project "<PROJECT>" ...
 ```
 
-**Always prefix with `MSYS_NO_PATHCONV=1` on Windows/Git Bash.** Without it, Git Bash rewrites the TFVC `$/...` path into `$<drive>:<mount>/...` before Python receives it — the script detects this mangling and errors out clearly, but prevention is cheaper than recovery. The env var is harmless on non-MSYS shells.
+**Always prefix with `MSYS_NO_PATHCONV=1` on Windows/Git Bash.** Without it, Git Bash rewrites the TFVC `$/...` path into `$<drive>:<mount>/...` before Python receives it — the script detects this mangling and errors out clearly, but prevention is cheaper than recovery. The env var is harmless on non-MSYS shells, so it's safe to always include. The `cygpath -m` call converts the POSIX script path to a native Windows path because `MSYS_NO_PATHCONV=1` on the `python` invocation blocks all arg translation — including `$SCRIPT` — so Python would otherwise receive `/c/Users/...` verbatim and fail to open the file.
 
 Org and project must come from the user's repo/project `CLAUDE.md` (often stored under `## SQL Database Reference` or similar), or from the user directly. Do not guess.
 
@@ -51,7 +54,7 @@ Org and project must come from the user's repo/project `CLAUDE.md` (often stored
 TFVC paths start with `$` and often contain spaces — e.g. `$/BGV Databases/RedGate/BGVTSWCustom`. In Bash:
 
 - **Always single-quote the path:** `'$/BGV Databases/RedGate/BGVTSWCustom'`. Double-quoting will make the shell try to expand `$/...` as a variable.
-- **On Git Bash / MSYS, always prefix with `MSYS_NO_PATHCONV=1`** (as shown in the invocation block above). MSYS silently rewrites args that start with `/` into Windows-style paths *before* Python receives them — so `'$/BGV Databases/...'` becomes `'$C:/Program Files/Git/BGV Databases/...'` and the ADO API rejects it with `InvalidPathException`. The env var is harmless on non-MSYS shells, so it's safe to always include.
+- **On Git Bash / MSYS, always prefix with `MSYS_NO_PATHCONV=1`** (as shown in the invocation block above). MSYS silently rewrites args that start with `/` into Windows-style paths *before* Python receives them — so `'$/BGV Databases/...'` becomes `'$C:/Program Files/Git/BGV Databases/...'` and the ADO API rejects it with `InvalidPathException`. The env var is harmless on non-MSYS shells. **Caveat:** `MSYS_NO_PATHCONV=1` also blocks translation of the script path itself, so always run `cygpath -m "$SCRIPT"` first (as shown in the invocation block) to convert it to a native Windows path before disabling translation.
 
 ## Local mirror (optional, much faster)
 
@@ -67,6 +70,11 @@ If both are present in CLAUDE.md, **always pass `--mirror` and `--mirror-prefix`
 Full invocation with mirror:
 
 ```bash
+SCRIPT=$(find ~/.claude -name tfvc-search.py -path "*/tfvc-search/*" -type f 2>/dev/null | head -1)
+[ -n "$SCRIPT" ] || { echo "tfvc-search.py not found under ~/.claude — re-install: /plugin install tfvc-search@tzander-skills" >&2; exit 1; }
+# On MSYS/Git Bash: convert the script path to a Windows path so Python can open it,
+# then block MSYS path translation for the TFVC $/... args via MSYS_NO_PATHCONV=1.
+command -v cygpath >/dev/null 2>&1 && { SCRIPT=$(cygpath -m "$SCRIPT") || exit 1; }
 MSYS_NO_PATHCONV=1 python "$SCRIPT" grep \
   --org bgvone --project "BGV Databases" \
   --scope '$/BGV Databases/RedGate/BGVTSWCustom' \

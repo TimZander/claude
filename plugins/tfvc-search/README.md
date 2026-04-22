@@ -65,7 +65,7 @@ If you only have a mirror for some subtrees, document just those — the skill f
 TFVC paths start with `$` and often contain spaces. Two rules on Bash:
 
 1. **Always single-quote the path:** `'$/BGV Databases/RedGate/BGVTSWCustom'`. Double quotes will make the shell try to expand `$/…` as a variable.
-2. **On Git Bash / MSYS, always prefix the command with `MSYS_NO_PATHCONV=1`.** Without it, MSYS rewrites `'$/Foo/Bar'` into `'$C:/Program Files/Git/Foo/Bar'` before Python receives the arg, and ADO rejects the call. The variable is harmless on non-MSYS shells, so you can always include it.
+2. **On Git Bash / MSYS, always prefix the command with `MSYS_NO_PATHCONV=1`.** Without it, MSYS rewrites `'$/Foo/Bar'` into `'$C:/Program Files/Git/Foo/Bar'` before Python receives the arg, and ADO rejects the call. The variable is harmless on non-MSYS shells, so you can always include it. **Caveat:** if you invoke via an absolute POSIX path (e.g., `/c/Users/.../tfvc-search.py`), `MSYS_NO_PATHCONV=1` also blocks translation of that path — run `cygpath -m "$SCRIPT"` first to convert it to a Windows path before disabling translation.
 
 ```bash
 MSYS_NO_PATHCONV=1 python tfvc-search.py ls \
