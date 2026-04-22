@@ -734,6 +734,41 @@ class CmdChangesetTests(unittest.TestCase):
 
     @mock.patch("subprocess.run")
     @mock.patch("urllib.request.urlopen")
+    def test_tab_in_comment_replaced_with_space(self, urlopen, run):
+        run.return_value = _fake_token_subprocess()
+        payload = {
+            "changesetId": 1,
+            "author": {"displayName": "A"},
+            "createdDate": "2026-01-01T00:00:00Z",
+            "comment": "part one\tpart two",
+        }
+        urlopen.return_value = _http_response(json.dumps(payload).encode())
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            tfvc.main(["changeset", "--org", "o", "--project", "p", "--id", "1"])
+        line = out.getvalue()
+        # Embedded tab must not appear — it would corrupt the tab-separated output format.
+        self.assertNotIn("one\ttwo", line)
+        self.assertIn("part one", line)
+        self.assertIn("part two", line)
+
+    @mock.patch("subprocess.run")
+    @mock.patch("urllib.request.urlopen")
+    def test_bare_cr_in_comment_replaced_with_space(self, urlopen, run):
+        run.return_value = _fake_token_subprocess()
+        payload = {
+            "changesetId": 1,
+            "author": {"displayName": "A"},
+            "createdDate": "2026-01-01T00:00:00Z",
+            "comment": "line one\rline two",
+        }
+        urlopen.return_value = _http_response(json.dumps(payload).encode())
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            tfvc.main(["changeset", "--org", "o", "--project", "p", "--id", "1"])
+        lines = out.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+
+    @mock.patch("subprocess.run")
+    @mock.patch("urllib.request.urlopen")
     def test_http_error_exits_fatally(self, urlopen, run):
         run.return_value = _fake_token_subprocess()
         urlopen.side_effect = _http_error(code=404, reason="Not Found", body=b'{"message":"not found"}')
@@ -776,6 +811,50 @@ class CmdChangesetFilesTests(unittest.TestCase):
         called_url = urlopen.call_args[0][0].full_url
         self.assertIn("/myorg/_apis/tfvc/changesets/42/changes", called_url)
         self.assertNotIn("MyProject", called_url)
+
+    @mock.patch("subprocess.run")
+    @mock.patch("urllib.request.urlopen")
+    def test_url_includes_top_to_avoid_silent_truncation(self, urlopen, run):
+        run.return_value = _fake_token_subprocess()
+        urlopen.return_value = _http_response(json.dumps({"count": 0, "value": []}).encode())
+        tfvc.main(["changeset-files", "--org", "o", "--project", "p", "--id", "1"])
+        called_url = urlopen.call_args[0][0].full_url
+        self.assertIn("$top=5000", called_url)
+
+    @mock.patch("subprocess.run")
+    @mock.patch("urllib.request.urlopen")
+    def test_truncation_warning_when_count_exceeds_returned_items(self, urlopen, run):
+        # ADO may silently cap $top below the requested value; count > len(value) detects it.
+        run.return_value = _fake_token_subprocess()
+        payload = {
+            "count": 150,
+            "value": [{"changeType": "edit", "item": {"path": "$/S/file.sql"}}],
+        }
+        urlopen.return_value = _http_response(json.dumps(payload).encode())
+        with mock.patch("sys.stdout", new_callable=io.StringIO):
+            with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+                tfvc.main(["changeset-files", "--org", "o", "--project", "p", "--id", "42"])
+        warning = err.getvalue()
+        self.assertIn("150", warning)
+        self.assertIn("1", warning)
+        self.assertIn("truncated", warning)
+
+    @mock.patch("subprocess.run")
+    @mock.patch("urllib.request.urlopen")
+    def test_no_truncation_warning_when_count_matches(self, urlopen, run):
+        run.return_value = _fake_token_subprocess()
+        payload = {
+            "count": 2,
+            "value": [
+                {"changeType": "edit", "item": {"path": "$/S/a.sql"}},
+                {"changeType": "edit", "item": {"path": "$/S/b.sql"}},
+            ],
+        }
+        urlopen.return_value = _http_response(json.dumps(payload).encode())
+        with mock.patch("sys.stdout", new_callable=io.StringIO):
+            with mock.patch("sys.stderr", new_callable=io.StringIO) as err:
+                tfvc.main(["changeset-files", "--org", "o", "--project", "p", "--id", "1"])
+        self.assertEqual(err.getvalue(), "")
 
     @mock.patch("subprocess.run")
     @mock.patch("urllib.request.urlopen")

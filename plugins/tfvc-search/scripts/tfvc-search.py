@@ -264,18 +264,25 @@ def cmd_changeset(args):
     author_obj = data.get("author") or {}
     author = author_obj.get("displayName") or author_obj.get("name", "")
     date = data.get("createdDate", "")
-    comment = (data.get("comment") or "").replace("\r\n", " ").replace("\n", " ")
+    comment = re.sub(r"[\r\n\t]+", " ", data.get("comment") or "")
     print(f"{args.id}\t{author}\t{date}\t{comment}")
 
 
 def cmd_changeset_files(args):
     url = (
         _tfvc_changeset_url(args.org, args.id)
-        + "/changes?"
-        + urllib.parse.urlencode({"api-version": DEFAULT_API_VERSION})
+        + f"/changes?$top=5000&api-version={DEFAULT_API_VERSION}"
     )
     data = json.loads(_ado_request(url, "application/json").decode("utf-8"))
-    for change in data.get("value", []):
+    reported = data.get("count", 0)
+    items = data.get("value", [])
+    if reported > len(items):
+        print(
+            f"warning: changeset {args.id} has {reported} changes but only {len(items)} were returned"
+            " — results truncated by ADO server-side pagination cap",
+            file=sys.stderr,
+        )
+    for change in items:
         change_type = change.get("changeType", "")
         path = (change.get("item") or {}).get("path", "")
         print(f"{change_type}\t{path}")
