@@ -38,7 +38,7 @@ FENCE_RE = re.compile(r"^(`{3,}|~{3,})\s*([A-Za-z0-9_+.-]*)\s*$")
 HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
 
 
-def iter_files(root: Path, excludes: list[str]):
+def iter_files(root: Path, includes: list[str], excludes: list[str]):
     for path in sorted(root.rglob("*")):
         if not path.is_file():
             continue
@@ -47,6 +47,8 @@ def iter_files(root: Path, excludes: list[str]):
             continue
         rel = str(path.relative_to(root))
         if any(fnmatch.fnmatch(rel, pat) for pat in excludes):
+            continue
+        if includes and not any(fnmatch.fnmatch(rel, pat) for pat in includes):
             continue
         yield path
 
@@ -109,7 +111,7 @@ def main(argv: list[str]) -> int:
 
     results: list[dict] = []
 
-    for path in iter_files(root, args.exclude):
+    for path in iter_files(root, args.include, args.exclude):
         rel = path.relative_to(root).as_posix()
         suffix = path.suffix.lower()
         if suffix == ".kql":

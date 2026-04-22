@@ -55,11 +55,17 @@ if [ -n "$SUBSCRIPTION" ]; then
     AZ_ARGS+=(--subscription "$SUBSCRIPTION")
 fi
 
-SETTINGS_JSON="$(az "${AZ_ARGS[@]}" 2>&1)" || {
+# Capture stdout and stderr separately. Merging them (2>&1) would let az
+# warnings (extension updates, deprecation notices) pollute the JSON and
+# silently break the json.load below.
+AZ_ERR_FILE="$(mktemp)"
+trap 'rm -f "$AZ_ERR_FILE"' EXIT
+
+if ! SETTINGS_JSON="$(az "${AZ_ARGS[@]}" 2>"$AZ_ERR_FILE")"; then
     echo "error: 'az functionapp config appsettings list' failed:" >&2
-    echo "$SETTINGS_JSON" >&2
+    cat "$AZ_ERR_FILE" >&2
     exit 1
-}
+fi
 
 # Extract APPLICATIONINSIGHTS_CONNECTION_STRING via python (stdlib, avoids jq dep).
 CONN_STRING="$(

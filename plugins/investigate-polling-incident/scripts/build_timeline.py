@@ -72,18 +72,22 @@ def nearest_publish_window(dt: datetime, windows: list[PublishWindow]):
     """Return (PublishWindow, signed_minutes) for the closest window within its tolerance, else None.
 
     `signed_minutes` is negative when the event is before the window, positive after.
+    Anchors are checked on dt.date() ± 1 day so a window at e.g. 23:30 UTC can still
+    match an event at 00:05 UTC the following day.
     """
     if not windows:
         return None
     best = None
     best_abs: timedelta | None = None
     for w in windows:
-        anchor = datetime.combine(dt.date(), w.utc_time)
-        delta = dt - anchor
-        abs_delta = abs(delta)
-        if abs_delta <= w.tolerance and (best_abs is None or abs_delta < best_abs):
-            best = (w, int(delta.total_seconds() // 60))
-            best_abs = abs_delta
+        for day_offset in (-1, 0, 1):
+            anchor_date = dt.date() + timedelta(days=day_offset)
+            anchor = datetime.combine(anchor_date, w.utc_time)
+            delta = dt - anchor
+            abs_delta = abs(delta)
+            if abs_delta <= w.tolerance and (best_abs is None or abs_delta < best_abs):
+                best = (w, int(delta.total_seconds() // 60))
+                best_abs = abs_delta
     return best
 
 

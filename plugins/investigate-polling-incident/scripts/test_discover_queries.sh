@@ -72,4 +72,26 @@ assert len(data) == 3, f"expected 3 entries, got {len(data)}"
 PY
 pass 'markdown fenced kql blocks discovered'
 
+# 5. --include restricts discovery to matching paths.
+# With polling.kql and ops.md from earlier steps, --include '*.kql' should return only the .kql entry.
+out="$(python3 "$SUT" --cwd "$TMP_DIR" --include '*.kql')"
+python3 - "$out" <<'PY' || fail "--include filter failed: $out"
+import sys, json
+data = json.loads(sys.argv[1])
+sources = sorted(e["source"] for e in data)
+assert sources == ["polling.kql"], f"expected only polling.kql, got {sources}"
+PY
+pass '--include glob restricts discovery'
+
+# 6. Multiple --include globs union.
+out="$(python3 "$SUT" --cwd "$TMP_DIR" --include 'nonexistent/*.kql' --include 'ops.md')"
+python3 - "$out" <<'PY' || fail "--include union failed: $out"
+import sys, json
+data = json.loads(sys.argv[1])
+sources = sorted(e["source"] for e in data)
+# Only ops.md matched (2 blocks).
+assert all(s.startswith("ops.md#") for s in sources), f"expected only ops.md entries, got {sources}"
+PY
+pass '--include globs are unioned'
+
 echo "all smoke tests passed"

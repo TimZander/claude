@@ -50,4 +50,26 @@ if echo "$out" | grep -q "publish-window"; then
 fi
 pass "event outside tolerance not annotated"
 
+# 5. Midnight-crossing: a 23:30 UTC window with 60min tolerance should match an event at 00:05 UTC the NEXT day.
+input_mid='{
+  "server": [{"utc": "2026-04-23T00:05:00Z", "kind": "Poll", "message": "just past midnight"}],
+  "device": [],
+  "publishWindows": [{"name": "LateWindow", "utcTime": "23:30", "toleranceMinutes": 60}]
+}'
+out="$(printf '%s' "$input_mid" | python3 "$SUT")"
+echo "$out" | grep -q "publish-window: LateWindow" \
+    || fail "expected midnight-crossing event to be annotated, got: $out"
+pass "midnight-crossing event matches previous-day window"
+
+# 6. Same bug in the other direction: window at 00:15 UTC, event at 23:55 UTC PREVIOUS day.
+input_mid2='{
+  "server": [{"utc": "2026-04-22T23:55:00Z", "kind": "Poll", "message": "just before midnight"}],
+  "device": [],
+  "publishWindows": [{"name": "EarlyWindow", "utcTime": "00:15", "toleranceMinutes": 30}]
+}'
+out="$(printf '%s' "$input_mid2" | python3 "$SUT")"
+echo "$out" | grep -q "publish-window: EarlyWindow" \
+    || fail "expected pre-midnight event to match next-day window, got: $out"
+pass "pre-midnight event matches next-day window"
+
 echo "all smoke tests passed"

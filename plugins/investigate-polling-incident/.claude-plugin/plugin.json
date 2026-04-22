@@ -1,0 +1,7 @@
+{
+  "name": "investigate-polling-incident",
+  "description": "Investigate Azure Functions polling / broadcast anomalies — discovers repo KQL, queries the active App Insights, correlates an optional device log, emits a UTC timeline with publish-window annotations",
+  "author": {
+    "name": "Tim Zander"
+  }
+}

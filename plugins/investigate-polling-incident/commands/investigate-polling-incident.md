@@ -2,7 +2,7 @@
 name: investigate-polling-incident
 description: Investigate Azure Functions polling / broadcast anomalies — discovers KQL in the repo, runs them against the active App Insights, and builds a UTC timeline optionally correlated with a device log
 argument-hint: "--time-window <dur> [--device-log-path <path>] [--function-app <name>] [--resource-group <rg>] [--subscription <sub>] [--health-url <url>] [--queries <glob>]"
-allowed-tools: Bash, Read, Glob, Write
+allowed-tools: Bash, Read, Glob, Write, Agent
 ---
 
 You are an incident investigator for Azure Functions apps. The user has invoked `/investigate-polling-incident` to run the standard polling-anomaly workflow: resolve the *active* Application Insights resource (never via `az resource list`), run every KQL query that can be discovered in this repo against a time window, optionally correlate a device log, and emit a single UTC-sorted timeline with publish-window annotations.
@@ -70,23 +70,25 @@ Run these in parallel:
 ## Step 5: Run queries against App Insights
 
 Convert `--time-window` to an `az` flag:
-- A bare duration like `6h`, `24h`, `7d`, `PT6H` → pass as `--offset <value>` (prefix bare `<N><unit>` with `PT` to form `PT6H`, `PT24H`, or `P7D`).
-- An explicit `<start>/<end>` range → split on `/` and pass `--start-time "<start>" --end-time "<end>"`.
+- A bare duration in `##d##h[##m]` form (`6h`, `24h`, `7d`, `1h30m`) → pass as `--offset <value>` verbatim. This is the format `az monitor app-insights query --offset` documents (see `az monitor app-insights query --help`). Do **not** prefix with `PT` or `P` — ISO 8601 durations are not accepted by `--offset`.
+- An explicit `<start>/<end>` range (ISO 8601 `yyyy-mm-ddThh:mm:ss`) → split on `/` and pass `--start-time "<start>" --end-time "<end>"`.
 
-For each discovered query, substitute the literal token `{{TIMEWINDOW}}` in the query body with the user's raw `--time-window` value if present. Otherwise run the query as-written.
+For each discovered query, substitute the literal token `{{TIMEWINDOW}}` in the query body with the user's raw `--time-window` value if present. Note: KQL's `ago()` uses the same `6h`/`7d` form as `--offset`, so the user's bare-duration value is usable in both places.
 
 Run the queries **in parallel** (batch them in a single tool-use block), each as:
 
 ```bash
 az monitor app-insights query \
-  --app "<APP_INSIGHTS_ID>" \
-  --analytics-query "$(cat <<'KQL'
+  --apps "<APP_INSIGHTS_ID>" \
+  --analytics-query "$(cat <<'KQL_BODY_EOF'
 <substituted query body>
-KQL
+KQL_BODY_EOF
 )" \
   <--offset ... | --start-time ... --end-time ...> \
   -o json
 ```
+
+If any discovered query body itself contains a standalone line exactly matching `KQL_BODY_EOF`, pick a different unique terminator for that call so the heredoc doesn't close early.
 
 Collect each query's `tables[0].rows` plus its source title. If any single query fails, keep its error in the report but don't abort the others.
 
@@ -103,13 +105,15 @@ Cap at ~200 events per query to avoid flooding. If a query returns more, sample 
 
 ## Step 7: Device-log correlation (only if --device-log-path was provided)
 
-Delegate to a general-purpose sub-agent so the full device log never enters the main conversation context. Pass it just the file path and these instructions:
+Event extraction is driven **entirely** by `deviceLogEventPatterns` from the per-repo config — the skill ships no default patterns, because what counts as a meaningful event is project-specific. If the user passed `--device-log-path` but `deviceLogEventPatterns` is missing or empty, stop and tell the user to populate that config key before retrying; do not invent defaults.
+
+Delegate to a general-purpose sub-agent so the full device log never enters the main conversation context. Pass it just the file path and these instructions, substituting `<PATTERNS>` with the configured pattern list as a comma-separated quoted sequence:
 
 > Read the file at `<path>`. Find the timezone marker in the diagnostic context block — typically a line like `Timezone: <zone> (UTC<offset>)`. If no such marker exists, return an error including the first 20 lines so the user can identify the timezone manually.
 >
-> Convert every timestamped event line to UTC using the detected offset. Extract events of these kinds (use substring/regex matches, case-insensitive): FCM receipt, notification approval/block, cache commit, background worker run, validator warning, poll success/failure. If a `deviceLogEventPatterns` list was passed, extend the extraction with those additional patterns.
+> Convert every timestamped event line to UTC using the detected offset. Extract **only** events whose content matches one of these regex patterns (case-insensitive): <PATTERNS>. Do not extract anything that doesn't match one of those patterns.
 >
-> Return a JSON array of `{utc, kind, message}` objects, nothing else. Keep `message` to one short line per event. Cap at 500 events — sample evenly if more.
+> Return a JSON array of `{utc, kind, message}` objects, nothing else. `kind` should be the name of the pattern that matched (or the pattern itself if unnamed). `message` should be the one-line log content. Cap at 500 events — sample evenly if more.
 
 Capture the returned JSON array as the `device` event list. If the sub-agent errors, surface its message and continue without device events.
 

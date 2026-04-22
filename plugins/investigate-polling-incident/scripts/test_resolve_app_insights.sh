@@ -74,4 +74,23 @@ if PATH="$TMP_DIR:$PATH" bash "$SUT" --function-app fa --resource-group rg >/dev
 fi
 pass "missing conn string setting is a clear failure"
 
+# 6. Stub az that writes a warning to stderr and valid JSON to stdout (very common in practice —
+#    e.g., "WARNING: This command is from the following extension: application-insights").
+#    This must succeed, not silently break the json.load in the next pipeline.
+cat > "$TMP_DIR/az" <<'STUB'
+#!/usr/bin/env bash
+echo "WARNING: This command is from the following extension: application-insights" >&2
+echo "WARNING: You have 3 update(s) available." >&2
+cat <<'JSON'
+[
+  {"name": "APPLICATIONINSIGHTS_CONNECTION_STRING", "value": "InstrumentationKey=abc;ApplicationId=22222222-0000-0000-0000-000000000000"}
+]
+JSON
+STUB
+chmod +x "$TMP_DIR/az"
+out="$(PATH="$TMP_DIR:$PATH" bash "$SUT" --function-app fa --resource-group rg)"
+[ "$out" = "APP_INSIGHTS_ID=22222222-0000-0000-0000-000000000000" ] \
+    || fail "expected az stderr warnings to be ignored, got: $out"
+pass "az stderr warnings do not pollute JSON parsing"
+
 echo "all smoke tests passed"
