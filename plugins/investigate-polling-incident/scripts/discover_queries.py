@@ -3,7 +3,7 @@
 
 Looks in two places:
   1. `*.kql` files (recursive, skipping common vendored/build dirs).
-  2. Fenced ```kql blocks inside `*.md` files.
+  2. Fenced ```kql or ```kusto blocks inside `*.md` / `*.markdown` files.
 
 Emits a JSON array on stdout:
   [{"source": "...", "title": "...", "content": "..."}, ...]
@@ -16,14 +16,26 @@ markdown heading for a fenced block, falling back to the source path.
 Usage:
   discover_queries.py [--cwd <path>] [--include <glob>]... [--exclude <glob>]...
 
-  --include defaults to every `*.kql` and `*.md` under --cwd.
-  --exclude is applied on top of the default skip list (.git, node_modules, etc.).
+`--include`, if given at least once, restricts discovery to files whose
+relative path matches at least one glob (union across multiple flags). The
+default (no `--include`) considers every `*.kql`, `*.md`, and `*.markdown`
+file. `--exclude` is applied on top of the default skip list (`.git`,
+`node_modules`, `dist`, `build`, etc.) which prunes any directory matching
+by name — at every depth — so nested `node_modules` are also dropped.
+
+Glob matching uses `fnmatch.fnmatchcase` (case-sensitive, deterministic across
+OSes). `*` matches any character including `/` — it is NOT shell-glob
+semantics. Use explicit patterns like `ops/polling.kql` or `**/*.kql` as
+needed. ATX markdown headings only are recognized (setext `====`/`----` is
+not matched). Heading tracking is "sticky": a fenced block below a section
+header inherits the most recent heading, even across horizontal rules.
 """
 from __future__ import annotations
 
 import argparse
 import fnmatch
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -39,18 +51,22 @@ HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
 
 
 def iter_files(root: Path, includes: list[str], excludes: list[str]):
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
-        parts = set(path.relative_to(root).parts)
-        if parts & DEFAULT_SKIP_DIRS:
-            continue
-        rel = str(path.relative_to(root))
-        if any(fnmatch.fnmatch(rel, pat) for pat in excludes):
-            continue
-        if includes and not any(fnmatch.fnmatch(rel, pat) for pat in includes):
-            continue
-        yield path
+    """Yield candidate files under `root`, pruning DEFAULT_SKIP_DIRS at every
+    directory level via in-place `dirs[:]` modification so the walker never
+    descends into them. Matching is case-sensitive (`fnmatchcase`) for
+    cross-platform determinism.
+    """
+    for dirpath, dirs, files in os.walk(root):
+        # Prune skip dirs in-place so os.walk doesn't descend.
+        dirs[:] = sorted(d for d in dirs if d not in DEFAULT_SKIP_DIRS)
+        for filename in sorted(files):
+            path = Path(dirpath) / filename
+            rel = path.relative_to(root).as_posix()
+            if any(fnmatch.fnmatchcase(rel, pat) for pat in excludes):
+                continue
+            if includes and not any(fnmatch.fnmatchcase(rel, pat) for pat in includes):
+                continue
+            yield path
 
 
 def title_from_kql(text: str, fallback: str) -> str:
@@ -99,9 +115,15 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cwd", default=".", help="Directory to search (default: .)")
     parser.add_argument("--include", action="append", default=[],
-                        help="Extra glob(s) to scan (default: **/*.kql and **/*.md)")
+                        help="Restrict discovery to files whose relative path "
+                             "matches at least one of these globs (case-sensitive "
+                             "fnmatch). Repeatable; results are unioned. Default: "
+                             "no filter — every *.kql / *.md / *.markdown file is "
+                             "considered.")
     parser.add_argument("--exclude", action="append", default=[],
-                        help="Globs to exclude (on top of the built-in skip dirs)")
+                        help="Drop files whose relative path matches any of these "
+                             "globs. Repeatable. Applied on top of the built-in "
+                             "top-level skip list (.git, node_modules, etc.).")
     args = parser.parse_args(argv)
 
     root = Path(args.cwd).resolve()

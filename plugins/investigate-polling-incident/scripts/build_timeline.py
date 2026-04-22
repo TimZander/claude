@@ -55,10 +55,23 @@ def parse_publish_windows(raw) -> list[PublishWindow]:
     for entry in raw:
         name = str(entry.get("name", "")).strip() or "window"
         t_str = str(entry.get("utcTime", "")).strip()
-        tol = int(entry.get("toleranceMinutes", 15))
         try:
-            # Accept "HH:MM" or "HH:MM:SS".
+            tol = int(entry.get("toleranceMinutes", 15))
+        except (TypeError, ValueError):
+            raise SystemExit(
+                f"error: publish window '{name}' has non-integer "
+                f"toleranceMinutes={entry.get('toleranceMinutes')!r}"
+            )
+        if tol < 0:
+            raise SystemExit(
+                f"error: publish window '{name}' has negative toleranceMinutes={tol} "
+                f"(expected >= 0)"
+            )
+        try:
+            # Accept "HH:MM" or "HH:MM:SS" only — reject 1-part or 4+-part strings.
             parts = [int(p) for p in t_str.split(":")]
+            if len(parts) not in (2, 3):
+                raise ValueError(f"expected HH:MM or HH:MM:SS, got {len(parts)} segments")
             while len(parts) < 3:
                 parts.append(0)
             t = time(parts[0], parts[1], parts[2], tzinfo=timezone.utc)
@@ -86,7 +99,9 @@ def nearest_publish_window(dt: datetime, windows: list[PublishWindow]):
             delta = dt - anchor
             abs_delta = abs(delta)
             if abs_delta <= w.tolerance and (best_abs is None or abs_delta < best_abs):
-                best = (w, int(delta.total_seconds() // 60))
+                # int() on a float truncates toward zero — symmetric for +/- deltas,
+                # unlike // 60 which rounds toward -inf for negatives.
+                best = (w, int(delta.total_seconds() / 60))
                 best_abs = abs_delta
     return best
 

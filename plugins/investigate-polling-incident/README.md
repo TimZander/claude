@@ -29,11 +29,20 @@ Drop a `.claude/investigate-polling-incident.json` in the repo root to avoid pas
   "excludedAppInsightsIds": [
     "00000000-0000-0000-0000-000000000000"
   ],
-  "deviceLogEventPatterns": ["FCM", "cache commit", "validator warning"]
+  "deviceLogEventPatterns": [
+    { "name": "FCM receipt",       "pattern": "FCM.*received" },
+    { "name": "Cache commit",      "pattern": "CACHE.*commit" },
+    { "name": "Validator warning", "pattern": "VALIDATOR.*WARN" }
+  ]
 }
 ```
 
-CLI flags override config.
+CLI flags override config. Notes:
+
+- `toleranceMinutes` defaults to **15** if omitted on a `publishWindows` entry; must be a non-negative integer.
+- `excludedAppInsightsIds` entries are compared case-insensitively; case/whitespace in the config file does not matter.
+- `deviceLogEventPatterns` is **required** when `--device-log-path` is passed. Each entry is `{ "name": "<label>", "pattern": "<regex>" }`; the pattern is a Python regex applied case-insensitively, and `name` becomes the event's `kind` in the timeline.
+- The config file is discovered by walking upward from the current working directory until `$HOME` (inclusive). This lets you invoke the skill from a subdirectory of the target repo.
 
 ## Arguments
 

@@ -1,6 +1,6 @@
 ---
 name: investigate-polling-incident
-description: Investigate Azure Functions polling / broadcast anomalies — discovers KQL in the repo, runs them against the active App Insights, and builds a UTC timeline optionally correlated with a device log
+description: Investigate Azure Functions polling / broadcast anomalies — discovers repo KQL, queries the active App Insights, correlates an optional device log, emits a UTC timeline with publish-window annotations
 argument-hint: "--time-window <dur> [--device-log-path <path>] [--function-app <name>] [--resource-group <rg>] [--subscription <sub>] [--health-url <url>] [--queries <glob>]"
 allowed-tools: Bash, Read, Glob, Write, Agent
 ---
@@ -25,12 +25,14 @@ Load `.claude/investigate-polling-incident.json` from the current working direct
 - `functionApp`, `resourceGroup`, `subscription`
 - `healthUrl`
 - `publishWindows`: array of `{name, utcTime, toleranceMinutes}` entries
-- `excludedAppInsightsIds`: array of App Insights Application ID GUIDs that the skill must refuse to query (safety rail)
-- `deviceLogEventPatterns`: optional regex list handed to the correlation sub-agent
+- `excludedAppInsightsIds`: array of App Insights Application ID GUIDs that the skill must refuse to query (safety rail). GUIDs are compared case-insensitively.
+- `deviceLogEventPatterns`: array of `{"name": "<label>", "pattern": "<regex>"}` objects. `pattern` is a Python regex applied case-insensitively against each device-log line; `name` is the short label that appears as the timeline's `kind`. **Required** when `--device-log-path` is passed.
 
 **CLI flags override config.** If neither source supplies `functionApp` or `resourceGroup`, stop and ask the user.
 
-If `excludedAppInsightsIds` is non-empty, write the GUIDs (one per line) to a temp file at `${TMPDIR:-/tmp}/investigate-polling-excluded-$$.txt` for Step 3 to consume.
+Config file discovery: read `.claude/investigate-polling-incident.json` from the current working directory. If not found, walk upward toward the filesystem root and use the first one found (bounded by `$HOME` — do not cross beyond it).
+
+If `excludedAppInsightsIds` is non-empty, capture a temp-file path via `EXCLUDED_IDS_FILE=$(mktemp)`, write the GUIDs (one per line) to that path, and pass the captured path (not a `$$`-computed name) to the resolver in Step 3. `$$` is unreliable across the agent's separate Bash invocations.
 
 ## Step 2: Locate the bundled scripts
 
@@ -107,13 +109,19 @@ Cap at ~200 events per query to avoid flooding. If a query returns more, sample 
 
 Event extraction is driven **entirely** by `deviceLogEventPatterns` from the per-repo config — the skill ships no default patterns, because what counts as a meaningful event is project-specific. If the user passed `--device-log-path` but `deviceLogEventPatterns` is missing or empty, stop and tell the user to populate that config key before retrying; do not invent defaults.
 
-Delegate to a general-purpose sub-agent so the full device log never enters the main conversation context. Pass it just the file path and these instructions, substituting `<PATTERNS>` with the configured pattern list as a comma-separated quoted sequence:
+Delegate to a general-purpose sub-agent so the full device log never enters the main conversation context. Pass it just the file path and these instructions — the `<PATTERNS_JSON>` placeholder below should be replaced with the `deviceLogEventPatterns` value embedded **verbatim as a JSON literal**, so the sub-agent reads structured data rather than parsing a prose list (this avoids quoting hazards when patterns contain commas, quotes, or regex metacharacters):
 
 > Read the file at `<path>`. Find the timezone marker in the diagnostic context block — typically a line like `Timezone: <zone> (UTC<offset>)`. If no such marker exists, return an error including the first 20 lines so the user can identify the timezone manually.
 >
-> Convert every timestamped event line to UTC using the detected offset. Extract **only** events whose content matches one of these regex patterns (case-insensitive): <PATTERNS>. Do not extract anything that doesn't match one of those patterns.
+> Convert every timestamped event line to UTC using the detected offset. The event-pattern list is:
 >
-> Return a JSON array of `{utc, kind, message}` objects, nothing else. `kind` should be the name of the pattern that matched (or the pattern itself if unnamed). `message` should be the one-line log content. Cap at 500 events — sample evenly if more.
+> ```json
+> <PATTERNS_JSON>
+> ```
+>
+> Each entry is `{"name": "<label>", "pattern": "<regex>"}`. Treat every `pattern` as a case-insensitive Python regex. Extract **only** lines whose content matches at least one of those regexes. Do not extract anything outside the list.
+>
+> Return a JSON array of `{utc, kind, message}` objects, nothing else. `kind` is the `name` of the pattern that matched (first wins if multiple match). `message` is the one-line log content. Cap at 500 events — sample evenly if more.
 
 Capture the returned JSON array as the `device` event list. If the sub-agent errors, surface its message and continue without device events.
 
