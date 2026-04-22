@@ -33,7 +33,17 @@ python path/to/tfvc-search.py read \
 python path/to/tfvc-search.py ls \
   --org <ORG> --project "<PROJECT>" \
   --scope '$/Path/To/Scope' [--recursive]
+
+python path/to/tfvc-search.py changeset \
+  --org <ORG> --project "<PROJECT>" \
+  --id <CHANGESET_ID>
+
+python path/to/tfvc-search.py changeset-files \
+  --org <ORG> --project "<PROJECT>" \
+  --id <CHANGESET_ID>
 ```
+
+> **ADO org-scope note:** The `changeset` and `changeset-files` endpoints are org-scoped (`/dev.azure.com/{org}/_apis/tfvc/changesets/...`). `--project` is accepted for consistency but is not used in the URL.
 
 ## Optional: local mirror
 

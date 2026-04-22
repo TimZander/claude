@@ -3,9 +3,11 @@
 tfvc-search: search and read Azure DevOps TFVC content via REST.
 
 Subcommands:
-    grep   Recursive regex search under a TFVC scope path
-    read   Fetch the full content of a single TFVC item
-    ls     List files/folders under a TFVC path
+    grep              Recursive regex search under a TFVC scope path
+    read              Fetch the full content of a single TFVC item
+    ls                List files/folders under a TFVC path
+    changeset         Show metadata for a TFVC changeset (author, date, comment)
+    changeset-files   List files changed in a TFVC changeset
 
 Auth: picks up existing `az` CLI credentials via
 `az account get-access-token --resource <ADO>`. Run `az login` first if unauthenticated.
@@ -61,6 +63,18 @@ def _tfvc_items_base_url(org, project):
     return (
         f"https://dev.azure.com/{urllib.parse.quote(org, safe='')}"
         f"/{urllib.parse.quote(project, safe='')}/_apis/tfvc/items"
+    )
+
+
+def _tfvc_changeset_url(org, changeset_id):
+    """Build the org-scoped base URL for a TFVC changeset.
+
+    Changeset endpoints are org-scoped, not project-scoped — inserting the project
+    segment returns a 404 from ADO.
+    """
+    return (
+        f"https://dev.azure.com/{urllib.parse.quote(org, safe='')}"
+        f"/_apis/tfvc/changesets/{changeset_id}"
     )
 
 
@@ -240,6 +254,40 @@ def _emit_matches(path, content, pattern):
             print(f"{path}:{i}:{line}")
 
 
+def cmd_changeset(args):
+    url = (
+        _tfvc_changeset_url(args.org, args.id)
+        + "?"
+        + urllib.parse.urlencode({"includeDetails": "true", "api-version": DEFAULT_API_VERSION})
+    )
+    data = json.loads(_ado_request(url, "application/json").decode("utf-8"))
+    author_obj = data.get("author") or {}
+    author = author_obj.get("displayName") or author_obj.get("name", "")
+    date = data.get("createdDate", "")
+    comment = re.sub(r"[\r\n\t]+", " ", data.get("comment") or "")
+    print(f"{args.id}\t{author}\t{date}\t{comment}")
+
+
+def cmd_changeset_files(args):
+    url = (
+        _tfvc_changeset_url(args.org, args.id)
+        + f"/changes?$top=5000&api-version={DEFAULT_API_VERSION}"
+    )
+    data = json.loads(_ado_request(url, "application/json").decode("utf-8"))
+    reported = data.get("count", 0)
+    items = data.get("value", [])
+    if reported > len(items):
+        print(
+            f"warning: changeset {args.id} has {reported} changes but only {len(items)} were returned"
+            " — results truncated by ADO server-side pagination cap",
+            file=sys.stderr,
+        )
+    for change in items:
+        change_type = change.get("changeType", "")
+        path = (change.get("item") or {}).get("path", "")
+        print(f"{change_type}\t{path}")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="tfvc-search",
@@ -277,6 +325,19 @@ def build_parser():
     add_common(p_ls, need_scope=True)
     p_ls.add_argument("--recursive", action="store_true", help="Recurse into subfolders")
     p_ls.set_defaults(func=cmd_ls)
+
+    def add_changeset_args(p):
+        p.add_argument("--org", required=True, help="ADO organization name or full URL")
+        p.add_argument("--project", required=True, help="ADO project name (accepted for consistency; changeset endpoints are org-scoped)")
+        p.add_argument("--id", required=True, type=int, help="Changeset ID (e.g. 1391)")
+
+    p_cs = sub.add_parser("changeset", help="Show metadata for a TFVC changeset")
+    add_changeset_args(p_cs)
+    p_cs.set_defaults(func=cmd_changeset)
+
+    p_csf = sub.add_parser("changeset-files", help="List files changed in a TFVC changeset")
+    add_changeset_args(p_csf)
+    p_csf.set_defaults(func=cmd_changeset_files)
 
     return parser
 
@@ -341,10 +402,10 @@ def main(argv=None):
         if val:
             _check_msys_mangle(val, f"--{attr.replace('_', '-')}")
 
-    if bool(args.mirror) != bool(args.mirror_prefix):
+    if bool(getattr(args, "mirror", None)) != bool(getattr(args, "mirror_prefix", None)):
         parser.error("--mirror and --mirror-prefix must be given together")
 
-    if args.mirror:
+    if getattr(args, "mirror", None):
         args.mirror = args.mirror.rstrip("/\\")
 
     args.org = _normalize_org(args.org)
