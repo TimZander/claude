@@ -17,6 +17,18 @@ if printf 'not-json' | python3 "$SUT" >/dev/null 2>&1; then
 fi
 pass "invalid JSON rejected"
 
+# 1b. Top-level JSON array is rejected with a clear error (must be an object).
+err_out="$(printf '[1,2,3]' | python3 "$SUT" 2>&1 >/dev/null || true)"
+echo "$err_out" | grep -qi "top-level JSON must be an object" \
+    || fail "expected top-level-array rejection, got: $err_out"
+pass "top-level JSON array is rejected"
+
+# 1c. Top-level JSON scalar is rejected with a clear error.
+err_out="$(printf '"just a string"' | python3 "$SUT" 2>&1 >/dev/null || true)"
+echo "$err_out" | grep -qi "top-level JSON must be an object" \
+    || fail "expected top-level-scalar rejection, got: $err_out"
+pass "top-level JSON scalar is rejected"
+
 # 2. Empty inputs produce '(no events)'.
 out="$(printf '{"server":[],"device":[]}' | python3 "$SUT")"
 echo "$out" | grep -q "(no events)" || fail "expected '(no events)', got: $out"
@@ -175,7 +187,30 @@ input_bad='{
 if printf '%s' "$input_bad" | python3 "$SUT" >/dev/null 2>&1; then
     fail "expected non-zero exit for non-integer toleranceMinutes"
 fi
-pass "non-integer toleranceMinutes is rejected"
+pass "non-integer string toleranceMinutes is rejected"
+
+# 14b. Float toleranceMinutes is rejected (not silently truncated).
+input_float='{
+  "server": [],
+  "device": [],
+  "publishWindows": [{"name": "W", "utcTime": "22:30", "toleranceMinutes": 15.7}]
+}'
+err_out="$(printf '%s' "$input_float" | python3 "$SUT" 2>&1 >/dev/null || true)"
+if ! echo "$err_out" | grep -qi "non-integer"; then
+    fail "expected float toleranceMinutes to be rejected with 'non-integer' message, got: $err_out"
+fi
+pass "float toleranceMinutes is rejected (not silently truncated)"
+
+# 14c. Boolean toleranceMinutes is rejected (bool is-subclass-of int in Python).
+input_bool='{
+  "server": [],
+  "device": [],
+  "publishWindows": [{"name": "W", "utcTime": "22:30", "toleranceMinutes": true}]
+}'
+if printf '%s' "$input_bool" | python3 "$SUT" >/dev/null 2>&1; then
+    fail "expected non-zero exit for boolean toleranceMinutes"
+fi
+pass "boolean toleranceMinutes is rejected"
 
 # 15. 4-segment utcTime is rejected (not HH:MM or HH:MM:SS).
 input_4seg='{

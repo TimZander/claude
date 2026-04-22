@@ -46,7 +46,7 @@ CLI flags override config. Notes:
 
 ## Arguments
 
-- `--time-window <dur>` (required): `6h`, `24h`, `7d`, `PT6H`, or an explicit ISO `<start>/<end>` range.
+- `--time-window <dur>` (required): `az monitor app-insights query --offset` duration form like `6h`, `24h`, `7d`, `1h30m`; or an explicit ISO `<start>/<end>` UTC range. ISO 8601 duration forms (`PT6H`, `P7D`) are **not** accepted by the Azure CLI — use the `##d##h[##m]` form.
 - `--device-log-path <path>`: optional path to a pasted/scratch device log.
 - `--function-app`, `--resource-group`, `--subscription`: Azure target (may come from config).
 - `--health-url`: one-shot snapshot URL (may come from config).

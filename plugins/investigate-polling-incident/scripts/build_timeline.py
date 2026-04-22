@@ -55,18 +55,22 @@ def parse_publish_windows(raw) -> list[PublishWindow]:
     for entry in raw:
         name = str(entry.get("name", "")).strip() or "window"
         t_str = str(entry.get("utcTime", "")).strip()
-        try:
-            tol = int(entry.get("toleranceMinutes", 15))
-        except (TypeError, ValueError):
+        raw_tol = entry.get("toleranceMinutes", 15)
+        # bool is a subclass of int — reject explicitly so True/False don't
+        # silently become 1/0. Floats (even integer-valued ones like 15.0) are
+        # rejected too, to stay consistent with the same-type contract applied
+        # to strings like "fifteen".
+        if isinstance(raw_tol, bool) or not isinstance(raw_tol, int):
             raise SystemExit(
                 f"error: publish window '{name}' has non-integer "
-                f"toleranceMinutes={entry.get('toleranceMinutes')!r}"
+                f"toleranceMinutes={raw_tol!r}"
             )
-        if tol < 0:
+        if raw_tol < 0:
             raise SystemExit(
-                f"error: publish window '{name}' has negative toleranceMinutes={tol} "
+                f"error: publish window '{name}' has negative toleranceMinutes={raw_tol} "
                 f"(expected >= 0)"
             )
+        tol = raw_tol
         try:
             # Accept "HH:MM" or "HH:MM:SS" only — reject 1-part or 4+-part strings.
             parts = [int(p) for p in t_str.split(":")]
@@ -126,11 +130,23 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--input", default="-", help="Path to input JSON (default: stdin)")
     args = parser.parse_args(argv)
 
-    raw = sys.stdin.read() if args.input == "-" else open(args.input, "r", encoding="utf-8").read()
+    if args.input == "-":
+        raw = sys.stdin.read()
+    else:
+        with open(args.input, "r", encoding="utf-8") as f:
+            raw = f.read()
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as e:
         print(f"error: invalid JSON on input: {e}", file=sys.stderr)
+        return 2
+
+    if not isinstance(data, dict):
+        print(
+            f"error: top-level JSON must be an object with 'server'/'device' keys, "
+            f"got {type(data).__name__}",
+            file=sys.stderr,
+        )
         return 2
 
     server = data.get("server", []) or []

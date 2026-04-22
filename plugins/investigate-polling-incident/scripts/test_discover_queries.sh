@@ -256,6 +256,20 @@ assert data[0]["title"] == "noheading.md (block 1)", data[0]
 PY
 pass "fenced block without heading uses fallback title"
 
+# 14a. --include glob with zero matches returns an empty array (not an error).
+case_dir="$(fresh_case_dir)"
+cat > "$case_dir/polling.kql" <<'KQL'
+// P
+traces
+KQL
+out="$(python3 "$SUT" --cwd "$case_dir" --include 'nonexistent/*.kql')"
+python3 - "$out" <<'PY' || fail "--include no-match failed: $out"
+import sys, json
+data = json.loads(sys.argv[1])
+assert data == [], f"expected [] for no-match glob, got {data}"
+PY
+pass "--include with zero matches returns empty array"
+
 # 14. Skip-dir pruning: .git/, node_modules/, and __pycache__/ contents are not discovered.
 case_dir="$(fresh_case_dir)"
 mkdir -p "$case_dir/.git" "$case_dir/node_modules" "$case_dir/__pycache__"
