@@ -29,6 +29,30 @@ echo "$err_out" | grep -qi "top-level JSON must be an object" \
     || fail "expected top-level-scalar rejection, got: $err_out"
 pass "top-level JSON scalar is rejected"
 
+# 1d. server set to a non-list is rejected with a clear error (not an uncaught TypeError).
+err_out="$(printf '{"server":"not-a-list","device":[]}' | python3 "$SUT" 2>&1 >/dev/null || true)"
+echo "$err_out" | grep -qi "'server' must be a JSON array" \
+    || fail "expected 'server' type rejection, got: $err_out"
+pass "non-list server rejected with clear error"
+
+# 1e. device set to a non-list is rejected.
+err_out="$(printf '{"server":[],"device":42}' | python3 "$SUT" 2>&1 >/dev/null || true)"
+echo "$err_out" | grep -qi "'device' must be a JSON array" \
+    || fail "expected 'device' type rejection, got: $err_out"
+pass "non-list device rejected with clear error"
+
+# 1f. publishWindows set to a non-list is rejected.
+err_out="$(printf '{"server":[],"device":[],"publishWindows":"not-an-array"}' | python3 "$SUT" 2>&1 >/dev/null || true)"
+echo "$err_out" | grep -qi "'publishWindows' must be a JSON array" \
+    || fail "expected 'publishWindows' type rejection, got: $err_out"
+pass "non-list publishWindows rejected with clear error"
+
+# 1g. server/device set to null (explicit JSON null) is tolerated — treated as [].
+out="$(printf '{"server":null,"device":null}' | python3 "$SUT")"
+echo "$out" | grep -q "(no events)" \
+    || fail "expected null server/device to render '(no events)', got: $out"
+pass "explicit null server/device is tolerated"
+
 # 2. Empty inputs produce '(no events)'.
 out="$(printf '{"server":[],"device":[]}' | python3 "$SUT")"
 echo "$out" | grep -q "(no events)" || fail "expected '(no events)', got: $out"

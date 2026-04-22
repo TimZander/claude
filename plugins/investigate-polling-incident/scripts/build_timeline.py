@@ -6,18 +6,18 @@ Reads a JSON object on stdin:
   {
     "server": [ {"utc": "2026-04-22T22:34:12Z", "kind": "...", "message": "..."}, ... ],
     "device": [ {"utc": "2026-04-22T22:35:07Z", "kind": "...", "message": "..."}, ... ],
-    "publishWindows": [ {"name": "CAIC", "utcTime": "22:30", "toleranceMinutes": 15}, ... ]
+    "publishWindows": [ {"name": "ProviderA", "utcTime": "22:30", "toleranceMinutes": 15}, ... ]
   }
 
-`server` and `device` are required (may be []). `publishWindows` is optional.
-Every event must carry a `utc` field in ISO 8601 form; tz-aware values are
-normalized to UTC, tz-naive values are assumed UTC.
+`server`, `device`, and `publishWindows` are all optional; when present they
+must be JSON arrays. Every event must carry a `utc` field in ISO 8601 form;
+tz-aware values are normalized to UTC, tz-naive values are assumed UTC.
 
 Emits a plain-text timeline on stdout, one event per line, grouped by date:
 
   === 2026-04-22 (UTC) ===
   22:34:12Z  [server] kind: message
-  22:35:07Z  [device] kind: message   ⚠ publish-window: CAIC (+5m)
+  22:35:07Z  [device] kind: message   ⚠ publish-window: ProviderA (+5m)
 
 Exit 0 on success, non-zero with an error message on malformed input.
 """
@@ -143,14 +143,21 @@ def main(argv: list[str]) -> int:
 
     if not isinstance(data, dict):
         print(
-            f"error: top-level JSON must be an object with 'server'/'device' keys, "
-            f"got {type(data).__name__}",
+            f"error: top-level JSON must be an object, got {type(data).__name__}",
             file=sys.stderr,
         )
         return 2
 
-    server = data.get("server", []) or []
-    device = data.get("device", []) or []
+    for key in ("server", "device", "publishWindows"):
+        if key in data and data[key] is not None and not isinstance(data[key], list):
+            print(
+                f"error: '{key}' must be a JSON array, got {type(data[key]).__name__}",
+                file=sys.stderr,
+            )
+            return 2
+
+    server = data.get("server") or []
+    device = data.get("device") or []
     windows = parse_publish_windows(data.get("publishWindows"))
 
     events: list[tuple[datetime, str]] = []
