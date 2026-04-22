@@ -103,6 +103,14 @@
       "source": "./plugins/tfvc-search",
       "category": "development",
       "strict": false
+    },
+    {
+      "name": "investigate-appinsights-logs",
+      "description": "Investigate Azure Functions via App Insights logs — discovers repo KQL, queries the active App Insights, correlates an optional device log, emits a UTC timeline with publish-window annotations",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/investigate-appinsights-logs",
+      "category": "development",
+      "strict": false
     }
   ]
 }
