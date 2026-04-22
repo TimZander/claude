@@ -138,10 +138,16 @@ ${END_MARKER}"
             NEW_SECTION_FILE="$(mktemp)"
             printf '%s\n' "$STANDARDS_CONTENT" > "$NEW_SECTION_FILE"
             echo "Changes:"
-            diff "$OLD_SECTION_FILE" "$NEW_SECTION_FILE" \
-                --old-line-format='  - %L' \
-                --new-line-format='  + %L' \
-                --unchanged-line-format='' || true
+            if diff --old-line-format='' --new-line-format='' --unchanged-line-format='' /dev/null /dev/null >/dev/null 2>&1; then
+                diff "$OLD_SECTION_FILE" "$NEW_SECTION_FILE" \
+                    --old-line-format='  - %L' \
+                    --new-line-format='  + %L' \
+                    --unchanged-line-format='' || true
+            else
+                # BSD diff (macOS) lacks --*-line-format; post-process a unified diff instead.
+                { diff -u "$OLD_SECTION_FILE" "$NEW_SECTION_FILE" || true; } \
+                    | awk -f "$REPO_ROOT/scripts/diff-preview.awk"
+            fi
             rm -f "$NEW_SECTION_FILE"
 
             printf '%s' "$UPDATED_CONTENT" > "$TARGET_FILE"
