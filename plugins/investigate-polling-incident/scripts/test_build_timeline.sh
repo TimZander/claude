@@ -134,6 +134,26 @@ echo "$out" | grep -q "22:34:12Z  \[server\] Poll: micros" \
     || fail "expected microsecond input accepted, got: $out"
 pass "microsecond-precision timestamps accepted"
 
+# 8b. Non-standard fractional-second precision (4 digits, 7 digits) as returned by live
+# App Insights must parse on every supported Python, not just 3.11+. See the
+# _FRAC_SECOND_RE normalization in build_timeline.py.
+input_frac='{
+  "server": [
+    {"utc": "2026-04-22T19:55:04.9726Z",     "kind": "T", "message": "four-digit"},
+    {"utc": "2026-04-22T19:55:04.9726361Z",  "kind": "T", "message": "seven-digit"},
+    {"utc": "2026-04-22T19:55:04.1Z",        "kind": "T", "message": "one-digit"},
+    {"utc": "2026-04-22T19:55:04.123456789Z","kind": "T", "message": "nine-digit"}
+  ],
+  "device": [],
+  "publishWindows": []
+}'
+out="$(printf '%s' "$input_frac" | python3 "$SUT")"
+for label in four-digit seven-digit one-digit nine-digit; do
+    echo "$out" | grep -q "T: $label" \
+        || fail "expected $label fractional-second event to render, got: $out"
+done
+pass "non-standard fractional-second precision (1, 4, 7, 9 digits) parses correctly"
+
 # 9. Malformed utc on a single event: the event is skipped with a warning, others render.
 input_mix='{
   "server": [

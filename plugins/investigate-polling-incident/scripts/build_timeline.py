@@ -25,9 +25,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
+
+
+# Matches a fractional-second segment right after HH:MM:SS (anchored so we don't
+# accidentally rewrite unrelated digit runs).
+_FRAC_SECOND_RE = re.compile(r"(\d{2}:\d{2}:\d{2})\.(\d+)")
 
 
 @dataclass(frozen=True)
@@ -39,9 +45,17 @@ class PublishWindow:
 
 def parse_utc(value: str) -> datetime:
     # datetime.fromisoformat handles trailing 'Z' only on 3.11+; normalize first.
+    # It also only accepts exactly 0, 3, or 6 fractional-second digits on
+    # Python 3.9 / 3.10 — real Azure App Insights rows regularly return 4 or 7
+    # digits (e.g., "2026-04-22T19:55:04.9726361Z"). Pad/truncate to exactly 6
+    # so we parse consistently on every supported Python.
     s = value.strip()
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
+    s = _FRAC_SECOND_RE.sub(
+        lambda m: f"{m.group(1)}.{(m.group(2) + '000000')[:6]}",
+        s,
+    )
     dt = datetime.fromisoformat(s)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)

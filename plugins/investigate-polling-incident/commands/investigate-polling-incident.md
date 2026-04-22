@@ -99,8 +99,8 @@ Collect each query's `tables[0].rows` plus its source title. If any single query
 From the query results, build a `server` event list for the timeline. Each event needs `utc` (ISO 8601), `kind` (a short category label), and `message` (one-line summary).
 
 Heuristics:
-- If a row has a `timestamp` (or `TimeGenerated`) column, that's `utc`.
-- If a row has `name`, `itemType`, `customDimensions.EventName`, or similar, use it as `kind`.
+- If a row has a `timestamp` (or `TimeGenerated`) column, that's `utc`. App Insights emits sub-second precision (4-7 fractional digits); `build_timeline.py` normalizes this, so pass timestamps through as-is.
+- If a row has `name`, `itemType`, `customDimensions.EventName`, `severityLevel`, `resultCode`, `type`, or similar, use it as `kind`. **Do not alias a KQL column to the name `kind` via `project` — `kind` is a reserved word in KQL and produces a `SyntaxError` at parse time.** Project to a different name (e.g., `project severity=severityLevel`) and map it to `kind` in the handler's Python reshape step.
 - For `message`, join the remaining salient columns into a single compact string.
 
 Cap at ~200 events per query to avoid flooding. If a query returns more, sample evenly across the window and note the sampling in the report.
