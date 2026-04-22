@@ -86,3 +86,6 @@ For the full skill specification, see the [Agent Skills spec](https://agentskill
 ## License
 
 MIT
+
+
+<!-- Fix for #110 -->
