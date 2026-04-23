@@ -408,12 +408,12 @@ When an issue defines phased work (Phase 1, Phase 2, Phase 3), ship each phase a
 
 Large PRs are harder to review thoroughly, harder to revert safely, and harder to fit in a reviewer's working memory. Before opening a PR, check whether it can be split.
 
-### Split the work when
+### When to split the work
 
 - **One story covers multiple independent features.** Split the story first, then ship one PR per feature. A story like "rebuild these four back office apps" is four PRs, not one.
-- **A feature requires new shared infrastructure.** Land the infrastructure PR first (externalized config, new base classes, shared utilities, framework patterns), wait for it to merge, then rebase the feature PR on top. The feature PR should not introduce infra that future features will also consume.
+- **A feature requires new shared infrastructure.** Land the infrastructure PR first (externalized config, new base classes, shared utilities, framework patterns), wait for it to merge, then bring the feature branch up to date with `main`. The feature PR should not introduce infra that future features will also consume.
 - **A PR mixes refactoring with new functionality.** Renames, reorganizations, and "while I was in there" cleanups go in their own PR. Mixing them with feature work obscures both.
-- **A PR touches multiple unrelated UI surfaces.** Expanding an existing feature tile (e.g., owner profile) and adding a new standalone dashboard are separate units of work.
+- **A PR touches multiple unrelated UI surfaces.** Expanding an existing feature tile (e.g., a profile panel) and adding a new standalone dashboard are separate units of work.
 
 ### Size guideline
 
