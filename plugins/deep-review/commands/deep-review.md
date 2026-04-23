@@ -85,13 +85,21 @@ Only Read a full file when you need more surrounding context to understand a spe
 
 When you do need to read files or grep for references (Steps 7-9), **make parallel tool calls** whenever the reads are independent of each other.
 
+## Sub-skill Invocations
+
+**NEVER call another skill via the `Skill` tool from within deep-review.** deep-review runs with a large context window; the `Skill` tool inherits that context window and passes it to the child skill, which causes an "Extra usage required for 1M context" billing error for users who don't have that add-on enabled.
+
+When the user asks you to use a specific plugin or skill (e.g., "use the tfvc-search skill to check changesets"), delegate the work through the `Agent` tool instead of `Skill`. Spawn an Agent **without specifying a model** (so it inherits the user's session model and runs at standard context), pass it all the information it needs (connection details, paths, what to look for), and use the Agent's output as input for your review.
+
+This rule applies to ALL skill invocations requested by the user as part of a review task.
+
 ## Step 2: Parallel Deep Analysis
 
 After gathering the diffs in Step 1, delegate deep analysis to parallel subagents. Each subagent receives the full diff and focuses on ONE concern area, ensuring depth without context window competition.
 
 If the Agent tool is unavailable or denied, skip this step and proceed to Step 3 — the remaining steps still provide full coverage.
 
-**Launch all of the following Agent calls in parallel** (in a single tool-call block, each with `model: "opus"`). Pass the full committed diff (and uncommitted diff if present) to each agent in its prompt. If the diff exceeds ~1500 lines, summarize unchanged context and pass only the changed hunks to keep each agent within token limits.
+**Launch all of the following Agent calls in parallel** (in a single tool-call block, **do NOT specify a model** — inherit the session model). Pass the full committed diff (and uncommitted diff if present) to each agent in its prompt. If the diff exceeds ~1500 lines, summarize unchanged context and pass only the changed hunks to keep each agent within token limits.
 
 1. **Correctness & Security Agent** (covers Steps 7-9) — "You are reviewing a code diff for correctness and security issues. Read every line. Use Grep and Read to examine surrounding code and callers when needed for context. Check for: logic errors, off-by-one errors, null/undefined handling, race conditions, SQL injection, XSS, insecure deserialization, hardcoded secrets, auth bypasses, input validation gaps. For each finding, output one line in the format: `SEVERITY|file:line|description` where SEVERITY is CRITICAL, WARNING, or SUGGESTION. Be exhaustive — list every issue you find, no matter how minor."
 
