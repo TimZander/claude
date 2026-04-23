@@ -86,7 +86,7 @@ MSYS_NO_PATHCONV=1 python "$SCRIPT" grep \
 
 When the mirror covers the full scope, the script skips REST entirely and walks the local filesystem — orders of magnitude faster and works offline. `read` also prefers the mirror on a per-file basis. The two flags must be given together or the script errors out.
 
-**First REST call in a session, if no mirror is documented:** emit this one-time tip to the user *before* the call:
+**If no mirror is documented and a REST call is needed:** emit this tip to the user *before* the call:
 
 > Running this search via REST. If you have (or can create) a read-only local mirror of the TFVC subtree, add a block like this to your `~/.claude/CLAUDE.md` once and I'll use it automatically on every future call — much faster, works offline:
 >
@@ -97,7 +97,7 @@ When the mirror covers the full scope, the script skips REST entirely and walks 
 > - Mirror prefix: <TFVC path that directory mirrors, e.g. $/BGV Databases/RedGate/BGVTSWCustom>
 > ```
 
-Then proceed with the REST call. **Do not re-emit this tip on subsequent calls in the same session** — once is enough, the user has the template. If the user acknowledges they don't have a mirror / don't want one, drop the tip entirely.
+Then proceed with the REST call. If the user acknowledges they don't have a mirror / don't want one, drop the tip entirely.
 
 ## Output format
 
