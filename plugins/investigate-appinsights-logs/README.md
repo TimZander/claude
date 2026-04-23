@@ -59,7 +59,7 @@ Some KQL files/blocks in a repo are meant for manual copy-paste (they have hardc
 ```kql
 // @skill-skip date-pinned helper — edit the datetime literals before running manually
 let cycleTime = datetime(2026-04-10T23:00:15Z);
-let caicWindow = datetime(2026-04-10T22:30:00Z);
+let providerWindow = datetime(2026-04-10T22:30:00Z);
 ...
 ```
 
