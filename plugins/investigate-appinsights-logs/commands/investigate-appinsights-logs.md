@@ -67,6 +67,8 @@ Run these in parallel:
    ```
    Parse the JSON array. If empty, tell the user no `.kql` files or ` ```kql ` fenced blocks were found and stop — the skill has nothing to run.
 
+   Entries that carry a `"skipped": "<reason>"` field (set by `// @skill-skip` markers inside the query body — typically on analytical helpers with hardcoded `datetime(...)` literals) must **not** be executed against `az`. Keep them in the per-query findings table annotated as `[SKIPPED: <reason>]` so the user sees they were discovered and deliberately bypassed.
+
 2. **Health snapshot** (only if `healthUrl` is set): `curl -s --max-time 10 "<healthUrl>"` and keep the body for the final report. A non-200 response is not fatal; include the status code and body in the report.
 
 ## Step 5: Run queries against App Insights
@@ -81,7 +83,7 @@ Run the queries **in parallel** (batch them in a single tool-use block), each as
 
 ```bash
 az monitor app-insights query \
-  --apps "<APP_INSIGHTS_ID>" \
+  --app "<APP_INSIGHTS_ID>" \
   --analytics-query "$(cat <<'KQL_BODY_EOF'
 <substituted query body>
 KQL_BODY_EOF
@@ -92,16 +94,19 @@ KQL_BODY_EOF
 
 If any discovered query body itself contains a standalone line exactly matching `KQL_BODY_EOF`, pick a different unique terminator for that call so the heredoc doesn't close early.
 
-Collect each query's `tables[0].rows` plus its source title. If any single query fails, keep its error in the report but don't abort the others.
+Collect each query's full response (all `tables[*]`) plus its source title. If any single query fails, keep its error in the report but don't abort the others.
 
 ## Step 6: Extract server events for the timeline
 
 From the query results, build a `server` event list for the timeline. Each event needs `utc` (ISO 8601), `kind` (a short category label), and `message` (one-line summary).
 
-Heuristics:
+**Iterate every table in the response** — `tables[*]`, not just `tables[0]`. Multi-statement KQL bodies (statements separated by blank lines) return one table per statement, each with its own `columns` schema. Apply the per-row heuristics below to every table independently, then merge all extracted events into the single `server` list.
+
+Per-table heuristics:
 - If a row has a `timestamp` (or `TimeGenerated`) column, that's `utc`. App Insights emits sub-second precision (4-7 fractional digits); `build_timeline.py` normalizes this, so pass timestamps through as-is.
 - If a row has `name`, `itemType`, `customDimensions.EventName`, `severityLevel`, `resultCode`, `type`, or similar, use it as `kind`. **Do not alias a KQL column to the name `kind` via `project` — `kind` is a reserved word in KQL and produces a `SyntaxError` at parse time.** Project to a different name (e.g., `project severity=severityLevel`) and map it to `kind` in the handler's Python reshape step.
 - For `message`, join the remaining salient columns into a single compact string.
+- If a table has no timestamp-like column (e.g., it's a `summarize`/`print` result), skip it — nothing to contribute to a time-based timeline.
 
 Cap at ~200 events per query to avoid flooding. If a query returns more, sample evenly across the window and note the sampling in the report.
 

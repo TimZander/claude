@@ -25,10 +25,18 @@ by name — at every depth — so nested `node_modules` are also dropped.
 
 Glob matching uses `fnmatch.fnmatchcase` (case-sensitive, deterministic across
 OSes). `*` matches any character including `/` — it is NOT shell-glob
-semantics. Use explicit patterns like `ops/polling.kql` or `**/*.kql` as
+semantics. Use explicit patterns like `ops/traces.kql` or `**/*.kql` as
 needed. ATX markdown headings only are recognized (setext `====`/`----` is
 not matched). Heading tracking is "sticky": a fenced block below a section
 header inherits the most recent heading, even across horizontal rules.
+
+Skip-marker convention: a query whose first non-blank line is a KQL comment
+containing `@skill-skip` (e.g. `// @skill-skip date-pinned helper`) is
+emitted with a `"skipped": "<reason>"` field and `"content": ""`. The
+handler is expected to surface these in the per-query findings table as
+`[SKIPPED: <reason>]` without executing the query against the Azure CLI.
+Useful for analytical helpers with hardcoded `datetime(...)` literals that
+would otherwise produce meaningless single-row results.
 """
 from __future__ import annotations
 
@@ -48,6 +56,26 @@ DEFAULT_SKIP_DIRS = {
 
 FENCE_RE = re.compile(r"^(`{3,}|~{3,})\s*([A-Za-z0-9_+.-]*)\s*$")
 HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
+# Matches a KQL comment on the first non-blank line carrying the @skill-skip marker.
+# Examples:
+#   // @skill-skip
+#   // @skill-skip date-pinned helper, meant for manual copy-paste
+SKILL_SKIP_RE = re.compile(r"^\s*//\s*@skill-skip(?:\s+(.+?))?\s*$")
+
+
+def skill_skip_reason(content: str) -> str | None:
+    """If `content`'s first non-blank line is a `// @skill-skip [reason]`
+    marker, return the trimmed reason (or the literal string "author-marked"
+    if no reason was supplied). Returns None if the marker is absent.
+    """
+    for line in content.splitlines():
+        if not line.strip():
+            continue
+        m = SKILL_SKIP_RE.match(line)
+        if m:
+            return (m.group(1) or "").strip() or "author-marked"
+        return None
+    return None
 
 
 def iter_files(root: Path, includes: list[str], excludes: list[str]):
@@ -144,11 +172,16 @@ def main(argv: list[str]) -> int:
                 continue
             if not text.strip():
                 continue
-            results.append({
+            entry: dict = {
                 "source": rel,
                 "title": title_from_kql(text, rel),
                 "content": text.rstrip() + "\n",
-            })
+            }
+            skip_reason = skill_skip_reason(text)
+            if skip_reason is not None:
+                entry["skipped"] = skip_reason
+                entry["content"] = ""
+            results.append(entry)
         elif suffix in {".md", ".markdown"}:
             try:
                 text = path.read_text(encoding="utf-8", errors="replace")
@@ -158,11 +191,16 @@ def main(argv: list[str]) -> int:
             for heading, content, idx in extract_kql_from_markdown(text):
                 if not content.strip():
                     continue
-                results.append({
+                entry = {
                     "source": f"{rel}#{idx}",
                     "title": heading or f"{rel} (block {idx})",
                     "content": content.rstrip() + "\n",
-                })
+                }
+                skip_reason = skill_skip_reason(content)
+                if skip_reason is not None:
+                    entry["skipped"] = skip_reason
+                    entry["content"] = ""
+                results.append(entry)
 
     json.dump(results, sys.stdout, indent=2)
     sys.stdout.write("\n")
