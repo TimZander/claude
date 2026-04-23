@@ -298,4 +298,84 @@ assert sources == ["keep.kql"], f"expected only keep.kql, got {sources}"
 PY
 pass "skip-dirs (.git, node_modules, __pycache__) pruned"
 
+# 15. `// @skill-skip` marker with a reason: emitted with skipped + empty content.
+case_dir="$(fresh_case_dir)"
+cat > "$case_dir/helper.kql" <<'KQL'
+// @skill-skip date-pinned analytical helper
+let cycleTime = datetime(2026-04-10T23:00:15Z);
+traces | where timestamp > cycleTime | take 5
+KQL
+out="$(python3 "$SUT" --cwd "$case_dir")"
+python3 - "$out" <<'PY' || fail "@skill-skip with reason failed: $out"
+import sys, json
+data = json.loads(sys.argv[1])
+assert len(data) == 1, f"expected 1 entry, got {data}"
+e = data[0]
+assert e["source"] == "helper.kql", e
+assert e.get("skipped") == "date-pinned analytical helper", e
+assert e["content"] == "", f"expected empty content on skipped entry, got {e['content']!r}"
+PY
+pass "@skill-skip marker with reason is honored"
+
+# 16. `// @skill-skip` with no reason falls back to 'author-marked'.
+case_dir="$(fresh_case_dir)"
+cat > "$case_dir/noreason.kql" <<'KQL'
+// @skill-skip
+traces | take 1
+KQL
+out="$(python3 "$SUT" --cwd "$case_dir")"
+python3 - "$out" <<'PY' || fail "@skill-skip no-reason failed: $out"
+import sys, json
+data = json.loads(sys.argv[1])
+assert len(data) == 1, f"expected 1 entry, got {data}"
+assert data[0].get("skipped") == "author-marked", data[0]
+PY
+pass "@skill-skip without reason falls back to 'author-marked'"
+
+# 17. `// @skill-skip` inside a markdown fenced block marks only that block as skipped.
+case_dir="$(fresh_case_dir)"
+cat > "$case_dir/ops.md" <<'MD'
+## Active
+```kql
+traces | take 1
+```
+
+## Helper
+```kql
+// @skill-skip hardcoded date
+let t = datetime(2026-04-10T00:00:00Z);
+traces | where timestamp > t
+```
+MD
+out="$(python3 "$SUT" --cwd "$case_dir")"
+python3 - "$out" <<'PY' || fail "@skill-skip in markdown fence failed: $out"
+import sys, json
+data = json.loads(sys.argv[1])
+assert len(data) == 2, f"expected 2 entries, got {data}"
+by_title = {e["title"]: e for e in data}
+assert "skipped" not in by_title["Active"], by_title["Active"]
+assert by_title["Helper"].get("skipped") == "hardcoded date", by_title["Helper"]
+assert by_title["Helper"]["content"] == "", by_title["Helper"]
+PY
+pass "@skill-skip in markdown fence marks only that block"
+
+# 18. `// @skill-skip` must be on the first non-blank line to count — a marker
+#     buried mid-query is NOT treated as a skip.
+case_dir="$(fresh_case_dir)"
+cat > "$case_dir/buried.kql" <<'KQL'
+// Real query
+traces
+// @skill-skip this is a middle-of-query comment, not a skip marker
+| take 5
+KQL
+out="$(python3 "$SUT" --cwd "$case_dir")"
+python3 - "$out" <<'PY' || fail "@skill-skip buried-line failed: $out"
+import sys, json
+data = json.loads(sys.argv[1])
+assert len(data) == 1, f"expected 1 entry, got {data}"
+assert "skipped" not in data[0], f"marker should only be honored on first non-blank line, got {data[0]}"
+assert "traces" in data[0]["content"], data[0]
+PY
+pass "@skill-skip only on first non-blank line counts as a skip marker"
+
 echo "all smoke tests passed"

@@ -52,6 +52,19 @@ CLI flags override config. Notes:
 - `--health-url`: one-shot snapshot URL (may come from config).
 - `--queries <glob>`: restrict query discovery to matching paths.
 
+## Skipping analytical-helper queries
+
+Some KQL files/blocks in a repo are meant for manual copy-paste (they have hardcoded `datetime(...)` literals, `let`-bindings with specific times, etc.) and should not run as-is against the current time window. Mark them with a `// @skill-skip` comment on the first non-blank line of the query body:
+
+```kql
+// @skill-skip date-pinned helper — edit the datetime literals before running manually
+let cycleTime = datetime(2026-04-10T23:00:15Z);
+let providerWindow = datetime(2026-04-10T22:30:00Z);
+...
+```
+
+The skill still discovers these queries and lists them in the per-query findings table as `[SKIPPED: <reason>]`, but does not submit them to App Insights. The reason after `@skill-skip` is free-form; omit it and the annotation reads `[SKIPPED: author-marked]`.
+
 ## Time-window template substitution
 
 If a discovered query contains the literal token `{{TIMEWINDOW}}`, it is replaced with the raw `--time-window` value before submission. This lets queries opt into parameterization without requiring it:
