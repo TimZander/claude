@@ -5,6 +5,7 @@ allowed-tools: Bash
 user-input: required
 argument-hint: "[grep|read|ls] <args>  OR  <natural-language query>"
 model: sonnet
+context: fork
 ---
 
 You help the user investigate Azure DevOps TFVC content without cloning or mapping a workspace. TFVC is typically used in this context to store SQL schema scripts (stored procs, functions, tables, views) that sit outside a git repo — so the common task is grepping across `.sql` files by name or content.
