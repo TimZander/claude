@@ -404,6 +404,35 @@ When asked to push a branch or create a pull request, remind the user to run `/d
 
 When an issue defines phased work (Phase 1, Phase 2, Phase 3), ship each phase as a separate PR — even when the phases feel small. Interaction bugs between phases (e.g., a new tri-state return value meeting existing binary assumptions in callers) only surface when the phases are integrated. Separate PRs catch these incrementally during review instead of requiring multiple fix-up commits after the fact.
 
+## PR Size and Splitting
+
+Large PRs are harder to review thoroughly, harder to revert safely, and harder to fit in a reviewer's working memory. Before opening a PR, check whether it can be split.
+
+### When to split the work
+
+- **One story covers multiple independent features.** Split the story first, then ship one PR per feature. A story like "rebuild these four back office apps" is four PRs, not one.
+- **A feature requires new shared infrastructure.** Land the infrastructure PR first (externalized config, new base classes, shared utilities, framework patterns), wait for it to merge, then bring the feature branch up to date with `main`. The feature PR should not introduce infra that future features will also consume.
+- **A PR mixes refactoring with new functionality.** Renames, reorganizations, and "while I was in there" cleanups go in their own PR. Mixing them with feature work obscures both.
+- **A PR touches multiple unrelated UI surfaces.** Expanding an existing feature tile (e.g., a profile panel) and adding a new standalone dashboard are separate units of work.
+
+### Size guideline
+
+Aim for PRs under ~800 lines of functional change AND under ~20 files touched (excluding generated code, test fixtures, and one-type-per-file boilerplate that inflates line count without adding cognitive load). Exceeding either signal warrants a scope re-examination. PRs that must exceed either limit should include a one-paragraph justification in the description explaining why the work could not be split — and should still try. You can ask `/deep-review` to weigh in on scope alongside its other checks.
+
+### Signs a PR is too large
+
+- Touches multiple unrelated features or UI surfaces
+- Contains both refactoring and new functionality
+- Introduces shared infrastructure that the current feature does not strictly require
+- Takes ~45 minutes or more for a reviewer to work through
+- Has commits with mismatched scope (e.g., "add feature X" alongside "refactor shared utility Y")
+
+### Before opening a PR, run this check
+
+1. List every commit on the branch. Do they all serve the same story?
+2. Are there commits that could have merged to `main` earlier in the branch's life without the rest? Those should have been separate PRs.
+3. Does the PR description need multiple "Also, this change..." paragraphs? That's a sign of scope creep.
+
 <!-- Keep in sync with plugins/deep-review/commands/deep-review.md preamble -->
 ## Code Review Standards
 
