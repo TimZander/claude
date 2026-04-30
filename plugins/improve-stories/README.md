@@ -34,12 +34,12 @@ Examples:
 
 When a story names several independently-shippable features (e.g., "Add day-use parking, parking restrictions, and parking override"), the skill proposes splitting it into child stories before any implementation work begins. Signals include "and"/comma-linked distinct feature nouns in the title, acceptance criteria that cluster into independent groups, and multiple distinct user-facing deliverables. Rationale and thresholds live in `standards/CLAUDE.md` → **PR Size and Splitting** (the team standard this extension enforces upstream).
 
-On approval, the skill creates the children (GitHub: `gh issue create` + `addBlockedBy` linking; ADO: `wit_create_work_item` + Parent/Child links), annotates the parent with pointers to the children, and optionally queues the new children through the same improvement flow in the current session.
+On approval, the skill creates the children (GitHub: `gh issue create` + `addBlockedBy` linking; ADO: `wit_add_child_work_items` for atomic create-and-parent-link), annotates the parent with pointers to the children, and optionally queues the new children through the same improvement flow in the current session.
 
 ## Large Batches
 
 When a batch contains many items, the skill filters and chunks automatically:
 
 - Items unrelated to the current repository are skipped
-- Only items needing improvement are processed (well-documented items are skipped)
+- Only items needing improvement or splitting are processed (well-documented items are skipped)
 - Remaining items are processed in chunks of 5, with a progress update after each chunk

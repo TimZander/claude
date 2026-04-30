@@ -1,7 +1,7 @@
 ---
 name: improve-stories
 description: Review user stories and GitHub issues for completeness, research the codebase to fill gaps, and update each with structured documentation
-allowed-tools: Bash, Read, Grep, Glob, Agent, AskUserQuestion, mcp__azure-devops__core_list_project_teams, mcp__azure-devops__wit_get_work_items_for_iteration, mcp__azure-devops__wit_get_work_item, mcp__azure-devops__wit_update_work_item, mcp__azure-devops__wit_add_work_item_comment, mcp__azure-devops__wit_my_work_items, mcp__azure-devops__wit_list_backlogs, mcp__azure-devops__wit_list_backlog_work_items, mcp__azure-devops__wit_get_work_items_batch_by_ids, mcp__azure-devops__wit_work_items_link, mcp__azure-devops__wit_create_work_item
+allowed-tools: Bash, Read, Grep, Glob, Agent, AskUserQuestion, mcp__azure-devops__core_list_project_teams, mcp__azure-devops__wit_get_work_items_for_iteration, mcp__azure-devops__wit_get_work_item, mcp__azure-devops__wit_update_work_item, mcp__azure-devops__wit_add_work_item_comment, mcp__azure-devops__wit_my_work_items, mcp__azure-devops__wit_list_backlogs, mcp__azure-devops__wit_list_backlog_work_items, mcp__azure-devops__wit_get_work_items_batch_by_ids, mcp__azure-devops__wit_work_items_link, mcp__azure-devops__wit_add_child_work_items
 user-input: optional
 argument-hint: "[iteration-path, work-item-ids, or #issue-number]"
 model: opus
@@ -124,7 +124,7 @@ Present the triage summary to the user:
 - Ask the user to confirm before proceeding
 - If the user declines, asks to skip specific items, or wants to add items that were filtered out, adjust the selection accordingly and re-present the updated plan
 
-## Step 3d: Execute approved splits
+### 3d: Execute approved splits
 
 For each item the user confirmed as multi-feature, propose a concrete split **before creating anything**:
 
@@ -132,19 +132,20 @@ For each item the user confirmed as multi-feature, propose a concrete split **be
 2. **Present the split plan** to the user with proposed child titles + summaries, how the parent's content is being distributed, and what happens to the parent (left open as a tracking item with pointers to children, or closed with pointers — user's call).
 3. **On approval, create the children and link them.** Do not create anything before approval. If the user rejects or modifies, re-present the revised plan before proceeding.
 
+**Partial-failure handling:** If one or more child creations fail partway through, do **not** roll back the children that were already created. Report which children were created (with IDs/numbers), which failed (with the error), and ask the user how to proceed before continuing — retry the failed child, skip it, or stop and clean up manually. Same convention as Step 4f's "report and continue" pattern.
+
 **GitHub:**
-- Create each child with `gh issue create --title "<title>" --body "<summary + relevant content from parent>" --label <parent-labels>`. Preserve the parent's labels on each child.
-- Link the parent as **blocked by** each child via the `addBlockedBy` GraphQL mutation (see `standards/CLAUDE.md` → **GitHub Issue Relationships**). The parent becomes a tracking issue that only auto-closes when all children do.
-- Append to the parent description: `Split into #<A>, #<B>, #<C>. This parent closes when all children are complete.`
+- Create each child with `gh issue create --title "<title>" --body "<summary + relevant content from parent>" --label <parent-labels>`. Copy only labels that describe the work itself (component, priority, area). Skip umbrella labels like `epic`, `tracking`, or `parent-issue` if present on the parent.
+- Link the parent as **blocked by** each child via the `addBlockedBy` GraphQL mutation (see `standards/CLAUDE.md` → **GitHub Issue Relationships**). This makes the parent a tracking issue surfaced in GitHub's "Linked issues" UI; it does **not** auto-close the parent when children resolve — the user (or a separate workflow) closes the parent manually once all children are complete.
+- Append to the parent description: `Split into #<A>, #<B>, #<C>. Close manually once all children are complete.`
 - Audit trail: `gh issue comment <parent> --body "Split into <N> child issues per multi-feature detection. Children: #<A>, #<B>, #<C>."`
 
 **ADO:**
-- Create each child with `mcp__azure-devops__wit_create_work_item`, using the same work item type as the parent (typically User Story or Product Backlog Item) and preserving the parent's area path and tags.
-- Link parent and each child as **Parent / Child** with `wit_work_items_link` (set type `parent` on the child pointing to the parent ID). ADO errors on duplicate links — check existing links on the child before creating.
+- Create all children for one parent in a single call to `mcp__azure-devops__wit_add_child_work_items` — the tool creates and parent-links each child atomically. Pass `parentId`, `workItemType` (default to the parent's `System.WorkItemType`, typically User Story or Product Backlog Item — ask the user if the parent is an Epic or Feature and the children should be a different type), and an `items` array with `{title, description, format, areaPath, iterationPath}` for each child. Default `format` to whatever was detected in Step 4c (HTML vs Markdown); preserve the parent's `areaPath` and `iterationPath` on each child unless the user overrides.
 - Append to the parent description: `Split into <child IDs>. This parent tracks the aggregate effort; implementation happens on the children.`
 - Audit trail: `wit_add_work_item_comment` on the parent explaining the split.
 
-**After split:** Ask the user whether to queue the newly-created children through Step 4 (research + improve descriptions) in the current session. If yes, add them to the in-flight list with their classification recomputed (well-documented vs needs improvement) and proceed. If no, stop here for those items — the user can re-run `/improve-stories` on the children later.
+**After split:** Ask the user whether to queue the newly-created children through Step 4 (research + improve descriptions) in the current session. If yes, add them to the items-to-improve queue and proceed — newly-created children will almost always need research and full descriptions, so they pass through Step 4 normally. If no, stop here for those items — the user can re-run `/improve-stories` on the children later.
 
 ## Step 4: Research and Update (chunked)
 
