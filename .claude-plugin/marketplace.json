@@ -111,6 +111,14 @@
       "source": "./plugins/investigate-appinsights-logs",
       "category": "development",
       "strict": false
+    },
+    {
+      "name": "start-work",
+      "description": "Start a new unit of work from a GitHub issue or ADO work item — runs Git Hygiene, creates branches/<id>-<slug> in a worktree by default, self-assigns/transitions state, runs codebase research, and hands off a draft plan",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/start-work",
+      "category": "productivity",
+      "strict": false
     }
   ]
 }
