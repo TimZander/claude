@@ -19,7 +19,7 @@ Optional flags:
 
 1. **Detect source** — GitHub issue (`#NN`) or ADO work item (bare ID), same logic as `improve-stories`.
 2. **Fetch the card** — title, description, area path, current state, dependencies.
-3. **Run Git Hygiene** — verify clean tree, fetch the base branch, fast-forward.
+3. **Run Git Hygiene** — verify clean tree, fetch `origin/<base>`. The new branch is rooted directly at the latest `origin/<base>` tip, so no fast-forward of local `<base>` is needed.
 4. **Create the branch** — `branches/<id>-<slug>` from clean base, slug derived from the title (kebab-case, ≤ 50 chars).
 5. **Worktree by default** — branch lives in `.claude/worktrees/<id>-<slug>` for isolation. `--no-worktree` opts out.
 6. **Mark work item active** — `gh issue edit --add-assignee @me` for GitHub; ADO transitions to `Active` and self-assigns.

@@ -151,4 +151,30 @@ if ( cd "$repo" && bash "$SUT" --slug "x" --id "1" --base "no-such-branch" >/dev
 fi
 pass "non-existent --base is rejected"
 
+# 12. Branch already exists on origin (but not locally) → refuse with a coordination hint.
+#     A second clone of the same origin pushes the target branch, then the script tries
+#     to create the same branch in the first clone — should refuse rather than silently
+#     create a divergent local copy.
+repo="$(fresh_repo)"
+# Find this repo's bare origin so we can clone a second working copy that pushes the conflict.
+bare_origin="$( cd "$repo" && git remote get-url origin )"
+collaborator="$TMP_ROOT/collab.$$.$RANDOM"
+git clone -q "$bare_origin" "$collaborator"
+( cd "$collaborator" \
+    && git config user.email "collab@example.com" \
+    && git config user.name "Collab" \
+    && : > .allow-push-main \
+    && git checkout -q -b branches/77-conflicting \
+    && echo "collab work" > collab.txt \
+    && git add collab.txt \
+    && git commit -q -m "collab seed" \
+    && git push -q -u origin branches/77-conflicting )
+err="$( cd "$repo" && bash "$SUT" --slug "conflicting" --id "77" 2>&1 >/dev/null || true )"
+echo "$err" | grep -qi "already exists on origin" \
+    || fail "expected origin-side collision error, got: $err"
+# And no worktree should have been created locally as a side effect.
+[ ! -d "$repo/.claude/worktrees/77-conflicting" ] \
+    || fail "expected NO worktree to be created when origin already has the branch"
+pass "branch already on origin (but not local) is refused"
+
 echo "all smoke tests passed"

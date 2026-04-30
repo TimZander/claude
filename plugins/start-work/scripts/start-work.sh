@@ -87,8 +87,8 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
     exit 1
 fi
 
-# Refuse to clobber an existing local branch.
-if git rev-parse --verify --quiet "$BRANCH" >/dev/null; then
+# Refuse to clobber an existing local branch (precise check against refs/heads/).
+if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
     echo "error: branch '$BRANCH' already exists locally. Pick a different slug or delete the existing branch." >&2
     exit 1
 fi
@@ -98,7 +98,7 @@ fi
 FETCH_ERR_FILE="$(mktemp)"
 trap 'rm -f "$FETCH_ERR_FILE"' EXIT
 
-if ! git fetch origin "$BASE" 2>"$FETCH_ERR_FILE" >&2; then
+if ! git fetch origin "$BASE" 2>"$FETCH_ERR_FILE"; then
     echo "error: 'git fetch origin $BASE' failed:" >&2
     cat "$FETCH_ERR_FILE" >&2
     exit 1
@@ -106,6 +106,16 @@ fi
 
 if ! git rev-parse --verify --quiet "origin/$BASE" >/dev/null; then
     echo "error: origin/$BASE does not exist after fetch. Verify --base is correct." >&2
+    exit 1
+fi
+
+# Refuse if the target branch already exists on origin (a teammate may have pushed
+# a same-named branch). Creating a divergent local copy here would silently set up
+# a force-push trap. The user can rename the slug or coordinate with the original
+# author before retrying.
+git fetch origin "$BRANCH" 2>/dev/null || true
+if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+    echo "error: branch '$BRANCH' already exists on origin (someone else may have pushed it). Pick a different slug or coordinate with the original author." >&2
     exit 1
 fi
 

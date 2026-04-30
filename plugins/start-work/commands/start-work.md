@@ -93,7 +93,7 @@ GitHub has no formal state to transition — assignment is the active signal.
 ### ADO
 Use `mcp__azure-devops__wit_update_work_item` to:
 1. Set `System.State` to `Active`. Some teams use `In Progress` or another non-default state name — if the project's process template uses a non-`Active` next state, surface the choices and ask the user before guessing.
-2. Set `System.AssignedTo` to the current user (look up via `mcp__azure-devops__core_list_project_teams` with `mine=true` if the email isn't readily available, or use the user's `~/.claude/CLAUDE.md`-stored work email).
+2. Set `System.AssignedTo` to the current user. Source the user's email from `git config user.email` (run `git config user.email --get`) or from the email recorded in `~/.claude/CLAUDE.md`. Note: `mcp__azure-devops__core_list_project_teams` returns *teams*, not user identity — don't use it for this lookup.
 
 If the work item is already `Active` and assigned to the current user, this step is a no-op — log it and continue.
 
