@@ -168,6 +168,14 @@ Python 3.9+ should work; no pip dependencies needed (stdlib only).
 the default 60-day window. Try `--since 2026-01-01` (or however far back your
 usage goes) to widen.
 
+**"Monthly projection looks low — I had vacation / PTO during the window."**
+The `monthly_projection_usd` field is computed as `total_cost / calendar_days × 30`,
+so days with zero spend (vacation, weekends, light periods) drag the average down.
+For a vacation-corrected projection, divide `totals.cost_usd` by `active_days`
+(both in the aggregate JSON) and multiply by 30 — that's `total / working_days × 30`,
+which approximates demand on days you were actually using Claude Code. Or, narrow
+the window with `--since` to start after any time off in the period.
+
 **"`error: --until ... is before --since ...`"** — the window is inverted.
 Swap the arguments.
 
