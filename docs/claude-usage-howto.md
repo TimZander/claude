@@ -47,11 +47,48 @@ Both Node.js and Python are required. Most dev machines already have them.
 If you skip step 3, the script falls back to `npx -y ccusage@latest`, which
 works but adds ~60 seconds of download to every run.
 
+## Get the script
+
+Pick one approach:
+
+### Option A — download just the script (single file, recommended for one-time use)
+
+PowerShell (Windows):
+
+```powershell
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/TimZander/claude/main/scripts/claude-usage-report.py" -OutFile "claude-usage-report.py"
+```
+
+bash (macOS / Linux / Git Bash):
+
+```bash
+curl -O https://raw.githubusercontent.com/TimZander/claude/main/scripts/claude-usage-report.py
+```
+
+This drops `claude-usage-report.py` in your current directory.
+
+### Option B — clone the repo (if you want updates or other tools)
+
+```bash
+git clone https://github.com/TimZander/claude
+cd claude
+```
+
+The script is at `scripts/claude-usage-report.py` from the repo root.
+
 ## Run
 
-> **Pick an output directory outside the repo working tree.** The script writes
-> two files containing your dollar amounts and daily timeline. Don't run it in
-> the repo root — accidental `git add -A` commits personal data.
+> **Pick an output directory outside any repo working tree** (e.g., `~/claude-usage`).
+> The script writes two files containing your dollar amounts and daily timeline.
+> Don't run it inside a git repo — accidental `git add -A` commits personal data.
+
+If you used **Option A** (single-file download), the script is in your current directory:
+
+```bash
+python3 claude-usage-report.py --out-dir ~/claude-usage
+```
+
+If you used **Option B** (cloned the repo), the script has a `scripts/` prefix:
 
 ```bash
 python3 scripts/claude-usage-report.py --out-dir ~/claude-usage
@@ -61,6 +98,9 @@ Default window is the last 60 days. Two files appear in `~/claude-usage/`:
 `<youruser>-summary.md` and `<youruser>-aggregate.json`.
 
 ### Common overrides
+
+The examples below assume Option B (cloned repo). Drop the `scripts/` prefix if you
+used Option A.
 
 ```bash
 # Custom window
