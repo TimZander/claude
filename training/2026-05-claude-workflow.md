@@ -223,7 +223,7 @@ The case for engaging with local inference rests on four drivers:
 
 - **Security.** Sensitive code that genuinely shouldn't leave the building has nowhere local to go today.
 - **Performance.** Local inference has zero rate limits and zero per-token cost — which changes what's economical to run continuously.
-- **Disaster hedge.** Many teams are now structurally dependent on AI tooling for productivity. An Anthropic outage now meaningfully slows shipping — and these aren't hypothetical; capacity events (529 overloaded errors, intermittent rate limits) happen during working hours. **A local LLM, configured with graceful fallback when the cloud API errors, would absorb an outage like that transparently.** The resilience pattern is cloud primary, local fallback, automatic — the team doesn't notice the cloud was down.
+- **Disaster hedge.** Many teams are now structurally dependent on AI tooling for productivity. The risks aren't only outages — pricing model changes, opaque ToS interpretations, and rate-limit / allotment overages can all hamstring a dependent team. The capacity events at least aren't hypothetical: 529 overloaded errors and intermittent rate limits happen during working hours. **A local LLM, configured with graceful fallback when the cloud API errors, would absorb events like that transparently.** The resilience pattern is cloud primary, local fallback, automatic — the team doesn't notice the cloud was down.
 - **Staying ahead of the curve.** Open-weights coding models are improving on a 6-month cadence. The operational stack to run them is *learned* capability, not downloadable. Engaging now buys ~18 months of operational lead.
 
 Three defensive, one offensive. Any one alone is a weaker pitch; together they're the case.
