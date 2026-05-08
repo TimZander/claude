@@ -408,6 +408,63 @@ class WalkMainSessionTests(unittest.TestCase):
         self.assertEqual(records[0]["timestamp"], const_in)
 
 
+class ExtractSlashCommandSkillTests(unittest.TestCase):
+    def test_extract_slash_skill_with_command_name_tags(self):
+        # Arrange
+        const_skill = "deep-review:deep-review"
+        entry = {"type": "user", "message": {
+            "content": f"<command-message>x</command-message>\n<command-name>/{const_skill}</command-name>"
+        }}
+        # Act
+        result = csa.extract_slash_command_skill(entry)
+        # Assert
+        self.assertEqual(result, const_skill)
+
+    def test_extract_slash_skill_bare_form(self):
+        # Arrange
+        const_skill = "start-work"
+        entry = {"type": "user", "message": {
+            "content": f"<command-name>/{const_skill}</command-name>"
+        }}
+        # Act
+        result = csa.extract_slash_command_skill(entry)
+        # Assert
+        self.assertEqual(result, const_skill)
+
+    def test_extract_slash_skill_with_args(self):
+        # Arrange — args appear as separate tags but skill name still extractable
+        const_skill = "deep-review:deep-review"
+        entry = {"type": "user", "message": {
+            "content": f"<command-name>/{const_skill}</command-name>\n<command-args>pr 820</command-args>"
+        }}
+        # Act
+        result = csa.extract_slash_command_skill(entry)
+        # Assert
+        self.assertEqual(result, const_skill)
+
+    def test_extract_slash_skill_returns_none_for_plain_text(self):
+        # Arrange
+        entry = {"type": "user", "message": {"content": "please review my PR"}}
+        # Act / Assert
+        self.assertIsNone(csa.extract_slash_command_skill(entry))
+
+    def test_extract_slash_skill_returns_none_for_assistant_turn(self):
+        # Arrange — only user messages should be parsed
+        entry = {"type": "assistant", "message": {
+            "content": "<command-name>/foo</command-name>"
+        }}
+        # Act / Assert
+        self.assertIsNone(csa.extract_slash_command_skill(entry))
+
+    def test_extract_slash_skill_returns_none_for_list_content(self):
+        # Arrange — slash commands always come through as string content
+        entry = {"type": "user", "message": {
+            "content": [{"type": "text", "text": "<command-name>/foo</command-name>"}]
+        }}
+        # Act / Assert
+        self.assertIsNone(csa.extract_slash_command_skill(entry))
+
+
 class WalkMainSessionInvocationsTests(unittest.TestCase):
     def _write_jsonl(self, lines: list[dict]) -> Path:
         tmp = tempfile.NamedTemporaryFile(
@@ -472,6 +529,66 @@ class WalkMainSessionInvocationsTests(unittest.TestCase):
         path.unlink()
         # Assert — window was just the invocation turn itself
         self.assertEqual(len(invs), 1)
+        self.assertEqual(invs[0]["n_turns"], 1)
+
+    def test_walk_invocations_slash_command_opens_window_on_next_assistant_turn(self):
+        # Arrange — user types /deep-review, next assistant turn is the invocation.
+        # ctx_at_invoke comes from THAT assistant turn, not from the user message.
+        const_input = 200_000
+        const_cache_read = 100_000
+        const_expected_ctx = const_input + const_cache_read
+        const_timestamp = "2026-04-15T12:00:00Z"
+        lines = [
+            {"type": "user", "timestamp": const_timestamp,
+             "message": {"content": "<command-name>/deep-review</command-name>"}},
+            {"type": "assistant", "timestamp": const_timestamp,
+             "message": {"model": "claude-opus-4-7",
+                         "content": [{"type": "text", "text": "starting"}],
+                         "usage": {"input_tokens": const_input,
+                                   "cache_read_input_tokens": const_cache_read,
+                                   "output_tokens": 100}}},
+            {"type": "assistant", "timestamp": const_timestamp,
+             "message": {"model": "claude-opus-4-7",
+                         "content": [], "usage": {"input_tokens": 5,
+                                                  "output_tokens": 10}}},
+        ]
+        path = self._write_jsonl(lines)
+        unknown: set[str] = set()
+        # Act
+        invs = csa.walk_main_session_invocations(
+            path, "2026-04-01", "2026-04-30", unknown)
+        path.unlink()
+        # Assert
+        self.assertEqual(len(invs), 1)
+        self.assertEqual(invs[0]["skill"], "deep-review")
+        self.assertEqual(invs[0]["ctx_at_invoke"], const_expected_ctx)
+        self.assertEqual(invs[0]["n_turns"], 2)
+
+    def test_walk_invocations_slash_then_skill_tool_use_does_not_double_count(self):
+        # Arrange — user types /foo and the assistant ALSO emits Skill tool_use
+        # for the same skill (defensive: harness might emit both). Should be
+        # one invocation, not two.
+        const_timestamp = "2026-04-15T12:00:00Z"
+        lines = [
+            {"type": "user", "timestamp": const_timestamp,
+             "message": {"content": "<command-name>/foo</command-name>"}},
+            {"type": "assistant", "timestamp": const_timestamp,
+             "message": {"model": "claude-opus-4-7",
+                         "content": [{"type": "tool_use", "name": "Skill",
+                                      "input": {"skill": "foo"}}],
+                         "usage": {"input_tokens": 100, "output_tokens": 1}}},
+        ]
+        path = self._write_jsonl(lines)
+        unknown: set[str] = set()
+        # Act
+        invs = csa.walk_main_session_invocations(
+            path, "2026-04-01", "2026-04-30", unknown)
+        path.unlink()
+        # Assert — Skill tool_use closes pending and opens new with same skill.
+        # We get exactly one invocation; the slash-command-opened active was
+        # replaced before any turns accumulated to it.
+        self.assertEqual(len(invs), 1)
+        self.assertEqual(invs[0]["skill"], "foo")
         self.assertEqual(invs[0]["n_turns"], 1)
 
     def test_walk_invocations_two_skills_in_one_session(self):

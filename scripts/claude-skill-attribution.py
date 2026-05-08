@@ -241,6 +241,27 @@ def is_real_user_turn(entry: dict) -> bool:
     return True
 
 
+SLASH_COMMAND_RE = re.compile(r"<command-name>/(.+?)</command-name>")
+
+
+def extract_slash_command_skill(entry: dict) -> str | None:
+    """Detect skills invoked via a typed slash command.
+
+    The harness wraps slash commands as `<command-name>/skill-name</command-name>`
+    in the user message content; no Skill tool_use is emitted, so we have to
+    detect it from the user-side string. The skill name may be plugin-namespaced
+    (e.g. `deep-review:deep-review`).
+    """
+    if entry.get("type") != "user":
+        return None
+    msg = entry.get("message") or {}
+    content = msg.get("content")
+    if not isinstance(content, str):
+        return None
+    match = SLASH_COMMAND_RE.search(content)
+    return match.group(1) if match else None
+
+
 def extract_tool_uses(entry: dict) -> list[dict]:
     msg = entry.get("message") or {}
     content = msg.get("content")
@@ -252,7 +273,10 @@ def extract_tool_uses(entry: dict) -> list[dict]:
 def walk_main_session(path: Path, since: str, until: str,
                       unknown_models: set[str]) -> list[dict]:
     """Walk a main-session JSONL, attributing each assistant turn to a skill
-    via the windowing rule (Skill invocation → next user message)."""
+    via the windowing rule. Skills can be invoked two ways:
+      1. A `Skill` tool_use in an assistant turn (rare from main thread).
+      2. A typed slash-command in a user message — `<command-name>/X</command-name>`.
+    Both open the window through the next real user turn."""
     records: list[dict] = []
     active_skill: str | None = None
     try:
@@ -264,12 +288,13 @@ def walk_main_session(path: Path, since: str, until: str,
                     continue
                 etype = entry.get("type")
                 if etype == "user" and is_real_user_turn(entry):
-                    active_skill = None
+                    # Slash-command user turns OPEN a window; plain user turns
+                    # close the prior one. Order matters: detect slash first.
+                    slash = extract_slash_command_skill(entry)
+                    active_skill = slash  # None if not a slash command
                     continue
                 if etype != "assistant":
                     continue
-                # Update the active skill BEFORE emitting the record so the
-                # turn that invoked the skill is attributed to that skill.
                 for tu in extract_tool_uses(entry):
                     if tu.get("name") == "Skill":
                         skill = (tu.get("input") or {}).get("skill")
@@ -353,11 +378,18 @@ def walk_main_session_invocations(path: Path, since: str, until: str,
     the skill had to inherit) and the cost of the entire skill window. Lets us
     flag skills that are repeatedly invoked deep into bloated sessions.
 
+    Skills enter via two paths and both are handled:
+      1. `Skill` tool_use in an assistant turn → ctx_at_invoke is THIS turn.
+      2. `<command-name>/X</command-name>` in a user turn → the user message
+         itself has no usage block, so ctx_at_invoke is the FIRST assistant
+         turn that follows. We track this with a `pending_slash_skill` flag.
+
     Subagents start fresh, so they're not the question — only main-session
     JSONLs feed this walker.
     """
     records: list[dict] = []
     active: dict | None = None  # in-flight invocation accumulator
+    pending_slash_skill: str | None = None
 
     def close(active_state: dict | None) -> None:
         if active_state is None:
@@ -375,37 +407,41 @@ def walk_main_session_invocations(path: Path, since: str, until: str,
                 if etype == "user" and is_real_user_turn(entry):
                     close(active)
                     active = None
+                    pending_slash_skill = extract_slash_command_skill(entry)
                     continue
                 if etype != "assistant":
                     continue
                 msg = entry.get("message") or {}
                 usage = msg.get("usage") or {}
                 model_canon = canonicalize_model(msg.get("model") or "")
-                # When a Skill tool_use appears, close any prior window and open a new one.
-                # The invocation turn itself is included in the new window.
-                for tu in extract_tool_uses(entry):
-                    if tu.get("name") == "Skill":
-                        skill = (tu.get("input") or {}).get("skill")
-                        if skill:
-                            close(active)
-                            if not in_window(entry.get("timestamp", ""), since, until):
-                                active = None
-                                continue
-                            active = {
-                                "skill": skill,
-                                "timestamp": entry.get("timestamp"),
-                                "session_id": entry.get("sessionId"),
-                                "git_branch": entry.get("gitBranch"),
-                                "model_at_invoke": model_canon,
-                                "ctx_at_invoke": context_size(usage),
-                                "n_turns": 0,
-                                "window_cost_usd": 0.0,
-                                "wasted_cache_read_lb_usd": 0.0,
-                            }
+                ts = entry.get("timestamp", "")
+                # If both signals fire on the same turn, the explicit Skill
+                # tool_use wins. Otherwise the pending slash-command opens it.
+                tool_skill = next(
+                    ((tu.get("input") or {}).get("skill") for tu in extract_tool_uses(entry)
+                     if tu.get("name") == "Skill" and (tu.get("input") or {}).get("skill")),
+                    None,
+                )
+                opened_by = tool_skill or pending_slash_skill
+                pending_slash_skill = None
+                if opened_by is not None:
+                    close(active)
+                    active = None
+                    if in_window(ts, since, until):
+                        active = {
+                            "skill": opened_by,
+                            "timestamp": ts,
+                            "session_id": entry.get("sessionId"),
+                            "git_branch": entry.get("gitBranch"),
+                            "model_at_invoke": model_canon,
+                            "ctx_at_invoke": context_size(usage),
+                            "n_turns": 0,
+                            "window_cost_usd": 0.0,
+                            "wasted_cache_read_lb_usd": 0.0,
+                        }
                 if active is not None:
                     active["n_turns"] += 1
                     active["window_cost_usd"] += turn_cost_usd(model_canon, usage, unknown_models)
-                    # Floor: every turn re-reads at least the inherited context.
                     active["wasted_cache_read_lb_usd"] += (
                         active["ctx_at_invoke"] * cache_read_rate(model_canon))
             close(active)
