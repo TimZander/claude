@@ -38,7 +38,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # v2 added skill_efficiency (per-invocation context bloat metrics)
 SAFE_USER_RE = re.compile(r"[^a-z0-9_-]")
 DEFAULT_TOP_N = 20
 # ccusage doesn't read agent-*.jsonl files, so our totals run modestly higher
@@ -338,6 +338,123 @@ def walk_subagent_file(path: Path, since: str, until: str,
     return records
 
 
+def cache_read_rate(model_canon: str) -> float:
+    """USD per token for cache_read at this model's rate, 0 if unknown."""
+    if model_canon not in PRICES:
+        return 0.0
+    return PRICES[model_canon]["cache_read"] / 1_000_000
+
+
+def walk_main_session_invocations(path: Path, since: str, until: str,
+                                  unknown_models: set[str]) -> list[dict]:
+    """Emit one record per main-thread Skill invocation.
+
+    Captures the context size at the moment the skill was invoked (everything
+    the skill had to inherit) and the cost of the entire skill window. Lets us
+    flag skills that are repeatedly invoked deep into bloated sessions.
+
+    Subagents start fresh, so they're not the question — only main-session
+    JSONLs feed this walker.
+    """
+    records: list[dict] = []
+    active: dict | None = None  # in-flight invocation accumulator
+
+    def close(active_state: dict | None) -> None:
+        if active_state is None:
+            return
+        records.append(active_state)
+
+    try:
+        with path.open("r", encoding="utf-8") as fp:
+            for line in fp:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                etype = entry.get("type")
+                if etype == "user" and is_real_user_turn(entry):
+                    close(active)
+                    active = None
+                    continue
+                if etype != "assistant":
+                    continue
+                msg = entry.get("message") or {}
+                usage = msg.get("usage") or {}
+                model_canon = canonicalize_model(msg.get("model") or "")
+                # When a Skill tool_use appears, close any prior window and open a new one.
+                # The invocation turn itself is included in the new window.
+                for tu in extract_tool_uses(entry):
+                    if tu.get("name") == "Skill":
+                        skill = (tu.get("input") or {}).get("skill")
+                        if skill:
+                            close(active)
+                            if not in_window(entry.get("timestamp", ""), since, until):
+                                active = None
+                                continue
+                            active = {
+                                "skill": skill,
+                                "timestamp": entry.get("timestamp"),
+                                "session_id": entry.get("sessionId"),
+                                "git_branch": entry.get("gitBranch"),
+                                "model_at_invoke": model_canon,
+                                "ctx_at_invoke": context_size(usage),
+                                "n_turns": 0,
+                                "window_cost_usd": 0.0,
+                                "wasted_cache_read_lb_usd": 0.0,
+                            }
+                if active is not None:
+                    active["n_turns"] += 1
+                    active["window_cost_usd"] += turn_cost_usd(model_canon, usage, unknown_models)
+                    # Floor: every turn re-reads at least the inherited context.
+                    active["wasted_cache_read_lb_usd"] += (
+                        active["ctx_at_invoke"] * cache_read_rate(model_canon))
+            close(active)
+    except OSError:
+        pass
+    return records
+
+
+def collect_invocations(projects_dir: Path, since: str, until: str,
+                        unknown_models: set[str]) -> list[dict]:
+    """Walk every main-session JSONL and collect Skill invocation records."""
+    invocations: list[dict] = []
+    for jsonl in projects_dir.rglob("*.jsonl"):
+        if jsonl.name.startswith("agent-"):
+            continue
+        invocations.extend(
+            walk_main_session_invocations(jsonl, since, until, unknown_models))
+    return invocations
+
+
+def aggregate_skill_efficiency(invocations: list[dict]) -> list[dict]:
+    """Per-skill: how often is it invoked into a bloated context, and what does
+    that cost. Sorted by total wasted-spend descending so the worst offenders
+    surface first."""
+    by_skill: dict[str, list[dict]] = defaultdict(list)
+    for inv in invocations:
+        by_skill[inv["skill"]].append(inv)
+    rows = []
+    for skill, items in by_skill.items():
+        n = len(items)
+        total_cost = sum(i["window_cost_usd"] for i in items)
+        total_wasted = sum(i["wasted_cache_read_lb_usd"] for i in items)
+        rows.append({
+            "skill": skill,
+            "invocations": n,
+            "mean_ctx_at_invoke": round(sum(i["ctx_at_invoke"] for i in items) / n),
+            "p95_ctx_at_invoke": round(percentile(
+                [i["ctx_at_invoke"] for i in items], 95)),
+            "max_ctx_at_invoke": max(i["ctx_at_invoke"] for i in items),
+            "mean_turns_per_invocation": round(
+                sum(i["n_turns"] for i in items) / n, 1),
+            "total_window_cost_usd": round(total_cost, 2),
+            "wasted_cache_read_lb_usd": round(total_wasted, 2),
+            "wasted_pct": round((total_wasted / total_cost) * 100, 1) if total_cost else 0.0,
+        })
+    rows.sort(key=lambda r: -r["wasted_cache_read_lb_usd"])
+    return rows
+
+
 def collect_all(projects_dir: Path, since: str, until: str,
                 unknown_models: set[str]) -> list[dict]:
     """Walk every JSONL under projects_dir, classifying main vs subagent by name.
@@ -555,6 +672,31 @@ def render_markdown(report: dict, top_n: int) -> str:
             f"{row['p95_context_tokens']:,} | {share_str} |"
         )
 
+    eff_rows = report.get("skill_efficiency") or []
+    if eff_rows:
+        lines += [
+            "",
+            "## Skill context efficiency (main-thread invocations)",
+            "",
+            "_How bloated was the conversation when each skill was invoked?_ "
+            "`wasted (lb)` is a lower bound: every turn in the skill window "
+            "re-reads at least the inherited context, billed at cache_read rates. "
+            "High % means the skill is repeatedly invoked into a session that's "
+            "already large and could likely run cheaper after `/clear`.",
+            "",
+            "| Skill | Inv | Mean ctx@invoke | p95 | Turns/inv | Cost | Wasted (lb) | % |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for r in eff_rows:
+            lines.append(
+                f"| `{r['skill']}` | {r['invocations']:,} | "
+                f"{r['mean_ctx_at_invoke']:,} | {r['p95_ctx_at_invoke']:,} | "
+                f"{r['mean_turns_per_invocation']} | "
+                f"${r['total_window_cost_usd']:,.2f} | "
+                f"${r['wasted_cache_read_lb_usd']:,.2f} | "
+                f"{r['wasted_pct']}% |"
+            )
+
     lines += ["", "## Per-subagent_type spend (sidechain only)", "",
               "| Agent type | Cost | Turns | Mean $/turn |",
               "| --- | ---: | ---: | ---: |"]
@@ -601,6 +743,9 @@ def main() -> int:
     records = collect_all(projects_dir, args.since, args.until, unknown_models)
     print(f"Collected {len(records):,} assistant turns in window.", file=sys.stderr)
 
+    invocations = collect_invocations(projects_dir, args.since, args.until, unknown_models)
+    print(f"Collected {len(invocations):,} main-thread skill invocations.", file=sys.stderr)
+
     total_cost = sum(r["cost_usd"] for r in records)
     window_days = (datetime.strptime(args.until, "%Y-%m-%d")
                    - datetime.strptime(args.since, "%Y-%m-%d")).days + 1
@@ -615,6 +760,7 @@ def main() -> int:
         "unknown_models": sorted(unknown_models),
         "main_vs_sidechain": main_vs_sidechain(records),
         "per_skill": aggregate_per_skill(records),
+        "skill_efficiency": aggregate_skill_efficiency(invocations),
         "per_agent_type": aggregate_per_agent_type(records),
         "top_turns": top_turns(records, args.top),
     }

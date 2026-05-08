@@ -408,6 +408,129 @@ class WalkMainSessionTests(unittest.TestCase):
         self.assertEqual(records[0]["timestamp"], const_in)
 
 
+class WalkMainSessionInvocationsTests(unittest.TestCase):
+    def _write_jsonl(self, lines: list[dict]) -> Path:
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".jsonl", delete=False, encoding="utf-8")
+        for entry in lines:
+            tmp.write(json.dumps(entry) + "\n")
+        tmp.close()
+        return Path(tmp.name)
+
+    def test_walk_invocations_captures_ctx_at_invoke(self):
+        # Arrange — single invocation at 100K-token context, then 2 more turns
+        const_ctx_input = 90_000
+        const_ctx_cache_read = 10_000
+        const_expected_ctx = const_ctx_input + const_ctx_cache_read
+        const_timestamp = "2026-04-15T12:00:00Z"
+        lines = [
+            {"type": "assistant", "timestamp": const_timestamp,
+             "message": {"model": "claude-opus-4-7",
+                         "content": [{"type": "tool_use", "name": "Skill",
+                                      "input": {"skill": "deep-review"}}],
+                         "usage": {"input_tokens": const_ctx_input,
+                                   "cache_read_input_tokens": const_ctx_cache_read,
+                                   "output_tokens": 50}}},
+            {"type": "assistant", "timestamp": const_timestamp,
+             "message": {"model": "claude-opus-4-7",
+                         "content": [], "usage": {"input_tokens": 5,
+                                                  "output_tokens": 7}}},
+        ]
+        path = self._write_jsonl(lines)
+        unknown: set[str] = set()
+        # Act
+        invs = csa.walk_main_session_invocations(
+            path, "2026-04-01", "2026-04-30", unknown)
+        path.unlink()
+        # Assert
+        self.assertEqual(len(invs), 1)
+        self.assertEqual(invs[0]["skill"], "deep-review")
+        self.assertEqual(invs[0]["ctx_at_invoke"], const_expected_ctx)
+        self.assertEqual(invs[0]["n_turns"], 2)
+        # Wasted = ctx * cache_read_rate * n_turns = 100K * 0.5/1M * 2 = $0.10
+        self.assertAlmostEqual(invs[0]["wasted_cache_read_lb_usd"], 0.10, places=4)
+
+    def test_walk_invocations_user_turn_closes_window(self):
+        # Arrange — skill, two turns, user interrupts, then a turn that should NOT count
+        const_timestamp = "2026-04-15T12:00:00Z"
+        lines = [
+            {"type": "assistant", "timestamp": const_timestamp,
+             "message": {"model": "claude-opus-4-7",
+                         "content": [{"type": "tool_use", "name": "Skill",
+                                      "input": {"skill": "foo"}}],
+                         "usage": {"input_tokens": 100, "output_tokens": 1}}},
+            {"type": "user", "message": {"content": "stop"}, "timestamp": const_timestamp},
+            {"type": "assistant", "timestamp": const_timestamp,
+             "message": {"model": "claude-opus-4-7",
+                         "content": [], "usage": {"input_tokens": 1, "output_tokens": 1}}},
+        ]
+        path = self._write_jsonl(lines)
+        unknown: set[str] = set()
+        # Act
+        invs = csa.walk_main_session_invocations(
+            path, "2026-04-01", "2026-04-30", unknown)
+        path.unlink()
+        # Assert — window was just the invocation turn itself
+        self.assertEqual(len(invs), 1)
+        self.assertEqual(invs[0]["n_turns"], 1)
+
+    def test_walk_invocations_two_skills_in_one_session(self):
+        # Arrange — two distinct skill invocations separated by a user turn
+        const_timestamp = "2026-04-15T12:00:00Z"
+        lines = [
+            {"type": "assistant", "timestamp": const_timestamp,
+             "message": {"model": "claude-opus-4-7",
+                         "content": [{"type": "tool_use", "name": "Skill",
+                                      "input": {"skill": "alpha"}}],
+                         "usage": {"input_tokens": 1, "output_tokens": 1}}},
+            {"type": "user", "message": {"content": "next"}, "timestamp": const_timestamp},
+            {"type": "assistant", "timestamp": const_timestamp,
+             "message": {"model": "claude-opus-4-7",
+                         "content": [{"type": "tool_use", "name": "Skill",
+                                      "input": {"skill": "beta"}}],
+                         "usage": {"input_tokens": 2, "output_tokens": 2}}},
+        ]
+        path = self._write_jsonl(lines)
+        unknown: set[str] = set()
+        # Act
+        invs = csa.walk_main_session_invocations(
+            path, "2026-04-01", "2026-04-30", unknown)
+        path.unlink()
+        # Assert
+        self.assertEqual(len(invs), 2)
+        self.assertEqual([i["skill"] for i in invs], ["alpha", "beta"])
+
+
+class AggregateSkillEfficiencyTests(unittest.TestCase):
+    def test_aggregate_skill_efficiency_sorts_by_wasted_desc(self):
+        # Arrange
+        invocations = [
+            {"skill": "cheap", "ctx_at_invoke": 1000, "n_turns": 5,
+             "window_cost_usd": 1.0, "wasted_cache_read_lb_usd": 0.01},
+            {"skill": "bloated", "ctx_at_invoke": 400_000, "n_turns": 16,
+             "window_cost_usd": 3.0, "wasted_cache_read_lb_usd": 3.2},
+            {"skill": "bloated", "ctx_at_invoke": 350_000, "n_turns": 14,
+             "window_cost_usd": 2.5, "wasted_cache_read_lb_usd": 2.45},
+        ]
+        # Act
+        rows = csa.aggregate_skill_efficiency(invocations)
+        # Assert — bloated first (most total wasted)
+        self.assertEqual(rows[0]["skill"], "bloated")
+        self.assertEqual(rows[0]["invocations"], 2)
+        self.assertEqual(rows[0]["mean_turns_per_invocation"], 15.0)
+        self.assertEqual(rows[1]["skill"], "cheap")
+
+    def test_aggregate_skill_efficiency_pct_wasted_capped_correctly(self):
+        # Arrange — 80% wasted
+        invocations = [{"skill": "x", "ctx_at_invoke": 100_000, "n_turns": 10,
+                        "window_cost_usd": 5.0, "wasted_cache_read_lb_usd": 4.0}]
+        const_expected_pct = 80.0
+        # Act
+        rows = csa.aggregate_skill_efficiency(invocations)
+        # Assert
+        self.assertEqual(rows[0]["wasted_pct"], const_expected_pct)
+
+
 class CollectAllDedupTests(unittest.TestCase):
     def _write_jsonl(self, path: Path, lines: list[dict]) -> None:
         with path.open("w", encoding="utf-8") as fp:
