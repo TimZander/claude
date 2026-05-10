@@ -45,16 +45,17 @@ This is the single biggest mental-model upgrade I want everyone to walk out with
 - **The model** is the engine. Opus 4.7, Sonnet 4.6, Gemini, GPT-5, etc. This is what's actually thinking.
 - **The harness** is everything around the model: how it reads files, runs commands, remembers things, gets permission, integrates with your editor, manages context, calls tools, schedules work. Claude Code, Cursor, Antigravity, Cline are all harnesses.
 
-You pick both. They're independent in principle, linked in practice. Every cell in the grid below is a real combination someone is using productively today:
+You pick both. They're independent in principle, linked in practice. Every combination in the grid below is achievable today — some via translation layers (the dagger cells, where a proxy or router sits between the harness and the model API). The point isn't that every cell is first-class supported. It's that model and harness are *decoupled*: your choice on one doesn't lock you in on the other.
 
-| Harness ↓ / Model → | Opus 4.7 | Sonnet 4.6 | GPT 5.5 Pro | Gemini |
-|---|---|---|---|---|
-| **Claude Code** | ★ *my choice* | ✓ viable | ✓ viable | ✓ viable |
-| **Cursor** | ✓ viable | ✓ viable | ✓ viable | ✓ viable |
-| **Antigravity** | ✓ tested* | ✓ viable | ✓ viable | ✓ tested* |
-| **Cline / others** | ✓ viable | ✓ viable | ✓ viable | ✓ viable |
+| Harness ↓ / Model → | Opus 4.7 | Sonnet 4.6 | GPT 5.5 Pro | Gemini | Local (Ollama / similar) |
+|---|---|---|---|---|---|
+| **Claude Code** | ★ *my choice* | ✓ | ✓ † | ✓ † | ✓ † |
+| **Cursor** | ✓ | ✓ | ✓ | ✓ | ✓ |
+| **Antigravity** | ✓ * | ✓ | ✓ | ✓ * | ✓ † |
+| **Cline / others** | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 <sup>*via skill port — see portability paragraph below</sup>
+<sup>†via translation layer (proxy, router, or compat plugin)</sup>
 
 **My take on the model:** Opus has been qualitatively better than Gemini for the work I do — C#, ADO, SQL, Azure stack, messy real-world repos. I want to be honest that this is *my* domain experience, not a universal claim. If you're writing Python ML pipelines or React-heavy frontends, your mileage may vary. Try both on a representative task before committing.
 
