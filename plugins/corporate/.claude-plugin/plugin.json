@@ -1,0 +1,7 @@
+{
+  "name": "corporate",
+  "description": "Render all assistant prose in corporate jargon (consultant / all-hands register) while preserving code, paths, and command output verbatim — four flavors, per-repo config",
+  "author": {
+    "name": "Tim Zander"
+  }
+}
