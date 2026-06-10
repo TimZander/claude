@@ -2,3 +2,9 @@ __pycache__/
 *.pyc
 .claude/settings.local.json
 .claude-scratch/
+
+# Internal/private versions of presentation docs and proposals — never committed.
+# Author keeps `.local.md` copies on their laptop with team-specific framing,
+# names, and budget-ask details that don't belong in a public repo. The
+# committed counterpart (if any) is the sanitized version at the same base name.
+*.local.md
