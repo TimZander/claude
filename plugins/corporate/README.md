@@ -31,7 +31,7 @@ corporate mode" / "speak plainly".
 | `synergist` (default) | Smooth middle-management buzzword fluency — clear, collaborative, jargon-rich |
 | `executive` | C-suite gravitas — measured, terse imperatives, ownership language |
 | `hype` | Startup all-hands / sales-pitch energy — exclamatory and relentlessly upbeat |
-| `mission` | `synergist` during work + a four-line corporate mission-statement verse on task completion |
+| `mission` | `synergist` during work + a three-line haiku (5–7–5) on task completion |
 
 Switch any time: "executive flavor", "hype flavor", "mission flavor", etc.
 
