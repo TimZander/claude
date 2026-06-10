@@ -209,13 +209,19 @@ One paragraph restating what this change does and whether it achieves its goal.
 ## 🔍 Findings
 
 🔴 `path/to/file.ts:42` — Description of critical issue (must fix before merge)
+
 🔴 `path/to/file.ts:55` — Another critical issue
+
 🟡 `path/to/file.ts:78` — Warning: potential bug or maintenance issue
+
 🟡 `path/to/other.ts:12` — Another warning
+
 💡 `path/to/file.ts:90` — Suggestion: optional improvement
+
 ✅ `path/to/file.ts:30` — Something done well (use sparingly)
 
 Rules:
+- Rendering: Separate each finding with a blank line so the output is legible across all contexts (terminal, rendered markdown, `notify_user`, PR comments).
 - Every finding from ALL review steps goes here: correctness, security, breaking changes, assumptions, unintended consequences, performance, logging, style, naming, simplification — everything.
 - Each finding is ONE line: emoji, backtick-wrapped file:line, em dash, description.
 - Group findings by file when multiple findings affect the same file.
