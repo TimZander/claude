@@ -203,4 +203,28 @@ last="$(printf '%s\n' "$out" | tail -1)"
     || fail "expected story-b worktree on branches/200-story-b"
 pass "worktree from inside an existing worktree lands as a sibling, not nested (#155)"
 
+# 14. Regression (#155): --no-worktree run from INSIDE an existing worktree must switch
+#     THAT worktree onto the new branch (its documented "current checkout" semantics), not
+#     the main checkout. The fix resolves REPO_ROOT via --show-toplevel for in-place mode,
+#     so `git checkout -b` acts on the worktree the user is in — using the main root would
+#     silently switch the main checkout's branch instead.
+repo="$(fresh_repo)"
+( cd "$repo" && bash "$SUT" --slug "host-a" --id "300" >/dev/null 2>&1 ) \
+    || fail "setup: expected host-a worktree creation to succeed"
+wt_host="$repo/.claude/worktrees/300-host-a"
+[ -d "$wt_host" ] || fail "setup: expected host-a worktree to exist"
+out="$( cd "$wt_host" && bash "$SUT" --slug "child-b" --id "301" --no-worktree 2>/dev/null )"
+[ "$out" = "BRANCH=branches/301-child-b" ] \
+    || fail "expected BRANCH-only output for --no-worktree from inside a worktree, got: $out"
+# The CURRENT worktree (host-a) must now be on the new branch...
+( cd "$wt_host" && [ "$(git branch --show-current)" = "branches/301-child-b" ] ) \
+    || fail "expected host-a worktree to be switched onto branches/301-child-b"
+# ...and the MAIN checkout must be untouched (still on main).
+( cd "$repo" && [ "$(git branch --show-current)" = "main" ] ) \
+    || fail "main checkout was switched off main by an in-place run from inside a worktree"
+# No new worktree directory should have been created.
+[ ! -d "$repo/.claude/worktrees/301-child-b" ] \
+    || fail "expected NO worktree directory in --no-worktree mode"
+pass "--no-worktree from inside a worktree switches the current worktree, not main (#155)"
+
 echo "all smoke tests passed"
