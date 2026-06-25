@@ -76,8 +76,24 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     exit 1
 fi
 
-# Operate from the repo root so worktree paths resolve correctly.
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+# Resolve the root to operate from. The two modes want different roots:
+#
+#   Worktree mode: the new worktree must be created under the MAIN repo's
+#   .claude/worktrees/, even when this script is invoked from inside an existing
+#   worktree. `git rev-parse --show-toplevel` returns the *current* worktree's root, so
+#   using it here would nest the new worktree inside the current one (#155).
+#   `--git-common-dir` points at the main repo's shared .git directory (always the main
+#   checkout's, regardless of which worktree we're in), and its parent is the main root.
+#
+#   In-place mode (--no-worktree): `git checkout -b` switches the *current* checkout onto
+#   the new branch, so we must operate from the worktree the user is actually in —
+#   `--show-toplevel`. Using the main root here would silently switch the main checkout's
+#   branch instead of the current worktree's.
+if [ "$USE_WORKTREE" -eq 1 ]; then
+    REPO_ROOT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+else
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+fi
 cd "$REPO_ROOT"
 
 # Verify clean working tree — Git Hygiene Before New Work refuses to start on dirty state.
