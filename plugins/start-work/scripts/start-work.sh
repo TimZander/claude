@@ -76,8 +76,13 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     exit 1
 fi
 
-# Operate from the repo root so worktree paths resolve correctly.
-REPO_ROOT="$(git rev-parse --show-toplevel)"
+# Operate from the MAIN repo root so worktree paths resolve correctly even when this
+# script is invoked from inside an existing worktree. `git rev-parse --show-toplevel`
+# returns the *current* worktree's root, so using it would nest the new worktree inside
+# the current one. `--git-common-dir` points at the main repo's shared .git directory
+# (always the main checkout's, regardless of which worktree we're in), and its parent is
+# the main repo root.
+REPO_ROOT="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
 cd "$REPO_ROOT"
 
 # Verify clean working tree — Git Hygiene Before New Work refuses to start on dirty state.
