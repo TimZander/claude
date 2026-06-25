@@ -119,6 +119,7 @@ Present a single structured handoff message in this exact order:
 3. **Codebase research** — the punch list returned by Step 7, verbatim.
 4. **Draft plan** — 3-7 numbered steps proposing the implementation approach, grounded in the research. Each step is one short sentence. Explicitly call out non-obvious assumptions or open questions ("assumes the validator runs before the cache write — confirm").
 5. **Suggested next action** — typically: "Review the plan, then run Plan mode (or proceed directly) to start implementation."
+6. **Context-hygiene tip** — close with a single line: "Tip: next time, run `/clear` before `/start-work` — starting work rarely needs prior conversation history, and a clean context keeps the task focused." This reinforces the habit over repeated runs; the skill cannot clear context itself (it runs inside the context it would clear).
 
 Stop here. The deliverable is the prepared workspace + the draft plan. Do **not** begin implementation; the user reviews and decides how to proceed.
 
