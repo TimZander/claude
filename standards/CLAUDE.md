@@ -330,6 +330,19 @@ query {
 - **Never force push** (`--force`, `-f`, `--force-with-lease`) to any branch
 - **Always create new commits instead of amending** — amending requires force pushing to sync with the remote. When a pre-commit hook fails, fix the issue and create a new commit; do not `--amend` the previous one. Only amend if the user explicitly requests it and acknowledges the force push consequence.
 
+## Reading Git Config Safely
+
+When **reading** a git config value, always put the read flag *before* the key:
+
+- ✅ `git config --get user.email`
+- ❌ `git config user.email --get` <!-- footgun-allow: intentional counter-example -->
+
+The second form parses `--get` as the **value** and silently *sets* `user.email` to the literal string `--get` (exit 0, no output — so it looks like it worked). In a worktree this writes to the shared common `.git/config`, corrupting the author identity for **every** worktree of the repo. With a `.commit-email-rules` pre-commit hook in play, subsequent commits then fail or get misattributed to `--get`. The same ordering trap applies to `--get-all`, `--get-regexp`, and `--unset` — flag first, key second.
+
+**Recovery** — if `git var GIT_AUTHOR_IDENT` shows a bogus email (e.g. `--get`):
+1. Find where the bad value lives: `git config --show-origin --get user.email`
+2. Remove it: `git config --unset user.email` (repeat per scope if it was set at more than one level), then re-set the correct address: `git config user.email "you@example.com"`.
+
 ## Commit Email
 
 Each repository should use a consistent commit email that matches its hosting platform's identity:
