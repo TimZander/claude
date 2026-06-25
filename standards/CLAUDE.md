@@ -378,7 +378,7 @@ Before starting any new unit of work (picking up an issue, beginning a task that
 
 Do not start work on an existing feature branch unless the user explicitly asks to continue work on that branch.
 
-**Context hygiene:** Run `/clear` before starting a new unit of work (e.g., `/clear` then `/start-work`). Starting work almost never needs the prior conversation history, and a clean context keeps the new task focused and cheaper. Type the two prompts in succession — the clear is instant. Note this is a *user* habit, not something a skill can do for you: a skill runs inside the context it would clear, so it cannot reset its own history before executing (the "self-clearing paradox"). The harness has no hook or setting that clears context either (see issue #158).
+**Context hygiene:** Run `/clear` before starting a new unit of work (e.g., `/clear` then `/start-work`). Starting work almost never needs the prior conversation history, and a clean context keeps the new task focused and cheaper. Type the two prompts in succession — the clear is instant. Note this is a *user* habit, not something a skill can do for you: a skill runs inside the context it would clear, so it cannot reset its own history before executing (the "self-clearing paradox"). The harness has no hook or setting that clears context either.
 
 ## Branch Naming and PR Linking
 
