@@ -33,8 +33,8 @@ standards, then have each developer re-run the sync script.
 - Prefix private fields with `_` and use camelCase (e.g., `_connectionString`, `_logger`)
 - **Use the most restrictive accessibility that satisfies the requirement** — don't reach for `public` by habit; widen a member's visibility only when a caller actually needs it
 - **Prefer immutable properties:** use `{ get; }` or `{ get; init; }` for values set at construction and not changed afterward; use `private set` when the type mutates the value internally; reserve `public set` for properties external callers must genuinely reassign
-- **Prefer `record` types for immutable data** — DTOs, value objects, and result/config models — for init-only properties and value equality. Keep `class` for types with identity or mutable state, and for EF Core entities (record value-equality conflicts with EF change tracking)
-- **Exception — serialization/binding types:** types materialized by a serializer, ORM, or model binder (System.Text.Json, EF Core, ASP.NET model binding) may expose whatever setters those frameworks require — don't fight the framework to satisfy these rules
+- **Prefer `record` types for immutable data** — DTOs, value objects, and result/config models — for init-only properties and value equality. Keep `class` for types with identity or mutable state — e.g. persistence/ORM entities, where value-equality semantics break change tracking
+- **Exception — serialization/binding types:** types materialized by a serializer, ORM, or model binder (System.Text.Json, ASP.NET model binding) may expose whatever setters those frameworks require — don't fight the framework to satisfy these rules
 
 ## Unit Test Standards
 
