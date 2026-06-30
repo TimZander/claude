@@ -475,3 +475,17 @@ When reviewing code (PRs, branches, or staged changes), apply rigorous scrutiny.
 - **Trace unintended consequences** — check callers, state mutations, timing, and boundary conditions
 - **Audit assumptions** — list and verify every assumption the code makes; flag those without validation
 - **Demand test coverage** — "hard to test" means the code needs restructuring, not a pass on testing
+
+## PR Review Comment Anchoring
+
+When posting inline review comments on a PR (GitHub or Azure DevOps), anchor each comment to a line in a file the PR **actually modifies**. Both platforms render the "Files Changed" view by walking the PR's diff — threads anchored to unchanged files exist in the API but render only in the Overview tab, which the author is likely to miss.
+
+A natural anchor candidate is "where the symptom manifests" — a caller, downstream consumer, or test file lacking coverage. These are often unchanged by the PR and therefore the wrong anchor. The correct anchor is the **changed line that introduces the symptom**; describe the symptom site in the comment body.
+
+Before posting, verify each target file is in the diff:
+
+```bash
+git diff --name-only origin/<base>...HEAD
+```
+
+If anchoring on a changed line is genuinely impossible (e.g. the whole point is to propose a change to a file the PR doesn't touch), post as a PR-overview comment with no file/line anchor — never anchor on an unchanged file.
