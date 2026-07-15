@@ -394,6 +394,34 @@ assert_contains "REF_ID=42" "$out" "issue URL yields the right number"
 out=$(run_in "$ADO_REPO" --args "https://dev.azure.com/bgvone/p/_workitems/edit/7775")
 assert_contains "KIND=workitem" "$out" "ADO work-item URL resolves to a work item"
 
+# ── Multiple PR references ───────────────────────────────────────────
+# The leftmost reference is selected; the rest are reported, never targeted.
+out=$(run_in "$GH_REPO" --args "pr 3, and check specifically against work done in pr 4")
+assert_contains "REF_ID=3" "$out" "leftmost pr <N> is the selected target"
+assert_contains "OTHER_REFS=4" "$out" "the other PR number is reported, not selected"
+
+# Word order is a guess, not intent — this picks 4. OTHER_REFS is what lets the
+# caller surface that so the user can catch it.
+out=$(run_in "$GH_REPO" --args "check against work done in pr 4, then review pr 3")
+assert_contains "REF_ID=4" "$out" "reversed order selects the leftmost (4)"
+assert_contains "OTHER_REFS=3" "$out" "reversed order still reports the other (3)"
+
+out=$(run_in "$GH_REPO" --args "pr 170")
+assert_not_contains "OTHER_REFS" "$out" "a single reference reports no OTHER_REFS"
+
+out=$(run_in "$GH_REPO" --args "pr 170 and again pr 170")
+assert_not_contains "OTHER_REFS" "$out" "a repeated reference to the same PR is not an 'other'"
+
+out=$(run_in "$GH_REPO" --args "https://github.com/TimZander/claude/pull/170 compare with pr 4")
+assert_contains "REF_ID=170" "$out" "PR URL is selected over a later pr <N>"
+assert_contains "OTHER_REFS=4" "$out" "pr <N> alongside a PR URL is reported as other"
+
+out=$(run_in "$GH_REPO" --args "pr 3 vs pr 4 vs pr 5")
+assert_contains "OTHER_REFS=4,5" "$out" "several other references are reported in order"
+
+out=$(run_in "$GH_REPO" --args "focus on error handling")
+assert_not_contains "OTHER_REFS" "$out" "no reference reports no OTHER_REFS"
+
 # ── Token boundaries ─────────────────────────────────────────────────
 out=$(run_in "$GH_REPO" --args "compr 4 and other words")
 assert_contains "KIND=none" "$out" "'compr 4' does not match the pr token"

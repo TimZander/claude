@@ -22,6 +22,9 @@ set -euo pipefail
 #                               closed or abandoned. An unrecognized upstream
 #                               state passes through verbatim, so treat any other
 #                               value as "unknown, surface it to the user".
+#   OTHER_REFS=<N>[,<N>...]     Other PR numbers mentioned in the arguments but
+#                               NOT selected (KIND=pr only; omitted when there
+#                               are none). See MULTIPLE REFERENCES below.
 #   CURRENT_BRANCH=<name>       Checked-out branch (empty when detached)
 #   BRANCH_MATCH=true|false     SOURCE_BRANCH == CURRENT_BRANCH (KIND=pr only).
 #                               Never true on an empty branch name.
@@ -46,6 +49,14 @@ set -euo pipefail
 # KNOWN AMBIGUITY: `pr <N>` is matched anywhere in the arguments, so prose such
 # as "regression from PR 4" parses as a PR selector. The caller MUST confirm
 # with the user before switching branches, which is what bounds the damage.
+#
+# MULTIPLE REFERENCES: exactly one reference is ever selected — the leftmost,
+# which matches how people write ("pr 3, and check against work done in pr 4"
+# means review 3). But word order is a guess, not intent: "check pr 4, then
+# review pr 3" selects 4. Rather than silently discard that knowledge, every
+# other PR number found is reported in OTHER_REFS so the caller can name them
+# in its confirmation prompt and let the user catch a wrong pick. A mention is
+# never a selector — OTHER_REFS is informational only.
 #
 # Exit codes:
 #   0 — Resolved (including KIND=none: no reference present, review HEAD)
@@ -248,6 +259,24 @@ origin_repo_name() {
     printf '%s' "${url##*/}"
 }
 
+# Every PR number mentioned in the arguments, space-separated, in order of
+# appearance — from PR URLs and from `pr <N>` tokens. Bash regex has no global
+# match, so each match is consumed from a working copy of the text until none
+# remain. BASH_REMATCH[0] always contains "pr" or "/pull/", so it is never empty
+# and the loop always makes progress.
+collect_pr_refs() {
+    local text="$1" found=""
+    while [[ "$text" =~ (https?://[^[:space:]]+)/(pull|pullrequest)/([0-9]+) ]]; do
+        found+="${BASH_REMATCH[3]} "
+        text="${text/"${BASH_REMATCH[0]}"/ }"
+    done
+    while [[ "$text" =~ ${BOUNDARY_L}[Pp][Rr][[:space:]]+#?([0-9]+)${BOUNDARY_R} ]]; do
+        found+="${BASH_REMATCH[2]} "
+        text="${text/"${BASH_REMATCH[0]}"/ }"
+    done
+    printf '%s' "$found"
+}
+
 if [[ "$KIND" == "pr" || "$KIND" == "ambiguous" ]]; then
     if [[ "$HOST" == "github" ]]; then
         require_cli gh
@@ -353,6 +382,21 @@ if [[ "$KIND" == "ambiguous" ]]; then
     exit 1
 fi
 
+# ── Other PR references mentioned but not selected ───────────────────
+
+OTHER_REFS=""
+if [[ "$KIND" == "pr" ]]; then
+    for ref in $(collect_pr_refs "$ARGS"); do
+        if [[ "$ref" == "$REF_ID" ]]; then
+            continue
+        fi
+        case ",$OTHER_REFS," in
+            *",$ref,"*) continue ;;
+        esac
+        OTHER_REFS+="${OTHER_REFS:+,}$ref"
+    done
+fi
+
 # ── Report ───────────────────────────────────────────────────────────
 
 echo "HOST=$HOST"
@@ -370,6 +414,9 @@ if [[ "$KIND" == "pr" ]]; then
         echo "BRANCH_MATCH=true"
     else
         echo "BRANCH_MATCH=false"
+    fi
+    if [[ -n "$OTHER_REFS" ]]; then
+        echo "OTHER_REFS=$OTHER_REFS"
     fi
 fi
 echo "CURRENT_BRANCH=$CURRENT_BRANCH"
