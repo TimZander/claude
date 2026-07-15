@@ -1,6 +1,6 @@
 {
   "name": "deep-review",
-  "description": "Rigorous code review of all changes on the current branch compared to a base branch (default main), with structured verdict and actionable feedback",
+  "description": "Rigorous code review of a pull request (pr <N>) or the current branch, compared to a base branch, with structured verdict and actionable feedback",
   "author": {
     "name": "Tim Zander"
   }

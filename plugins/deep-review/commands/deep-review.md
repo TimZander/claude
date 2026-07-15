@@ -1,15 +1,15 @@
 ---
 name: deep-review
-description: Perform a critical code review of all changes on the current branch compared to a base branch (default main)
+description: Perform a critical code review of a pull request (`pr <N>`) or all changes on the current branch, compared to a base branch
 disable-model-invocation: false # allows agents to invoke via Skill tool; all other plugins use true
 allowed-tools: Bash, Read, Grep, Glob, WebFetch, Agent
 model: opus
 ---
 
 <!-- "ultrathink" triggers extended chain-of-thought reasoning in the model. Verify it still works when upgrading models. -->
-You are a ruthless code reviewer performing deep analysis of every change on the current branch compared to the base branch. ultrathink
+You are a ruthless code reviewer performing deep analysis of every change on the branch under review — the current branch, or the branch selected by a PR reference or `branch:` token — compared to the base branch. ultrathink
 
-**Base branch:** Unless overridden by a `base:<name>` argument, the base branch is `main`. See Step 1 for how this is resolved into git command placeholders.
+**Base branch:** When a PR reference is supplied, the base branch is the PR's own target branch. Otherwise it is `main`. An explicit `base:<name>` argument overrides both. See Step 1 for how this is resolved into git command placeholders.
 
 **Your mandate:** Find every problem — all of them, in one pass. Do not self-limit, do not summarize, do not save findings for a follow-up run. A complete review surfaces every critical issue, every warning, AND every suggestion simultaneously. Length is not a concern; thoroughness is. Do not be agreeable. Do not give the benefit of the doubt. Do not hand-wave past code that "looks fine." If you cannot explain exactly why a line is correct, treat it as suspicious.
 
@@ -34,12 +34,15 @@ If the arguments are empty or blank, skip this section entirely and proceed with
 Otherwise, use the text as **additional context** for your review. It may contain any of the following:
 
 - **A focus area** — free-form text describing what to pay special attention to (e.g., "focus on error handling" or "check thread safety"). Weight your review toward these concerns without ignoring other issues.
-- **A GitHub issue or PR URL** — use `gh issue view <number>` or `gh pr view <number>` (extract the number from the URL) to fetch the description and acceptance criteria. Use this to evaluate whether the implementation actually satisfies the requirements.
-- **An Azure DevOps work item URL** — use `az boards work-item show --id <id> --org <org-url> -o json` to fetch the work item details (extract the numeric ID from the URL). Use the acceptance criteria and description to evaluate whether the implementation satisfies the requirements.
-- **A plain URL** — fetch it with `WebFetch` and use the content as context for your review.
-- **A branch target** (`branch:<name>`, e.g., `branch:feature/new-api`) — review this branch instead of the current HEAD. Designed for use with the Agent tool's `isolation: "worktree"` mode, where each agent gets its own worktree and can safely checkout a different branch without affecting other agents. Only the remote-tracking state (`origin/<name>`) is reviewed — local-only commits that have not been pushed will not be included. Strip the `branch:<name>` token from the arguments before processing other inputs. Only one `branch:` token is allowed; if multiple are provided, use the first and ignore the rest.
-- **A base branch** (`base:<name>`, e.g., `base:develop`) — compare against this branch instead of `main`. Use this when the target branch will merge into a branch other than `main` (e.g., `develop`, `release/2.0`). Strip the `base:<name>` token from the arguments before processing other inputs. Only one `base:` token is allowed; if multiple are provided, use the first and ignore the rest. If the value after `base:` is empty or blank, fall back to `main`.
-- **A combination** — multiple inputs separated by spaces or newlines. Process all of them.
+- **A PR reference** (`pr <N>`, a PR URL, or `#<N>`) — **selects which branch to review**, and additionally supplies the PR's description as context. This is the authoritative review target: it overrides the current `HEAD`, and is itself overridden only by an explicit `branch:` token. Resolution is handled by `resolve-pr.sh` — see Step 1a. The PR's own target branch becomes the default review base. Strip the PR-reference token from the arguments before treating the remainder as a focus area, exactly as `branch:` and `base:` do — otherwise `pr 4506` is re-read as free-form prose.
+  - On **GitHub**, issues and PRs share one numbering counter, so `#<N>` names exactly one object; it resolves to whichever exists. A `#<N>` that names an issue is context only.
+  - On **Azure DevOps**, `#<N>` is a **work item**, never a PR. ADO numbers work items and pull requests from **separate** counters, so `#7775` may be both work item 7775 and PR 7775 and the number alone cannot disambiguate. Use the explicit `pr <N>` token to select an ADO PR branch.
+- **A GitHub issue** (an issue URL, or a `#<N>` that resolves to an issue) — use `gh issue view <number>` to fetch the description and acceptance criteria. Use this to evaluate whether the implementation actually satisfies the requirements. Context only — it does not change which branch is reviewed.
+- **An Azure DevOps work item** (a work item URL, or `#<N>` on an ADO remote) — use `az boards work-item show --id <id> --org <org-url> -o json` to fetch the work item details. Use the acceptance criteria and description to evaluate whether the implementation satisfies the requirements. Context only — it does not change which branch is reviewed.
+- **A plain URL** — fetch it with `WebFetch` and use the content as context for your review. This applies only to URLs that are *not* PR, issue, or work-item references — those are handled above; do not additionally `WebFetch` a URL that `resolve-pr.sh` already resolved.
+- **A branch target** (`branch:<name>`, e.g., `branch:feature/new-api`) — review this branch instead of the current HEAD. Designed for use with the Agent tool's `isolation: "worktree"` mode, where each agent gets its own worktree and can safely checkout a different branch without affecting other agents. Only the remote-tracking state (`origin/<name>`) is reviewed — local-only commits that have not been pushed will not be included. Strip the `branch:<name>` token from the arguments before processing other inputs. Only one `branch:` token is allowed; if multiple are provided, use the first and ignore the rest. An explicit `branch:` **wins over a PR-derived branch** — if both are supplied, review `branch:` and say so in the 🎯 Context line.
+- **A base branch** (`base:<name>`, e.g., `base:develop`) — compare against this branch instead of the default. Use this when the target branch will merge into a branch other than `main` (e.g., `develop`, `release/2.0`). Strip the `base:<name>` token from the arguments before processing other inputs. Only one `base:` token is allowed; if multiple are provided, use the first and ignore the rest. If the value after `base:` is empty or blank, fall back to the PR's target branch when a PR was resolved, otherwise `main`. An explicit `base:` wins over the PR's target branch.
+- **A combination** — multiple inputs separated by spaces or newlines. Process all of them, with one limit: `resolve-pr.sh` resolves **at most one** reference, by the precedence `PR URL` > `pr <N>` > work-item URL > issue URL > `#<N>`. So `pr 4506` plus an issue URL resolves the PR and ignores the issue URL. If you need the ignored item's content as context, fetch it yourself per the bullets above.
 
 When context is provided, add a **🎯 Context** line at the very top of your output (before ⚖️ Verdict) summarizing what additional context you used and how it informed your review. This is the ONLY additional section allowed — it goes above the five standard sections, not inside them. When evaluating Feature Fitness (Step 4), cross-reference the requirements from the context to verify the implementation addresses what was asked for — flag any gaps or scope drift.
 
@@ -62,9 +65,41 @@ Your final output MUST follow the exact template in Step 11. Violations that wil
 
 ## Step 1: Gather Context
 
+### Step 1a: Resolve the review target
+
+**Skip this step entirely if the arguments are empty.** Otherwise, always run it before gathering any diff — reviewing the wrong branch produces a confident, complete, and entirely useless review.
+
+**Locate the script.** Use Glob with the pattern `**/deep-review/**/resolve-pr.sh` rooted at the user's home directory `~/.claude/plugins` (resolve `~` to an absolute path before calling Glob). If Glob returns multiple candidates, skip any whose version directory (the parent of `scripts/`) contains a `.orphaned_at` marker (check with Read). If zero candidates remain, tell the user the plugin may need reinstalling and stop. If multiple remain, use the first (Glob returns most-recently-modified first).
+
+**Run it,** passing the arguments verbatim:
+
+```bash
+bash <resolved-script-path> --args "<the arguments>"
+```
+
+It prints `KEY=value` lines on stdout. `HOST`, `KIND`, `CURRENT_BRANCH` and `IN_WORKTREE` are always present. `REF_ID` appears whenever a reference was found; `SOURCE_BRANCH`, `TARGET_BRANCH`, `STATE` and `BRANCH_MATCH` appear only when `KIND=pr`; and `OTHER_REFS` appears only when `KIND=pr` and the arguments named more PR numbers than the one selected. Errors go to stderr, so stdout is never anything but `KEY=value` lines.
+
+If it exits non-zero, surface its stderr verbatim and stop — **do not fall back to reviewing `HEAD`**, which is the exact failure this step exists to prevent. The script only **reports**; it never checks anything out, so the decision below is yours to make and the user's to see.
+
+`HOST=unknown` means the repo is neither GitHub nor Azure DevOps (or has no `origin`). That is **not** an error and never blocks a review: PR references cannot be resolved there, so `KIND` will be `none` and you simply review `HEAD` as always.
+
+Act on `KIND`:
+
+- **`none`** — no reference supplied, or none resolvable on this host. Review `HEAD` as usual.
+- **`issue`** / **`workitem`** — fetch it for context per the Context Input section. Review `HEAD`; the reference does not select a branch.
+- **`pr`** — the PR selects the review target, **unless an explicit `branch:<name>` token was also supplied, in which case `branch:` wins**: skip steps 1-3 below, note the override in the 🎯 Context line, and let the `branch:` procedure handle the checkout. Otherwise:
+  1. Review `SOURCE_BRANCH`, and use `TARGET_BRANCH` as `BASE_NAME` unless an explicit `base:` token overrides it. Do **not** default the base to `main` — a PR into `develop` reviewed against `main` reports every unrelated commit as a change.
+  2. **If `BRANCH_MATCH=false`, warn and ask for confirmation before switching.** Tell the user plainly that the checked-out branch (`CURRENT_BRANCH`, or "detached HEAD" when it is empty) is not the PR's source branch, that you will check out `SOURCE_BRANCH`, and that this changes their working directory. Wait for confirmation — a bare `pr <N>` can be a false positive (prose like "regression from PR 4" parses as a reference), and this gate is what catches it. If `IN_WORKTREE=true`, say so explicitly: a worktree's checkout is frequently unrelated to the requested PR, and that is precisely how a wrong-branch review slips through unnoticed.
+  2b. **If `OTHER_REFS` is present, name those PRs in the same prompt** — e.g. "reviewing PR #3; also saw #4 mentioned, using #3 as the target." Only the leftmost reference is selected, which matches how people write ("pr 3, and check against work done in pr 4"), but word order is a guess rather than intent: "check pr 4, then review pr 3" selects #4. Surfacing the others is what turns a silent wrong pick into a question the user can answer. Treat the unselected numbers as review context, not as targets.
+  3. Check out `SOURCE_BRANCH`: save `ORIG_REF=$(git symbolic-ref -q HEAD || git rev-parse HEAD)` **before** any checkout, then `git fetch origin <SOURCE_BRANCH> && git checkout --detach origin/<SOURCE_BRANCH>`. If either fails, report the error and stop. Restore with `git checkout $ORIG_REF 2>/dev/null` after the review (skip when `IN_WORKTREE=true` — the worktree is disposable). Capture `ORIG_REF` exactly once; re-reading it after a checkout records the detached head and silently strands the user there.
+  4. Fetch the PR's description and use it as review context — branch selection and context are not exclusive.
+  5. **If `STATE` is not `open`**, note it in the 🎯 Context line (e.g. "PR #4506 is merged — reviewing after the fact"). Reviewing a merged or abandoned PR is legitimate, but it must never be silent. `STATE` normally reads `open`, `merged`, `closed` or `abandoned`; any other value is an unrecognized upstream state — surface it verbatim rather than guessing.
+
+**Before any checkout (PR or `branch:`), check for uncommitted changes** with `git status --porcelain`. If the tree is dirty, stop and tell the user: `git checkout --detach` would either carry their changes onto the reviewed branch — where they would be reported as that branch's uncommitted diff — or abort outright. Let them commit or stash first.
+
 **If a `branch:<name>` target was specified in the arguments:** This feature is intended for use inside a worktree-isolated Agent. To detect whether you are in a worktree, run `test -f .git` — worktrees have a `.git` **file** (not a directory). If you are NOT in a worktree, warn the user that `branch:<name>` will switch their working directory and ask for confirmation before proceeding. Before checking out, save the current ref so it can be restored: `ORIG_REF=$(git symbolic-ref -q HEAD || git rev-parse HEAD)`. Run `git fetch origin <name> && git checkout --detach origin/<name>` — if either command fails, report the error and stop. Using `--detach` avoids "already checked out" errors in git worktrees. After the review is complete, restore the original state: `git checkout $ORIG_REF 2>/dev/null` (skip this step if running inside a worktree, since the worktree is disposable).
 
-**Resolve the base branch** from the arguments (default `main`). Define two variables for use in the commands below:
+**Resolve the base branch** in this precedence order: an explicit `base:<name>` token, then the `TARGET_BRANCH` reported by Step 1a when a PR was resolved **and its branch is the one being reviewed**, then `main`. (When `branch:` overrode a PR-derived branch, the PR's target no longer describes the reviewed branch — fall through to `main` unless `base:` says otherwise.) Define two variables for use in the commands below:
 - `BASE_NAME` = the bare branch name (e.g., `develop`). Used for `git fetch`.
 - `BASE_REF` = `origin/<BASE_NAME>` (e.g., `origin/develop`). Used for `git log` and `git diff`.
 
