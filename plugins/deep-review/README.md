@@ -1,6 +1,6 @@
 # deep-review
 
-Rigorous code review plugin that reviews all changes on the current branch compared to a base branch (default `main`).
+Rigorous code review plugin that reviews a pull request — or all changes on the current branch — against a base branch.
 
 > **Renamed from `review-code`** to avoid conflict with Claude's built-in `/review` skill.
 > If you have `review-code` installed, uninstall it and install `deep-review`:
@@ -25,20 +25,34 @@ Provide free-form text to direct attention toward specific concerns:
 /deep-review focus on thread safety and error handling
 ```
 
-### With issue/PR context
+### Reviewing a pull request
 
-Pass a GitHub issue, PR, or Azure DevOps work item URL. The review will fetch the requirements and cross-reference them against the implementation:
+Pass a PR reference and the review targets **that PR's source branch** — not whatever happens to be checked out — and compares it against the PR's own target branch. The PR description is pulled in as requirements context at the same time.
+
+```
+/deep-review pr 4506
+/deep-review #99
+/deep-review https://github.com/org/repo/pull/99
+/deep-review pr 4506 check auth edge cases
+```
+
+Works on both GitHub and Azure DevOps; the host is detected from the `origin` remote. If the resolved PR branch is not the one you have checked out, the review says so before it starts rather than silently reviewing the wrong change. If the PR is already merged or abandoned, it says that too.
+
+**`#<N>` means different things per host.** On GitHub, issues and PRs share one numbering counter, so `#<N>` resolves to whichever exists — a PR selects the branch, an issue is context only. On Azure DevOps, work items and PRs are numbered **separately**, so `#<N>` is always read as a work item (context only) and never selects a branch. Use the explicit `pr <N>` form for an ADO PR.
+
+### With issue/work-item context
+
+Pass a GitHub issue or Azure DevOps work item URL. The review fetches the requirements and cross-references them against the implementation. These supply context only — they do not change which branch is reviewed:
 
 ```
 /deep-review https://github.com/org/repo/issues/42
-/deep-review https://github.com/org/repo/pull/99
 /deep-review https://dev.azure.com/org/project/_workitems/edit/1234
-/deep-review https://github.com/org/repo/pull/99 check auth edge cases
+/deep-review #7775 focus on error handling
 ```
 
 ### With a custom base branch
 
-By default, changes are compared to `main`. Use `base:<name>` to compare against a different branch:
+Changes are compared to the PR's target branch when a PR was given, and to `main` otherwise. Use `base:<name>` to override either:
 
 ```
 /deep-review base:develop
@@ -55,12 +69,15 @@ Use `branch:<name>` to review a specific branch instead of the current HEAD. Thi
 /deep-review branch:feature/new-api base:develop
 ```
 
+An explicit `branch:` wins over a branch derived from a PR reference.
+
 ### Combining arguments
 
 All argument types can be combined freely:
 
 ```
 /deep-review base:develop focus on auth edge cases
+/deep-review pr 4506 focus on error handling
 /deep-review branch:feature/auth base:develop https://github.com/org/repo/issues/42
 ```
 
