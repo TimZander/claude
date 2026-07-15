@@ -36,7 +36,9 @@ Pass a PR reference and the review targets **that PR's source branch** — not w
 /deep-review pr 4506 check auth edge cases
 ```
 
-Works on both GitHub and Azure DevOps; the host is detected from the `origin` remote. If the resolved PR branch is not the one you have checked out, the review says so before it starts rather than silently reviewing the wrong change. If the PR is already merged or abandoned, it says that too.
+Works on both GitHub and Azure DevOps; the host is detected from the `origin` remote. If the PR is already merged or abandoned, the review says so rather than treating it as open.
+
+**This checks out the PR's branch.** When the resolved branch is not the one you have checked out, the review tells you and **asks before switching** — it detaches your working directory to `origin/<source-branch>` and restores your original ref afterwards. It refuses to start if your tree is dirty, and it never switches silently. Requires a clean tree, `gh` (GitHub) or `az` with the `azure-devops` extension (ADO). Fork PRs are not supported: their source branch does not exist on `origin`, so use `gh pr checkout <N>` and then `branch:<name>`.
 
 **`#<N>` means different things per host.** On GitHub, issues and PRs share one numbering counter, so `#<N>` resolves to whichever exists — a PR selects the branch, an issue is context only. On Azure DevOps, work items and PRs are numbered **separately**, so `#<N>` is always read as a work item (context only) and never selects a branch. Use the explicit `pr <N>` form for an ADO PR.
 

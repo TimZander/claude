@@ -6,24 +6,35 @@ set -euo pipefail
 # plugin command before it gathers the diff.
 #
 # The script REPORTS; it never checks anything out. The caller decides whether
-# to switch branches (and confirms with the user first), so the destructive
+# to switch branches (and must confirm with the user first), so the destructive
 # step stays visible.
 #
 # Usage:
 #   bash resolve-pr.sh --args "<raw /deep-review arguments>"
 #
 # Output (KEY=value lines on stdout; parse the ones you need):
-#   HOST=github|azdo|unknown   Hosting platform, detected from the origin remote
-#   KIND=pr|issue|workitem|none  What the reference resolved to
-#   REF_ID=<N>                 The referenced number (absent when KIND=none)
-#   SOURCE_BRANCH=<name>       PR's source branch, bare (KIND=pr only)
-#   TARGET_BRANCH=<name>       PR's target branch, bare (KIND=pr only)
-#   STATE=open|merged|closed|abandoned   Normalized PR state (KIND=pr only)
-#   CURRENT_BRANCH=<name>      Checked-out branch ("" when detached)
-#   BRANCH_MATCH=true|false    SOURCE_BRANCH == CURRENT_BRANCH (KIND=pr only)
-#   IN_WORKTREE=true|false     Whether the cwd is a git worktree
+#   HOST=github|azdo            Hosting platform, detected from the origin remote
+#   KIND=pr|issue|workitem|none What the reference resolved to
+#   REF_ID=<N>                  The referenced number (omitted when KIND=none)
+#   SOURCE_BRANCH=<name>        PR's source branch, bare (KIND=pr only)
+#   TARGET_BRANCH=<name>        PR's target branch, bare (KIND=pr only)
+#   STATE=<state>               Normalized PR state (KIND=pr only): open, merged,
+#                               closed or abandoned. An unrecognized upstream
+#                               state passes through verbatim, so treat any other
+#                               value as "unknown, surface it to the user".
+#   CURRENT_BRANCH=<name>       Checked-out branch (empty when detached)
+#   BRANCH_MATCH=true|false     SOURCE_BRANCH == CURRENT_BRANCH (KIND=pr only).
+#                               Never true on an empty branch name.
+#   IN_WORKTREE=true|false      Whether the repo is a git worktree
 #
-# Token precedence: PR URL > `pr <N>` > `#<N>`. Only the first match is used.
+# Errors go to stderr; stdout carries nothing but KEY=value lines.
+#
+# Token precedence, first match wins:
+#   PR URL > `pr <N>` > work-item URL > issue URL > `#<N>`
+#
+# `pr <N>` outranks the context URLs deliberately: it selects the review target,
+# and a dropped selector means reviewing the wrong branch, whereas a dropped
+# context URL only means less context.
 #
 # `#<N>` is deliberately host-dependent. GitHub numbers issues and PRs from one
 # shared counter, so `#<N>` names exactly one object and resolves cleanly. Azure
@@ -32,60 +43,145 @@ set -euo pipefail
 # renders as a work-item mention in the ADO UI. So on ADO, `#<N>` is a work item
 # (context only) and never selects a branch; ADO users pass `pr <N>` instead.
 #
+# KNOWN AMBIGUITY: `pr <N>` is matched anywhere in the arguments, so prose such
+# as "regression from PR 4" parses as a PR selector. The caller MUST confirm
+# with the user before switching branches, which is what bounds the damage.
+#
 # Exit codes:
 #   0 — Resolved (including KIND=none: no reference present, review HEAD)
-#   1 — Error (no origin remote, unsupported host, lookup failed)
+#   1 — Error (no origin remote, unsupported host, missing CLI, lookup failed,
+#       lookup returned no branch, cross-host or cross-repo reference)
 
 # ── Arguments ────────────────────────────────────────────────────────
 
 ARGS=""
+ARGS_SEEN=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --args) ARGS="${2:-}"; shift 2 ;;
-        *)      echo "Error: Unknown argument: $1" >&2; exit 1 ;;
+        --args)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --args requires a value." >&2
+                exit 1
+            fi
+            if [[ "$ARGS_SEEN" == true ]]; then
+                echo "Error: --args given more than once." >&2
+                exit 1
+            fi
+            ARGS="$2"
+            ARGS_SEEN=true
+            shift 2
+            ;;
+        *)
+            echo "Error: Unknown argument: $1" >&2
+            exit 1
+            ;;
     esac
 done
 
+# ── Scratch space for captured stderr ────────────────────────────────
+# gh and az must never have their stderr folded into the value stream: both
+# emit notices on success (gh upgrade banners, "az repos pr is in preview"),
+# and a merged notice becomes the first line — i.e. the branch name.
+
+ERR_FILE=""
+cleanup() {
+    if [[ -n "$ERR_FILE" ]]; then
+        rm -f "$ERR_FILE"
+    fi
+}
+trap cleanup EXIT INT TERM
+ERR_FILE=$(mktemp)
+
+die_with_stderr() {
+    echo "Error: $1" >&2
+    if [[ -s "$ERR_FILE" ]]; then
+        sed 's/^/  /' "$ERR_FILE" >&2
+    fi
+    exit 1
+}
+
+require_cli() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "Error: '$1' is required to resolve a pull request on this host, but it is not on PATH." >&2
+        exit 1
+    fi
+}
+
 # ── Detect platform ──────────────────────────────────────────────────
-# Copied from craft-pr/scripts/create-pr.sh rather than sourced: plugins are
-# installed independently, so each must stand alone at runtime.
+# Host detection derived from craft-pr/scripts/create-pr.sh, but matched on the
+# URL's HOST COMPONENT rather than as a substring of the whole URL: a substring
+# test misclassifies e.g. https://gitlab.com/me/github.com-mirror.git. Copied
+# rather than sourced — plugins are installed independently and must stand alone.
+
+# Extract the host component from a git remote URL, handling https://,
+# ssh://, and scp-style (git@host:path) forms.
+remote_host() {
+    local url="$1"
+    url="${url#*://}"   # strip scheme
+    url="${url#*@}"     # strip userinfo
+    url="${url%%[:/]*}" # keep up to the first : or /
+    printf '%s' "$url"
+}
 
 REMOTE_URL=$(git remote get-url origin 2>/dev/null) || {
     echo "Error: No 'origin' remote found." >&2
     exit 1
 }
 
-HOST=""
-if [[ "$REMOTE_URL" == *"github.com"* ]]; then
-    HOST="github"
-elif [[ "$REMOTE_URL" == *"dev.azure.com"* ]] || [[ "$REMOTE_URL" == *"visualstudio.com"* ]]; then
-    HOST="azdo"
-else
-    echo "Error: Could not determine hosting platform from remote URL: $REMOTE_URL" >&2
-    echo "PR reference resolution is supported for GitHub and Azure DevOps." >&2
-    exit 1
-fi
+REMOTE_HOST=$(remote_host "$REMOTE_URL")
+
+case "$REMOTE_HOST" in
+    github.com|*.github.com)
+        HOST="github" ;;
+    dev.azure.com|ssh.dev.azure.com|*.visualstudio.com)
+        HOST="azdo" ;;
+    *)
+        echo "Error: Could not determine hosting platform from remote URL: $REMOTE_URL" >&2
+        echo "PR reference resolution is supported for GitHub and Azure DevOps." >&2
+        exit 1
+        ;;
+esac
 
 # ── Git context ──────────────────────────────────────────────────────
 
-# Worktrees have a .git *file*; a normal checkout has a .git directory.
+# A worktree's git dir sits under the main repo's git dir, so the two differ.
+# `test -f .git` would also work but only from the repo root — it silently
+# reports false from any subdirectory, and true inside a submodule.
 IN_WORKTREE=false
-if [[ -f .git ]]; then
+GIT_DIR_PATH=$(git rev-parse --absolute-git-dir 2>/dev/null || printf '')
+GIT_COMMON_DIR=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || printf '')
+if [[ -n "$GIT_DIR_PATH" && -n "$GIT_COMMON_DIR" && "$GIT_DIR_PATH" != "$GIT_COMMON_DIR" ]]; then
     IN_WORKTREE=true
 fi
 
 CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || true)
 
 # ── Parse the reference ──────────────────────────────────────────────
-# Precedence: PR URL, then `pr <N>`, then `#<N>`.
 
 KIND="none"
 REF_ID=""
 
+# Boundaries are non-alphanumeric rather than whitespace, so that `(pr 170)`,
+# `PR #170, focus on tests` and `pr 4506.` all match while `compr 4` and
+# `pr 170x` do not. A whitespace-only boundary silently degraded a trailing
+# comma into "no reference" — i.e. into a review of the wrong branch.
+BOUNDARY_L='(^|[^0-9A-Za-z])'
+BOUNDARY_R='($|[^0-9A-Za-z])'
+
 # GitHub:  https://github.com/<owner>/<repo>/pull/<N>
 # ADO:     https://dev.azure.com/<org>/<project>/_git/<repo>/pullrequest/<N>
-if [[ "$ARGS" =~ https?://[^[:space:]]*/(pull|pullrequest)/([0-9]+) ]]; then
+if [[ "$ARGS" =~ (https?://[^[:space:]]+)/(pull|pullrequest)/([0-9]+) ]]; then
+    KIND="pr"
+    REF_ID="${BASH_REMATCH[3]}"
+    PR_URL_HOST=$(remote_host "${BASH_REMATCH[1]}")
+    if [[ "$PR_URL_HOST" != "$REMOTE_HOST" ]]; then
+        echo "Error: PR URL points at '$PR_URL_HOST' but origin is '$REMOTE_HOST'." >&2
+        echo "Refusing to look up a PR number from one host against another." >&2
+        exit 1
+    fi
+# Bare `pr <N>` — outranks the context URLs below; see the header.
+elif [[ "$ARGS" =~ ${BOUNDARY_L}[Pp][Rr][[:space:]]+#?([0-9]+)${BOUNDARY_R} ]]; then
     KIND="pr"
     REF_ID="${BASH_REMATCH[2]}"
 # ADO work item URL: .../_workitems/edit/<N>
@@ -96,12 +192,8 @@ elif [[ "$ARGS" =~ https?://[^[:space:]]*/_workitems/edit/([0-9]+) ]]; then
 elif [[ "$ARGS" =~ https?://[^[:space:]]*/issues/([0-9]+) ]]; then
     KIND="issue"
     REF_ID="${BASH_REMATCH[1]}"
-# Bare `pr <N>` (case-insensitive, on a word boundary so "compr 4" won't match)
-elif [[ "$ARGS" =~ (^|[[:space:]])[Pp][Rr][[:space:]]+#?([0-9]+)($|[[:space:]]) ]]; then
-    KIND="pr"
-    REF_ID="${BASH_REMATCH[2]}"
 # Bare `#<N>` — meaning depends on the host (see header).
-elif [[ "$ARGS" =~ (^|[[:space:]])#([0-9]+)($|[[:space:]]) ]]; then
+elif [[ "$ARGS" =~ ${BOUNDARY_L}#([0-9]+)${BOUNDARY_R} ]]; then
     REF_ID="${BASH_REMATCH[2]}"
     if [[ "$HOST" == "azdo" ]]; then
         KIND="workitem"
@@ -109,7 +201,7 @@ elif [[ "$ARGS" =~ (^|[[:space:]])#([0-9]+)($|[[:space:]]) ]]; then
         # GitHub numbers issues and PRs from one shared counter, so #<N> names
         # exactly one object — but which one is only knowable by asking. Defer
         # to the resolution step, which tries the PR fetch and falls back to
-        # issue when it 404s.
+        # issue when it reports a genuine not-found.
         #
         # Do NOT probe with `gh pr view <N> --json number`: gh echoes the number
         # straight back with exit 0 without validating it, so that probe passes
@@ -133,13 +225,13 @@ normalize_ref() {
     printf '%s' "${1#refs/heads/}"
 }
 
-# Derive the ADO organization URL from the origin remote. Handles both
-# https://dev.azure.com/<org>/... and https://<org>.visualstudio.com/..., plus
-# their ssh forms (git@ssh.dev.azure.com:v3/<org>/...).
+# Derive the ADO organization URL from the origin remote. The v3 ssh dialects
+# must be matched BEFORE the generic visualstudio.com arm, or
+# vs-ssh.visualstudio.com derives the org as "vs-ssh".
 ado_org_url() {
     local url="$1"
-    if [[ "$url" =~ ssh\.dev\.azure\.com[:/]v3/([^/]+) ]]; then
-        printf 'https://dev.azure.com/%s' "${BASH_REMATCH[1]}"
+    if [[ "$url" =~ (ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)[:/]v3/([^/]+) ]]; then
+        printf 'https://dev.azure.com/%s' "${BASH_REMATCH[2]}"
     elif [[ "$url" =~ dev\.azure\.com/([^/]+) ]]; then
         printf 'https://dev.azure.com/%s' "${BASH_REMATCH[1]}"
     elif [[ "$url" =~ ([A-Za-z0-9_-]+)\.visualstudio\.com ]]; then
@@ -149,39 +241,60 @@ ado_org_url() {
     fi
 }
 
+# The repository name from the origin remote (last path segment, minus .git).
+origin_repo_name() {
+    local url="${1%/}"
+    url="${url%.git}"
+    printf '%s' "${url##*/}"
+}
+
 if [[ "$KIND" == "pr" || "$KIND" == "ambiguous" ]]; then
     if [[ "$HOST" == "github" ]]; then
-        # Explicit array order — do not rely on JSON key order.
+        require_cli gh
+        # Explicit array order — do not rely on JSON key order. isCrossRepository
+        # tells us the head lives in a fork, where `git fetch origin` cannot see it.
+        #
         # This lookup doubles as the PR-vs-issue test for an ambiguous #<N>:
-        # a failure here means the number is an issue, not a PR.
-        if PR_TSV=$(gh pr view "$REF_ID" --json headRefName,baseRefName,state \
-                --jq '[.headRefName, .baseRefName, .state] | @tsv' 2>&1); then
+        # a genuine not-found means the number is an issue, not a PR.
+        if PR_TSV=$(gh pr view "$REF_ID" \
+                --json headRefName,baseRefName,state,isCrossRepository \
+                --jq '[.headRefName, .baseRefName, .state, .isCrossRepository] | @tsv' \
+                2>"$ERR_FILE"); then
             KIND="pr"
+            PR_TSV=${PR_TSV//$'\r'/}
             SOURCE_BRANCH=$(printf '%s' "$PR_TSV" | cut -f1)
             TARGET_BRANCH=$(printf '%s' "$PR_TSV" | cut -f2)
             GH_STATE=$(printf '%s' "$PR_TSV" | cut -f3)
+            GH_FORK=$(printf '%s' "$PR_TSV" | cut -f4)
             case "$GH_STATE" in
                 OPEN)   STATE="open" ;;
                 MERGED) STATE="merged" ;;
                 CLOSED) STATE="closed" ;;
                 *)      STATE="$GH_STATE" ;;
             esac
-        elif [[ "$KIND" == "ambiguous" ]]; then
-            # #<N> named an issue: context only, no branch selection.
+            if [[ "$GH_FORK" == "true" ]]; then
+                echo "Error: PR #$REF_ID comes from a fork; its source branch '$SOURCE_BRANCH' does not exist on origin." >&2
+                echo "Fetch the fork's ref manually (e.g. 'gh pr checkout $REF_ID') and re-run with branch:<name>." >&2
+                exit 1
+            fi
+        elif [[ "$KIND" == "ambiguous" ]] && grep -q "Could not resolve to a PullRequest" "$ERR_FILE"; then
+            # #<N> named an issue: context only, no branch selection. Only a
+            # genuine not-found may downgrade — a network, auth or 404-on-repo
+            # failure must not silently become "review HEAD".
             KIND="issue"
         else
-            # An explicit `pr <N>` / PR URL that does not resolve is an error.
-            echo "Error: Could not resolve GitHub PR #$REF_ID." >&2
-            echo "$PR_TSV" >&2
-            exit 1
+            die_with_stderr "Could not resolve GitHub PR #$REF_ID."
         fi
     else
+        require_cli az
         ORG=$(ado_org_url "$REMOTE_URL") || {
             echo "Error: Could not derive an Azure DevOps organization URL from: $REMOTE_URL" >&2
             exit 1
         }
         # `az repos pr show --id <N>` resolves org-wide — no repository scoping
         # needed, unlike the ADO MCP tool which requires a repositoryId GUID.
+        # That breadth is also a hazard: an id from another repo in the same org
+        # resolves fine, so the PR's repository is checked against origin below.
         #
         # Query as an ordered ARRAY, not a {dict}: az renders a dict to tsv in
         # alphabetical key order, so a {source,target,status} hash silently
@@ -190,16 +303,20 @@ if [[ "$KIND" == "pr" || "$KIND" == "ambiguous" ]]; then
         # az prints an array to tsv one element per LINE (not tab-separated),
         # so read it line-wise — `cut -f1` finds no tabs and returns the whole
         # blob for every field.
-        PR_OUT=$(az repos pr show --id "$REF_ID" --org "$ORG" \
-            --query "[sourceRefName, targetRefName, status]" -o tsv 2>&1) || {
-            echo "Error: Could not resolve Azure DevOps PR #$REF_ID in $ORG." >&2
-            echo "$PR_OUT" >&2
-            exit 1
-        }
+        if ! PR_OUT=$(az repos pr show --id "$REF_ID" --org "$ORG" \
+                --query "[sourceRefName, targetRefName, status, repository.name]" \
+                -o tsv 2>"$ERR_FILE"); then
+            die_with_stderr "Could not resolve Azure DevOps PR #$REF_ID in $ORG."
+        fi
+        # az on Windows emits CRLF. A trailing \r rides along into the branch
+        # name and git rejects the ref ("Needed a single revision"), so strip it
+        # before anything else touches these values.
+        PR_OUT=${PR_OUT//$'\r'/}
         {
-            read -r SOURCE_BRANCH
-            read -r TARGET_BRANCH
-            read -r AZ_STATUS
+            read -r SOURCE_BRANCH || true
+            read -r TARGET_BRANCH || true
+            read -r AZ_STATUS || true
+            read -r AZ_REPO || true
         } <<< "$PR_OUT"
         case "$AZ_STATUS" in
             active)    STATE="open" ;;
@@ -207,14 +324,33 @@ if [[ "$KIND" == "pr" || "$KIND" == "ambiguous" ]]; then
             abandoned) STATE="abandoned" ;;
             *)         STATE="$AZ_STATUS" ;;
         esac
+        ORIGIN_REPO=$(origin_repo_name "$REMOTE_URL")
+        if [[ -n "$AZ_REPO" && -n "$ORIGIN_REPO" && "$AZ_REPO" != "$ORIGIN_REPO" ]]; then
+            echo "Error: PR #$REF_ID belongs to repository '$AZ_REPO', but origin is '$ORIGIN_REPO'." >&2
+            echo "Azure DevOps PR ids are unique per organization, not per repository." >&2
+            exit 1
+        fi
     fi
 
-    # Guarded: an ambiguous #<N> may have resolved to an issue above, leaving
-    # the branch vars empty.
     if [[ "$KIND" == "pr" ]]; then
         SOURCE_BRANCH=$(normalize_ref "$SOURCE_BRANCH")
         TARGET_BRANCH=$(normalize_ref "$TARGET_BRANCH")
+        # A lookup that exits 0 but yields nothing usable must fail loudly.
+        # Publishing an empty SOURCE_BRANCH hands the caller an empty checkout
+        # target, and an empty-vs-empty comparison would report BRANCH_MATCH=true
+        # against a detached HEAD — telling the caller it is already on the PR
+        # branch when nothing is known at all.
+        if [[ -z "$SOURCE_BRANCH" || -z "$TARGET_BRANCH" ]]; then
+            echo "Error: Resolved PR #$REF_ID but the lookup returned no branch names." >&2
+            exit 1
+        fi
     fi
+fi
+
+if [[ "$KIND" == "ambiguous" ]]; then
+    # Unreachable: every host branch above resolves ambiguous to pr or issue.
+    echo "Error: Internal error — reference #$REF_ID was left unresolved." >&2
+    exit 1
 fi
 
 # ── Report ───────────────────────────────────────────────────────────
@@ -230,7 +366,7 @@ if [[ "$KIND" == "pr" ]]; then
     echo "SOURCE_BRANCH=$SOURCE_BRANCH"
     echo "TARGET_BRANCH=$TARGET_BRANCH"
     echo "STATE=$STATE"
-    if [[ "$SOURCE_BRANCH" == "$CURRENT_BRANCH" ]]; then
+    if [[ -n "$SOURCE_BRANCH" && "$SOURCE_BRANCH" == "$CURRENT_BRANCH" ]]; then
         echo "BRANCH_MATCH=true"
     else
         echo "BRANCH_MATCH=false"
