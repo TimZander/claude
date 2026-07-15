@@ -13,7 +13,11 @@ set -euo pipefail
 #   bash resolve-pr.sh --args "<raw /deep-review arguments>"
 #
 # Output (KEY=value lines on stdout; parse the ones you need):
-#   HOST=github|azdo            Hosting platform, detected from the origin remote
+#   HOST=github|azdo|unknown    Hosting platform, detected from the origin remote.
+#                               `unknown` (no origin, or a host that is neither
+#                               GitHub nor Azure DevOps) is NOT an error: only
+#                               PR lookup needs a known host, and a review with
+#                               no PR reference must still work anywhere.
 #   KIND=pr|issue|workitem|none What the reference resolved to
 #   REF_ID=<N>                  The referenced number (omitted when KIND=none)
 #   SOURCE_BRANCH=<name>        PR's source branch, bare (KIND=pr only)
@@ -135,24 +139,39 @@ remote_host() {
     printf '%s' "$url"
 }
 
-REMOTE_URL=$(git remote get-url origin 2>/dev/null) || {
-    echo "Error: No 'origin' remote found." >&2
+# An unknown host is NOT an error here. /deep-review runs this step for ANY
+# non-empty arguments, and most invocations are a plain focus area with no PR
+# reference at all. Failing early would break `/deep-review focus on X` for
+# every GitLab, Bitbucket, self-hosted and remote-less repo — a review that
+# works today. The host only has to be known to LOOK UP a PR, so that
+# requirement is enforced at the resolution step instead.
+REMOTE_URL=$(git remote get-url origin 2>/dev/null || printf '')
+REMOTE_HOST=""
+HOST="unknown"
+
+if [[ -n "$REMOTE_URL" ]]; then
+    REMOTE_HOST=$(remote_host "$REMOTE_URL")
+    case "$REMOTE_HOST" in
+        github.com|*.github.com)
+            HOST="github" ;;
+        dev.azure.com|ssh.dev.azure.com|*.visualstudio.com)
+            HOST="azdo" ;;
+    esac
+fi
+
+# Called only from paths that genuinely need to reach a PR API.
+require_known_host() {
+    if [[ "$HOST" != "unknown" ]]; then
+        return 0
+    fi
+    if [[ -z "$REMOTE_URL" ]]; then
+        echo "Error: Cannot resolve PR #$REF_ID — no 'origin' remote found." >&2
+    else
+        echo "Error: Cannot resolve PR #$REF_ID — could not determine hosting platform from remote URL: $REMOTE_URL" >&2
+        echo "PR reference resolution is supported for GitHub and Azure DevOps." >&2
+    fi
     exit 1
 }
-
-REMOTE_HOST=$(remote_host "$REMOTE_URL")
-
-case "$REMOTE_HOST" in
-    github.com|*.github.com)
-        HOST="github" ;;
-    dev.azure.com|ssh.dev.azure.com|*.visualstudio.com)
-        HOST="azdo" ;;
-    *)
-        echo "Error: Could not determine hosting platform from remote URL: $REMOTE_URL" >&2
-        echo "PR reference resolution is supported for GitHub and Azure DevOps." >&2
-        exit 1
-        ;;
-esac
 
 # ── Git context ──────────────────────────────────────────────────────
 
@@ -186,7 +205,7 @@ if [[ "$ARGS" =~ (https?://[^[:space:]]+)/(pull|pullrequest)/([0-9]+) ]]; then
     KIND="pr"
     REF_ID="${BASH_REMATCH[3]}"
     PR_URL_HOST=$(remote_host "${BASH_REMATCH[1]}")
-    if [[ "$PR_URL_HOST" != "$REMOTE_HOST" ]]; then
+    if [[ -n "$REMOTE_HOST" && "$PR_URL_HOST" != "$REMOTE_HOST" ]]; then
         echo "Error: PR URL points at '$PR_URL_HOST' but origin is '$REMOTE_HOST'." >&2
         echo "Refusing to look up a PR number from one host against another." >&2
         exit 1
@@ -206,7 +225,13 @@ elif [[ "$ARGS" =~ https?://[^[:space:]]*/issues/([0-9]+) ]]; then
 # Bare `#<N>` — meaning depends on the host (see header).
 elif [[ "$ARGS" =~ ${BOUNDARY_L}#([0-9]+)${BOUNDARY_R} ]]; then
     REF_ID="${BASH_REMATCH[2]}"
-    if [[ "$HOST" == "azdo" ]]; then
+    if [[ "$HOST" == "unknown" ]]; then
+        # Without a known host, `#<N>` cannot even be classified — GitHub shares
+        # one counter between issues and PRs, ADO does not — let alone looked up.
+        # Leave it as prose, which is exactly what it was before this feature.
+        KIND="none"
+        REF_ID=""
+    elif [[ "$HOST" == "azdo" ]]; then
         KIND="workitem"
     else
         # GitHub numbers issues and PRs from one shared counter, so #<N> names
@@ -278,6 +303,7 @@ collect_pr_refs() {
 }
 
 if [[ "$KIND" == "pr" || "$KIND" == "ambiguous" ]]; then
+    require_known_host
     if [[ "$HOST" == "github" ]]; then
         require_cli gh
         # Explicit array order — do not rely on JSON key order. isCrossRepository

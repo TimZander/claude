@@ -198,13 +198,37 @@ assert_contains "--args requires a value" "$out" "--args with no value explains 
 out=$(run_in "$GH_REPO" --args "a" --args "b"); rc=$?
 assert_exit 1 "$rc" "repeated --args exits 1"
 
+# A PR reference genuinely needs a reachable host — these must fail.
 out=$(run_in "$NO_REMOTE_REPO" --args "pr 1"); rc=$?
-assert_exit 1 "$rc" "missing origin remote exits 1"
-assert_contains "No 'origin' remote" "$out" "missing origin explains itself"
+assert_exit 1 "$rc" "PR reference with no origin remote exits 1"
+assert_contains "no 'origin' remote" "$out" "missing origin explains itself"
 
 out=$(run_in "$ODD_REPO" --args "pr 1"); rc=$?
-assert_exit 1 "$rc" "unsupported host exits 1"
-assert_contains "Could not determine hosting platform" "$out" "unsupported host explains itself"
+assert_exit 1 "$rc" "PR reference on an unsupported host exits 1"
+assert_contains "could not determine hosting platform" "$out" "unsupported host explains itself"
+
+# ── Unsupported/absent hosts must NOT break an ordinary review ───────
+# This step runs for ANY non-empty arguments, and most invocations carry no PR
+# reference. Failing early here would break `/deep-review focus on X` for every
+# GitLab, Bitbucket, self-hosted and remote-less repo — a review that works
+# today. Host trouble may only surface when a PR actually has to be resolved.
+out=$(run_in "$ODD_REPO" --args "focus on error handling"); rc=$?
+assert_exit 0 "$rc" "focus area on an unsupported host still exits 0"
+assert_contains "HOST=unknown" "$out" "unsupported host reports HOST=unknown"
+assert_contains "KIND=none" "$out" "unsupported host with no PR reference resolves to none"
+assert_contains "CURRENT_BRANCH=" "$out" "unsupported host still reports git context"
+
+out=$(run_in "$NO_REMOTE_REPO" --args "focus on error handling"); rc=$?
+assert_exit 0 "$rc" "focus area with no origin remote still exits 0"
+assert_contains "HOST=unknown" "$out" "no remote reports HOST=unknown"
+assert_contains "KIND=none" "$out" "no remote with no PR reference resolves to none"
+
+# `#<N>` cannot be classified without a host (GitHub shares one issue/PR
+# counter, ADO does not), so it stays prose rather than becoming a bad guess.
+out=$(run_in "$ODD_REPO" --args "see #143 for background"); rc=$?
+assert_exit 0 "$rc" "#<N> on an unsupported host exits 0"
+assert_contains "KIND=none" "$out" "#<N> on an unsupported host is not classified"
+assert_not_contains "REF_ID=" "$out" "#<N> on an unsupported host reports no ref id"
 
 # ── Host detection ───────────────────────────────────────────────────
 out=$(run_in "$GH_REPO" --args "focus on error handling"); rc=$?
@@ -218,7 +242,10 @@ assert_contains "HOST=azdo" "$out" "azdo remote detected"
 
 out=$(run_in "$TRAP_REPO" --args "pr 1"); rc=$?
 assert_exit 1 "$rc" "host detection matches the host component, not a substring"
-assert_contains "Could not determine hosting platform" "$out" "github.com in a gitlab path is not GitHub"
+assert_contains "could not determine hosting platform" "$out" "github.com in a gitlab path is not GitHub"
+
+out=$(run_in "$TRAP_REPO" --args "focus here")
+assert_contains "HOST=unknown" "$out" "github.com in a gitlab path reports unknown, not github"
 
 # ── ADO work-item carve-out ──────────────────────────────────────────
 out=$(run_in "$ADO_REPO" --args "#7775"); rc=$?

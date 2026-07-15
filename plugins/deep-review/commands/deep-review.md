@@ -81,9 +81,11 @@ It prints `KEY=value` lines on stdout. `HOST`, `KIND`, `CURRENT_BRANCH` and `IN_
 
 If it exits non-zero, surface its stderr verbatim and stop — **do not fall back to reviewing `HEAD`**, which is the exact failure this step exists to prevent. The script only **reports**; it never checks anything out, so the decision below is yours to make and the user's to see.
 
+`HOST=unknown` means the repo is neither GitHub nor Azure DevOps (or has no `origin`). That is **not** an error and never blocks a review: PR references cannot be resolved there, so `KIND` will be `none` and you simply review `HEAD` as always.
+
 Act on `KIND`:
 
-- **`none`** — no reference supplied. Review `HEAD` as usual.
+- **`none`** — no reference supplied, or none resolvable on this host. Review `HEAD` as usual.
 - **`issue`** / **`workitem`** — fetch it for context per the Context Input section. Review `HEAD`; the reference does not select a branch.
 - **`pr`** — the PR selects the review target, **unless an explicit `branch:<name>` token was also supplied, in which case `branch:` wins**: skip steps 1-3 below, note the override in the 🎯 Context line, and let the `branch:` procedure handle the checkout. Otherwise:
   1. Review `SOURCE_BRANCH`, and use `TARGET_BRANCH` as `BASE_NAME` unless an explicit `base:` token overrides it. Do **not** default the base to `main` — a PR into `develop` reviewed against `main` reports every unrelated commit as a change.
