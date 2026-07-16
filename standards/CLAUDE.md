@@ -475,6 +475,7 @@ When reviewing code (PRs, branches, or staged changes), apply rigorous scrutiny.
 - **Trace unintended consequences** — check callers, state mutations, timing, and boundary conditions
 - **Audit assumptions** — list and verify every assumption the code makes; flag those without validation
 - **Demand test coverage** — "hard to test" means the code needs restructuring, not a pass on testing
+- **Calibrate severity against standards** — when CLAUDE.md or documented standards explicitly prohibit a pattern, grade violations as warnings or blockers, not optional suggestions, regardless of whether pre-existing code also violates the rule; existing violations do not grandfather new ones
 
 ## PR Review Comment Anchoring
 
