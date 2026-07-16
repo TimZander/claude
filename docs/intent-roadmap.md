@@ -175,6 +175,37 @@ outcomes not mechanisms, and verify claims against the running system.
 **Tracking:** #184, #185, #189, #191, #193 (verification rigor) · #187 (verify against
 running system).
 
+## Parallel Path · Automated review pipeline
+
+**Intent.** `deep-review` runs automatically on new and updated PRs — with no human
+session — posting its findings as a PR comment.
+
+**Why this is a parallel path, not a workstream.** It *consumes* the review deliverables
+(the `deep-review` skill, the workstream 5 pre-flight gate) rather than reshaping them.
+Its own work — triggering, hosting, auth, and cost control — lives largely *outside*
+this repo, in CI/runner config and scheduling infrastructure. So it interleaves in
+*timing* with everything above, but leaves this repo's content largely unchanged: the
+skill and the gate are already here; what's new is the orchestration around them. That
+is exactly why it earns its own track instead of a slot in the sequence.
+
+**Dependency, not blocker.** It should only run *unattended* once the review it triggers
+is trustworthy — i.e. workstream 5 plus the deep-review hardening issues are far enough
+along that an auto-posted pass adds signal rather than noise. Until then it can run in an
+advisory / draft-comment mode without gating anything.
+
+**Done when.** New and updated PRs receive an automated `deep-review` pass posted as a
+comment with no human in the loop — driven by the *same* skill and pre-flight gate as
+the interactive flow (one source of truth, never a forked copy).
+
+**Deferred within this path (scale, not v1).** The token-cost backend (#86 — reviews run
+~444k tokens, 6–10/day, hitting rate limits) and the scheduling/hosting mechanics (#127)
+are research inputs into *how* this pipeline is hosted and paid for. They gate scale, not
+the first working version.
+
+**Tracking:** #100 (autonomous PR-review agent) · quality dependency: workstream 5
+(#181, #179) and deep-review hardening (#172, #173, #178) · cost/hosting inputs: #86,
+#127.
+
 ## Sequencing — the ~2-week arc
 
 Framed as horizons, not hard dates. Workstreams are independent enough to reorder; this
@@ -189,6 +220,10 @@ order front-loads relief and back-loads compounding structural work.
   plug in → workstream 3 standards slim (gated on the baseline-skill bundle). The
   verification-rigor cross-cut lands opportunistically alongside, wherever review and
   standards work touches it.
+- **Throughout (parallel).** The automated review pipeline runs on its own track,
+  scaffolded early in advisory mode and switched to unattended once workstream 5 makes
+  the triggered review trustworthy. Its heavy lifting (hosting, cost) is external to this
+  repo, so it does not compete with the horizons above for this repo's attention.
 
 ## Success Signals
 
@@ -209,9 +244,9 @@ How we will know the roadmap is working — watch these, not activity:
 
 Named so the roadmap stays bounded. Not "never" — "not these two weeks":
 
-- Autonomous PR-review agents running without a human session (#100).
-- Local-LLM review infrastructure (#86) and scheduling research (#127) — research-first,
-  not implementation this horizon.
+- Local-LLM review infrastructure (#86) and scheduling research (#127) as *implementation*
+  — research-first; they feed the parallel path's scale/cost decision, not this horizon's
+  build.
 - Domain-specific skills unrelated to the core workflow (e.g. DSP, #154).
 - Broad C# style micro-rules (#144–153 cluster) except where they fold naturally into
   the `.editorconfig` work in workstream 3.
@@ -230,3 +265,6 @@ Resolve these as we enter each workstream:
 4. **Enforcement severity** — do deterministic gates (complexity, `.editorconfig`) fail
    the build, or warn first and ratchet? (Recommend: warn-and-ratchet on existing code,
    fail on new.)
+5. **Automated-pipeline hosting** — where does the unattended `deep-review` run (GitHub
+   Action, a hosted runner, or a scheduled session), how is it authed/billed, and does it
+   advise only or gate the PR? Resolve when the parallel path leaves advisory mode.
