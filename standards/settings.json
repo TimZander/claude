@@ -96,11 +96,6 @@
       "Bash(git config --list:*)",
       "Bash(git worktree list:*)",
 
-      "Bash(grep:*)",
-      "Bash(head:*)",
-      "Bash(tail:*)",
-      "Bash(wc:*)",
-
       "mcp__newrelic__execute_nrql_query",
       "mcp__newrelic__natural_language_to_nrql_query",
       "mcp__newrelic__get_entity",
