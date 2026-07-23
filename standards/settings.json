@@ -95,14 +95,11 @@
       "Bash(git config --get:*)",
       "Bash(git config --list:*)",
       "Bash(git worktree list:*)",
-      "Bash(git worktree add:*)",
 
       "Bash(grep:*)",
       "Bash(head:*)",
       "Bash(tail:*)",
       "Bash(wc:*)",
-      "Bash(sort:*)",
-      "Bash(uniq:*)",
 
       "mcp__newrelic__execute_nrql_query",
       "mcp__newrelic__natural_language_to_nrql_query",
