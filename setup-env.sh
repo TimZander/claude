@@ -181,41 +181,33 @@ SETTINGS_TARGET="$CLAUDE_DIR/settings.json"
 
 if [ ! -f "$SETTINGS_SOURCE" ]; then
     echo "No standards/settings.json found — skipping settings sync."
+elif [ ! -f "$SETTINGS_TARGET" ]; then
+    cp "$SETTINGS_SOURCE" "$SETTINGS_TARGET"
+    echo "Created $SETTINGS_TARGET with team settings."
 else
-    if ! command -v jq &>/dev/null; then
-        echo "Warning: jq is not installed — skipping settings.json sync." >&2
-    else
-        if [ ! -f "$SETTINGS_TARGET" ]; then
-            cp "$SETTINGS_SOURCE" "$SETTINGS_TARGET"
-            echo "Created $SETTINGS_TARGET with team settings."
-        else
-            # Deep-merge: team settings are the base, user settings win on
-            # scalar conflicts, arrays are unioned (deduplicated).
-            MERGED="$(jq -s '
-                def deep_merge:
-                    .[0] as $a | .[1] as $b |
-                    if ($a | type) == "object" and ($b | type) == "object" then
-                        ([($a | keys[]), ($b | keys[])] | unique) as $keys |
-                        reduce ($keys | .[]) as $k ({};
-                            if ($a | has($k)) and ($b | has($k))
-                            then . + { ($k): ([$a[$k], $b[$k]] | deep_merge) }
-                            elif ($b | has($k)) then . + { ($k): $b[$k] }
-                            else . + { ($k): $a[$k] }
-                            end)
-                    elif ($a | type) == "array" and ($b | type) == "array" then
-                        ($a + $b) | unique
-                    else $b
-                    end;
-                deep_merge
-            ' "$SETTINGS_SOURCE" "$SETTINGS_TARGET")"
+    # Deep-merge via a Python helper (team = base, user overrides win on scalar
+    # conflicts, arrays are unioned). Python replaces jq here: jq is often absent
+    # on Windows/Git-Bash, where it used to silently skip the whole settings sync.
+    PYTHON_BIN=""
+    for _candidate in python3 python; do
+        if command -v "$_candidate" >/dev/null 2>&1; then
+            PYTHON_BIN="$_candidate"
+            break
+        fi
+    done
 
-            EXISTING_SETTINGS="$(cat "$SETTINGS_TARGET")"
-            if [ "$MERGED" = "$EXISTING_SETTINGS" ]; then
-                echo "Settings in $SETTINGS_TARGET are already up to date."
-            else
-                printf '%s\n' "$MERGED" > "$SETTINGS_TARGET"
-                echo "Merged team settings into $SETTINGS_TARGET."
-            fi
+    if [ -z "$PYTHON_BIN" ]; then
+        echo "Error: neither python3 nor python found — cannot merge settings.json." >&2
+        echo "       Install Python (or merge $SETTINGS_TARGET manually) and re-run." >&2
+    elif ! MERGED="$("$PYTHON_BIN" "$REPO_ROOT/scripts/merge_settings.py" "$SETTINGS_SOURCE" "$SETTINGS_TARGET")" || [ -z "$MERGED" ]; then
+        echo "Error: settings merge failed — leaving $SETTINGS_TARGET unchanged." >&2
+    else
+        EXISTING_SETTINGS="$(cat "$SETTINGS_TARGET")"
+        if [ "$MERGED" = "$EXISTING_SETTINGS" ]; then
+            echo "Settings in $SETTINGS_TARGET are already up to date."
+        else
+            printf '%s\n' "$MERGED" > "$SETTINGS_TARGET"
+            echo "Merged team settings into $SETTINGS_TARGET."
         fi
     fi
 fi

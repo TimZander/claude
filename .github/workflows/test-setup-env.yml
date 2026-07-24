@@ -5,9 +5,12 @@ on:
   pull_request:
     paths:
       - "setup-env.ps1"
+      - "setup-env.sh"
       - "scripts/Merge-JsonObjects.ps1"
       - "scripts/test-merge-jsonobjects.ps1"
       - "scripts/test-setup-env-integration.ps1"
+      - "scripts/merge_settings.py"
+      - "scripts/test_merge_settings.py"
       - "standards/settings.json"
       - ".github/workflows/test-setup-env.yml"
   push:
@@ -24,3 +27,7 @@ jobs:
       - name: Settings-sync integration test (pwsh)
         shell: pwsh
         run: ./scripts/test-setup-env-integration.ps1
+      - name: merge_settings unit test (bash path, python)
+        run: python3 scripts/test_merge_settings.py
+      - name: setup-env.sh syntax check
+        run: bash -n setup-env.sh
