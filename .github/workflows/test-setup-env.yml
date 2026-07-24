@@ -18,7 +18,13 @@ on:
 
 jobs:
   merge-test:
-    runs-on: ubuntu-latest
+    # Run on Linux and macOS so the bash/python path is verified on both
+    # (macOS ships bash 3.2 and no jq — the exact environment this fix targets).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Merge-JsonObjects unit test (pwsh)
