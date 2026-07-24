@@ -3,7 +3,7 @@
 # crafted mutating entry must fail. Run: bash standards/test-validate-settings.sh
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PY="${PYTHON:-python}"
+PY="${PYTHON:-python3}"
 VALIDATOR="$HERE/validate-settings.py"
 pass=0
 fail=0
@@ -25,12 +25,40 @@ check "real settings.json passes validation" 0 $?
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-# 2. Mutating Bash util (the sort -o footgun) fails.
+# 2. Mutating Bash util (the sort -o pitfall) fails.
 cat > "$tmp/bad-sort.json" <<'JSON'
 { "permissions": { "allow": ["Bash(git log:*)", "Bash(sort:*)"], "deny": [] } }
 JSON
 "$PY" "$VALIDATOR" "$tmp/bad-sort.json" >/dev/null 2>&1
 check "sort:* is rejected" 1 $?
+
+# 2b. Bare command-family root fails (git:* would allow git push).
+cat > "$tmp/bad-root.json" <<'JSON'
+{ "permissions": { "allow": ["Bash(git:*)"], "deny": [] } }
+JSON
+"$PY" "$VALIDATOR" "$tmp/bad-root.json" >/dev/null 2>&1
+check "bare git:* root is rejected" 1 $?
+
+# 2c. Proper prefix of a write command fails (git worktree:* reaches add).
+cat > "$tmp/bad-prefix.json" <<'JSON'
+{ "permissions": { "allow": ["Bash(git worktree:*)"], "deny": [] } }
+JSON
+"$PY" "$VALIDATOR" "$tmp/bad-prefix.json" >/dev/null 2>&1
+check "git worktree:* (prefix of add) is rejected" 1 $?
+
+# 2d. MCP wildcard grant fails.
+cat > "$tmp/bad-wild.json" <<'JSON'
+{ "permissions": { "allow": ["mcp__azure-devops__*"], "deny": [] } }
+JSON
+"$PY" "$VALIDATOR" "$tmp/bad-wild.json" >/dev/null 2>&1
+check "mcp wildcard is rejected" 1 $?
+
+# 2e. Interpreter/arbitrary-exec fails.
+cat > "$tmp/bad-py.json" <<'JSON'
+{ "permissions": { "allow": ["Bash(python:*)"], "deny": [] } }
+JSON
+"$PY" "$VALIDATOR" "$tmp/bad-py.json" >/dev/null 2>&1
+check "python:* is rejected" 1 $?
 
 # 3. git worktree add (the -B branch-reset vector) fails.
 cat > "$tmp/bad-wt.json" <<'JSON'

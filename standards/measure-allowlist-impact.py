@@ -29,7 +29,8 @@ import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
-SEP = re.compile(r"&&|\|\||;|\|&|\||\n")
+from allowlist_common import bash_covered, parse_bash_prefix
+
 REJECTION_MARKERS = ("doesn't want to proceed", "User rejected")
 
 
@@ -41,32 +42,18 @@ def load_rules(settings_path: Path):
         if a.startswith("mcp__"):
             mcp_allow.add(a)
             continue
-        m = re.match(r"^Bash\((.*?)\)$", a)
-        if not m:
-            continue
-        inner = m.group(1)
-        if inner.endswith(":*"):
-            inner = inner[:-2]
-        elif inner.endswith(" *"):
-            inner = inner[:-2]
-        bash_prefixes.append(inner.strip())
+        p = parse_bash_prefix(a)
+        if p is not None:
+            bash_prefixes.append(p)
     return bash_prefixes, mcp_allow
-
-
-def seg_matches(seg: str, prefixes) -> bool:
-    seg = seg.strip()
-    return any(seg == p or seg.startswith(p + " ") for p in prefixes)
-
-
-def bash_covered(cmd: str, prefixes) -> bool:
-    segs = [s for s in SEP.split(cmd) if s.strip()]
-    return bool(segs) and all(seg_matches(s, prefixes) for s in segs)
 
 
 def within_since(line: str, since: str | None) -> bool:
     if not since:
         return True
-    # transcript lines carry an ISO "timestamp"; compare the date prefix
+    # transcript lines carry an ISO "timestamp"; compare the date prefix.
+    # NOTE: a tool_use line lacking a timestamp is counted (returns True) rather
+    # than dropped, so a --since window can mildly over-count untimestamped lines.
     m = re.search(r'"timestamp"\s*:\s*"(\d{4}-\d{2}-\d{2})', line)
     return (m.group(1) >= since) if m else True
 

@@ -1,30 +1,37 @@
 #!/usr/bin/env python3
-"""Guard against mutating commands slipping into the team allowlist.
+"""Guard against dangerous commands slipping into the team allowlist.
 
 `standards/settings.json` is synced into every developer's user-scope
 `~/.claude/settings.json`, so anything in its `permissions.allow` list is
 pre-approved for everyone in every repo and worktree. This validator fails
-(exit 1) if any allow entry names a command or MCP tool that can change
-state, so a well-meaning edit can't silently pre-approve a write.
+(exit 1) if any allow entry:
+  - names a known write-capable / arbitrary-execution command (incl. ones that
+    write without a redirect: `sort -o`, `uniq in out`, `git worktree add -B`),
+  - is a bare command-family root (`git`, `gh`, `az`, …) whose wildcard would
+    auto-approve every subcommand including writes,
+  - is a proper prefix of a known write command (so `Bash(git worktree:*)`
+    would reach `git worktree add`), or
+  - is an MCP wildcard (`mcp__server__*`) or a known-mutating MCP tool.
 
-The check is capability-aware, not a leading-token blocklist: it knows which
-"looks read-only" commands can still write without a shell redirect (e.g.
-`sort -o FILE`, `uniq in out`, `git worktree add -B` resetting a branch).
+This is a DENYLIST of known-dangerous shapes, not a proof of read-only-ness:
+it catches the known patterns and the structurally-dangerous shapes (bare
+roots, wildcards), but a novel mutating verb not listed here could still pass.
+Treat a green result as "no known-dangerous entry", not "provably safe".
 
-Usage: python validate-settings.py [path-to-settings.json]
+Usage: python3 validate-settings.py [path-to-settings.json]
        (defaults to the settings.json next to this script)
 """
 from __future__ import annotations
 
 import json
-import re
 import sys
 from pathlib import Path
 
-# Bash prefixes that must NEVER appear as an allow entry, each with the reason.
-# Keyed by the command prefix as it would appear inside Bash(<prefix>:*).
-# An allow entry is a violation when its command equals a key or begins with
-# "<key> " (token boundary), so `git worktree add` also catches `add -B ...`.
+from allowlist_common import parse_bash_prefix
+
+# Command prefixes that must NEVER be allow-listed, each with a reason. Matched
+# when an entry's command equals the key or begins with "<key> " (token bound),
+# so `git worktree add` also catches `git worktree add -B ...`.
 WRITE_CAPABLE = {
     # read-looking utils with a non-redirect write vector
     "sort": "sort -o/--output FILE overwrites a file",
@@ -35,7 +42,22 @@ WRITE_CAPABLE = {
     "cp": "copies/overwrites files", "mv": "moves/overwrites files",
     "rm": "deletes files", "chmod": "changes permissions",
     "chown": "changes ownership", "ln": "creates links",
-    "truncate": "truncates files",
+    "truncate": "truncates files", "mkdir": "creates directories",
+    # arbitrary code execution / interpreters
+    "python": "arbitrary code execution", "python3": "arbitrary code execution",
+    "py": "arbitrary code execution", "bash": "runs an arbitrary script",
+    "sh": "runs an arbitrary script", "zsh": "runs an arbitrary script",
+    "node": "arbitrary code execution", "ruby": "arbitrary code execution",
+    "perl": "arbitrary code execution", "eval": "evaluates arbitrary text",
+    "xargs": "runs arbitrary commands", "env": "can exec an arbitrary command",
+    "make": "runs arbitrary recipes", "npm": "runs arbitrary scripts",
+    "npx": "runs arbitrary packages", "pnpm": "runs arbitrary scripts",
+    "yarn": "runs arbitrary scripts", "pip": "can run setup code",
+    "pip3": "can run setup code", "uv": "can run setup code",
+    "dotnet": "builds/runs arbitrary code",
+    # network I/O (download / exfiltration)
+    "curl": "network I/O", "wget": "network I/O", "ssh": "remote execution",
+    "scp": "remote file copy", "nc": "network I/O", "ncat": "network I/O",
     # git subcommands that mutate refs/worktree/index/history
     "git commit": "writes history", "git push": "publishes refs",
     "git checkout": "mutates working tree/refs",
@@ -68,28 +90,48 @@ WRITE_CAPABLE = {
     "az repos pr create": "creates PRs", "az repos pr update": "updates PRs",
 }
 
-# Exception: git config read forms explicitly flagged read-only. These must be
-# more specific than the "git config" key above, and are allowed through.
-BASH_READONLY_EXCEPTIONS = (
-    "git config --get",
-    "git config --list",
-)
+# Bare command-family roots: an entry equal to one of these (e.g. `Bash(git:*)`)
+# would auto-approve every subcommand, including writes.
+FAMILY_ROOTS = {"git", "gh", "az", "aws", "gcloud", "docker", "kubectl",
+                "psql", "mysql", "sqlcmd", "cargo", "go"}
 
-# Substrings that mark an MCP tool as mutating. An mcp__ allow entry containing
-# any of these is a violation (read-only tools use get/list/show/query/search).
+# git read forms explicitly flagged read-only (more specific than the "git
+# config" write key above); allowed through.
+BASH_READONLY_EXCEPTIONS = ("git config --get", "git config --list")
+
+# Substrings that mark an MCP tool as mutating (read-only tools use
+# get/list/show/query/search).
 MUTATING_MCP = (
-    "_update", "_create", "_add_", "_add ", "_delete", "_remove", "_reply",
+    "_update", "_create", "_add_", "_delete", "_remove", "_reply",
     "_vote", "_link", "_unlink", "run_pipeline", "create_pipeline",
     "update_build", "_set_", "authenticate",
 )
 
 
-def bash_command(entry: str) -> str | None:
-    """Return the command string inside a Bash(...) allow entry, else None."""
-    m = re.match(r"^Bash\((.*?)(?::\*)?\)$", entry)
-    if not m:
+def check_bash(cmd: str):
+    """Return a violation reason for a Bash command prefix, or None if allowed."""
+    if any(cmd == ex or cmd.startswith(ex + " ") for ex in BASH_READONLY_EXCEPTIONS):
         return None
-    return m.group(1).strip()
+    if cmd in FAMILY_ROOTS:
+        return "bare command-family root; wildcard would auto-approve every subcommand incl. writes"
+    hit = next((k for k in WRITE_CAPABLE if cmd == k or cmd.startswith(k + " ")), None)
+    if hit:
+        return WRITE_CAPABLE[hit]
+    hit = next((k for k in WRITE_CAPABLE if k.startswith(cmd + " ")), None)
+    if hit:
+        return f"prefix of write command '{hit}' ({WRITE_CAPABLE[hit]})"
+    return None
+
+
+def check_mcp(entry: str):
+    """Return a violation reason for an mcp__ entry, or None if allowed."""
+    if "*" in entry:
+        return "wildcard MCP grant; would auto-approve every tool on the server incl. mutating ones"
+    lowered = entry.lower()
+    hit = next((m for m in MUTATING_MCP if m in lowered), None)
+    if hit:
+        return f"mutating MCP tool (matched '{hit.strip('_')}')"
+    return None
 
 
 def main() -> int:
@@ -103,36 +145,31 @@ def main() -> int:
         return 1
 
     allow = (data.get("permissions") or {}).get("allow", [])
-    violations: list[str] = []
+    violations = []
 
     for entry in allow:
         if entry.startswith("mcp__"):
-            lowered = entry.lower()
-            for mark in MUTATING_MCP:
-                if mark in lowered:
-                    violations.append(f"{entry}  -> mutating MCP tool (matched '{mark.strip()}')")
-                    break
+            reason = check_mcp(entry)
+            if reason:
+                violations.append(f"{entry}  -> {reason}")
             continue
-
-        cmd = bash_command(entry)
+        cmd = parse_bash_prefix(entry)
         if cmd is None:
             continue  # Write(...) and other rule types are out of scope here
-        if any(cmd == ex or cmd.startswith(ex + " ") for ex in BASH_READONLY_EXCEPTIONS):
-            continue
-        for key, reason in WRITE_CAPABLE.items():
-            if cmd == key or cmd.startswith(key + " "):
-                violations.append(f"Bash({cmd})  -> {reason}")
-                break
+        reason = check_bash(cmd)
+        if reason:
+            violations.append(f"Bash({cmd})  -> {reason}")
 
     if violations:
-        print(f"FAIL: {len(violations)} mutating allow rule(s) in {path.name}:")
+        print(f"FAIL: {len(violations)} dangerous allow rule(s) in {path.name}:")
         for v in violations:
             print(f"  - {v}")
         return 1
 
     n_bash = sum(1 for e in allow if e.startswith("Bash("))
     n_mcp = sum(1 for e in allow if e.startswith("mcp__"))
-    print(f"OK: {len(allow)} allow entries validated ({n_bash} Bash, {n_mcp} MCP) - none can mutate state.")
+    print(f"OK: {len(allow)} allow entries checked ({n_bash} Bash, {n_mcp} MCP) - "
+          f"none match a known-dangerous pattern.")
     return 0
 
 

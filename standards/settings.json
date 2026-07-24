@@ -78,7 +78,6 @@
       "Bash(git log:*)",
       "Bash(git diff:*)",
       "Bash(git show:*)",
-      "Bash(git grep:*)",
       "Bash(git rev-parse:*)",
       "Bash(git rev-list:*)",
       "Bash(git ls-files:*)",
