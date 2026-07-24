@@ -2,8 +2,12 @@
 """Measure how many tool calls the team allowlist auto-approves.
 
 Scans Claude Code transcripts and, for every Bash / MCP tool call, decides
-whether the *effective* allow rules would let it run WITHOUT a permission
-prompt. Use it to size the impact of the allowlist and to watch it over time.
+whether it would run WITHOUT a permission prompt. "Auto-approved" means the
+team allow rules cover it OR it is a Claude Code built-in read-only command
+(`ls`/`cat`/`grep`/`cd`/…, v2.1.208+) — the latter needs no allow rule, so
+counting it as "still prompting" would overstate the residual. The cd+git
+directory-hooks prompt and redirect/substitution are still counted as prompting
+(see allowlist_common.bash_covered).
 
 Caveat: transcripts do not record, per call, whether a prompt was actually
 shown (that depended on the settings state at the time, plus any per-project
@@ -29,7 +33,7 @@ import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from allowlist_common import bash_covered, parse_bash_prefix
+from allowlist_common import CLAUDE_BUILTIN_READONLY, bash_covered, parse_bash_prefix
 
 REJECTION_MARKERS = ("doesn't want to proceed", "User rejected")
 
@@ -106,7 +110,7 @@ def main() -> int:
                         if not isinstance(cmd, str) or not cmd.strip():
                             continue
                         key = " ".join(cmd.strip().split()[:3])
-                        if bash_covered(cmd, bash_prefixes):
+                        if bash_covered(cmd, bash_prefixes, CLAUDE_BUILTIN_READONLY):
                             covered[key] += 1
                             covered_sessions[key].add(sid)
                         else:
@@ -123,7 +127,7 @@ def main() -> int:
     tot_cov = sum(covered.values())
     tot_prompt = sum(would_prompt.values())
     print(f"\n=== IMPACT ===")
-    print(f"tool calls AUTO-APPROVED by the allowlist (no prompt): {tot_cov}")
+    print(f"tool calls AUTO-APPROVED (allowlist + built-in read-only): {tot_cov}")
     print(f"tool calls that would STILL prompt:                    {tot_prompt}")
     print(f"hard rejection markers in window (prompt shown+declined): {rejections}")
 
