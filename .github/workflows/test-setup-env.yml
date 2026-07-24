@@ -7,6 +7,8 @@ on:
       - "setup-env.ps1"
       - "scripts/Merge-JsonObjects.ps1"
       - "scripts/test-merge-jsonobjects.ps1"
+      - "scripts/test-setup-env-integration.ps1"
+      - "standards/settings.json"
       - ".github/workflows/test-setup-env.yml"
   push:
     branches: [main]
@@ -16,6 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Merge-JsonObjects regression test (pwsh)
+      - name: Merge-JsonObjects unit test (pwsh)
         shell: pwsh
         run: ./scripts/test-merge-jsonobjects.ps1
+      - name: Settings-sync integration test (pwsh)
+        shell: pwsh
+        run: ./scripts/test-setup-env-integration.ps1

@@ -177,11 +177,6 @@ Write-Host '=== Team Settings ==='
 $SettingsSource = Join-Path (Join-Path $RepoRoot 'standards') 'settings.json'
 $SettingsTarget = Join-Path $ClaudeDir 'settings.json'
 
-# Merge-JsonObjects lives in its own dot-sourceable script so it can be
-# unit-tested in isolation (scripts/test-merge-jsonobjects.ps1). See issue #201
-# for the single-key-base corruption this fixes.
-. (Join-Path (Join-Path $RepoRoot 'scripts') 'Merge-JsonObjects.ps1')
-
 if (-not (Test-Path $SettingsSource)) {
     Write-Host "No standards/settings.json found - skipping settings sync."
 }
@@ -193,6 +188,9 @@ else {
         Write-Host "Created $SettingsTarget with team settings."
     }
     else {
+        # Merge-JsonObjects lives in its own dot-sourceable script so it can be
+        # unit-tested in isolation (scripts/test-merge-jsonobjects.ps1). See #201.
+        . (Join-Path (Join-Path $RepoRoot 'scripts') 'Merge-JsonObjects.ps1')
         $ExistingSettings = Get-Content -Path $SettingsTarget -Raw | ConvertFrom-Json
         $Merged = Merge-JsonObjects -Base $TeamSettings -Override $ExistingSettings
         $MergedJson = $Merged | ConvertTo-Json -Depth 10
@@ -202,7 +200,7 @@ else {
             Write-Host "Settings in $SettingsTarget are already up to date."
         }
         else {
-            Set-Content -Path $SettingsTarget -Value $MergedJson -NoNewline
+            Set-Content -Path $SettingsTarget -Value $MergedJson -NoNewline -Encoding utf8
             Write-Host "Merged team settings into $SettingsTarget."
         }
     }
