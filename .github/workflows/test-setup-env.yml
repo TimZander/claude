@@ -1,0 +1,21 @@
+name: test-setup-env
+
+# Guards against the settings-merge corruption regression (issue #201).
+on:
+  pull_request:
+    paths:
+      - "setup-env.ps1"
+      - "scripts/Merge-JsonObjects.ps1"
+      - "scripts/test-merge-jsonobjects.ps1"
+      - ".github/workflows/test-setup-env.yml"
+  push:
+    branches: [main]
+
+jobs:
+  merge-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Merge-JsonObjects regression test (pwsh)
+        shell: pwsh
+        run: ./scripts/test-merge-jsonobjects.ps1
