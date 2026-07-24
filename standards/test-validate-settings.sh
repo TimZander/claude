@@ -74,6 +74,13 @@ JSON
 "$PY" "$VALIDATOR" "$tmp/bad-mcp.json" >/dev/null 2>&1
 check "mutating MCP tool is rejected" 1 $?
 
+# 4b. Fail-closed: a read-LOOKING MCP tool not on the vetted set is rejected.
+cat > "$tmp/bad-unknown-mcp.json" <<'JSON'
+{ "permissions": { "allow": ["mcp__azure-devops__wit_get_something_new"], "deny": [] } }
+JSON
+"$PY" "$VALIDATOR" "$tmp/bad-unknown-mcp.json" >/dev/null 2>&1
+check "unlisted read-looking MCP tool is rejected (fail-closed)" 1 $?
+
 # 5. git config read form is allowed through the exception.
 cat > "$tmp/good-config.json" <<'JSON'
 { "permissions": { "allow": ["Bash(git config --get:*)", "Bash(git config --list:*)"], "deny": [] } }

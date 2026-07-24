@@ -11,12 +11,16 @@ pre-approved for everyone in every repo and worktree. This validator fails
     auto-approve every subcommand including writes,
   - is a proper prefix of a known write command (so `Bash(git worktree:*)`
     would reach `git worktree add`), or
-  - is an MCP wildcard (`mcp__server__*`) or a known-mutating MCP tool.
+  - is an MCP wildcard (`mcp__server__*`) or an MCP tool not in the reviewed
+    known-safe set (`KNOWN_SAFE_MCP`).
 
-This is a DENYLIST of known-dangerous shapes, not a proof of read-only-ness:
-it catches the known patterns and the structurally-dangerous shapes (bare
-roots, wildcards), but a novel mutating verb not listed here could still pass.
-Treat a green result as "no known-dangerous entry", not "provably safe".
+The two surfaces are gated differently on purpose:
+  - Bash is a DENYLIST of known-dangerous shapes. An open-ended command space
+    can't be enumerated, so a novel dangerous Bash command not listed here
+    could still pass — treat a green Bash result as "no known-dangerous entry",
+    not "provably safe".
+  - MCP is an ALLOWLIST (`KNOWN_SAFE_MCP`). The tool namespace is finite, so
+    anything not explicitly vetted read-only is rejected (fail-closed).
 
 Usage: python3 validate-settings.py [path-to-settings.json]
        (defaults to the settings.json next to this script)
@@ -100,12 +104,66 @@ FAMILY_ROOTS = {"git", "gh", "az", "aws", "gcloud", "docker", "kubectl",
 BASH_READONLY_EXCEPTIONS = ("git config --get", "git config --list")
 
 # Substrings that mark an MCP tool as mutating (read-only tools use
-# get/list/show/query/search).
+# get/list/show/query/search). Kept as a defense-in-depth backstop under the
+# allowlist below — it flags a mutating name accidentally added to KNOWN_SAFE_MCP.
 MUTATING_MCP = (
     "_update", "_create", "_add_", "_delete", "_remove", "_reply",
     "_vote", "_link", "_unlink", "run_pipeline", "create_pipeline",
     "update_build", "_set_", "authenticate",
 )
+
+# MCP tools reviewed and verified read-only. An mcp__ allow entry MUST be in
+# this set (fail-closed). Adding a name here is a deliberate security decision:
+# confirm the tool cannot mutate state before adding it (and to settings.json).
+# CI fails if settings.json allows an mcp__ tool absent from this set.
+KNOWN_SAFE_MCP = {
+    "mcp__azure-devops__wit_get_work_item",
+    "mcp__azure-devops__wit_get_work_items_batch_by_ids",
+    "mcp__azure-devops__wit_query_by_wiql",
+    "mcp__azure-devops__wit_list_work_item_comments",
+    "mcp__azure-devops__wit_my_work_items",
+    "mcp__azure-devops__wit_get_work_item_attachment",
+    "mcp__azure-devops__wit_get_work_item_type",
+    "mcp__azure-devops__wit_get_query",
+    "mcp__azure-devops__wit_get_query_results_by_id",
+    "mcp__azure-devops__wit_get_work_items_for_iteration",
+    "mcp__azure-devops__wit_list_work_item_revisions",
+    "mcp__azure-devops__wit_list_backlogs",
+    "mcp__azure-devops__wit_list_backlog_work_items",
+    "mcp__azure-devops__repo_get_pull_request_by_id",
+    "mcp__azure-devops__repo_list_pull_request_threads",
+    "mcp__azure-devops__repo_list_pull_request_thread_comments",
+    "mcp__azure-devops__repo_get_pull_request_changes",
+    "mcp__azure-devops__repo_list_pull_requests_by_repo_or_project",
+    "mcp__azure-devops__repo_list_pull_requests_by_commits",
+    "mcp__azure-devops__repo_get_file_content",
+    "mcp__azure-devops__repo_get_repo_by_name_or_id",
+    "mcp__azure-devops__repo_list_repos_by_project",
+    "mcp__azure-devops__repo_list_directory",
+    "mcp__azure-devops__repo_list_branches_by_repo",
+    "mcp__azure-devops__repo_list_my_branches_by_repo",
+    "mcp__azure-devops__repo_get_branch_by_name",
+    "mcp__azure-devops__repo_search_commits",
+    "mcp__azure-devops__core_list_projects",
+    "mcp__azure-devops__core_list_project_teams",
+    "mcp__azure-devops__core_get_identity_ids",
+    "mcp__azure-devops__pipelines_get_builds",
+    "mcp__azure-devops__pipelines_get_build_log",
+    "mcp__azure-devops__pipelines_get_build_log_by_id",
+    "mcp__azure-devops__pipelines_get_build_definitions",
+    "mcp__azure-devops__pipelines_get_build_definition_revisions",
+    "mcp__azure-devops__pipelines_get_build_status",
+    "mcp__azure-devops__pipelines_get_build_changes",
+    "mcp__azure-devops__pipelines_get_run",
+    "mcp__azure-devops__pipelines_list_runs",
+    "mcp__azure-devops__pipelines_list_artifacts",
+    "mcp__newrelic__execute_nrql_query",
+    "mcp__newrelic__natural_language_to_nrql_query",
+    "mcp__newrelic__get_entity",
+    "mcp__newrelic__search_entity_with_tag",
+    "mcp__newrelic__list_change_events",
+    "mcp__newrelic__convert_time_period_to_epoch_ms",
+}
 
 
 def check_bash(cmd: str):
@@ -124,13 +182,21 @@ def check_bash(cmd: str):
 
 
 def check_mcp(entry: str):
-    """Return a violation reason for an mcp__ entry, or None if allowed."""
+    """Return a violation reason for an mcp__ entry, or None if allowed.
+
+    Allowlist (fail-closed): the entry must be a vetted read-only tool. The
+    substring denylist is a defense-in-depth backstop against a mutating tool
+    being added to KNOWN_SAFE_MCP by mistake.
+    """
     if "*" in entry:
         return "wildcard MCP grant; would auto-approve every tool on the server incl. mutating ones"
+    if entry not in KNOWN_SAFE_MCP:
+        return ("not in the reviewed known-safe set (KNOWN_SAFE_MCP); if it is read-only, "
+                "add it there after verifying, then to settings.json")
     lowered = entry.lower()
     hit = next((m for m in MUTATING_MCP if m in lowered), None)
     if hit:
-        return f"mutating MCP tool (matched '{hit.strip('_')}')"
+        return f"listed in KNOWN_SAFE_MCP but the name looks mutating (matched '{hit.strip('_')}') - re-verify"
     return None
 
 
