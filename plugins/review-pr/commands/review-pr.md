@@ -62,12 +62,23 @@ Before the gate, print a short, **read-only** summary so the user can judge whet
 
 1. Fetch both refs without switching branches: `git fetch origin <sourceBranchShort> <targetBranchShort>` — short names strip `refs/heads/` (e.g. `branches/7984-...` and `main`).
 2. Diffstat: `git diff --stat origin/<target>...origin/<source>` (three-dot — changes on the source since it diverged).
-3. Code highlights: from `git diff origin/<target>...origin/<source>`, pull 2–4 of the most notable hunks — the ones carrying the actual behavior/contract change, not renames or test churn. Prefer short excerpts (a few lines each) tagged with `file:line`.
+3. Code highlights: from `git diff origin/<target>...origin/<source>`, pull 2–4 of the most notable hunks — the ones carrying the actual behavior/contract change, not renames or test churn. Keep each excerpt short (a few lines), and render it as a **fenced code block** with the language hint for the file (```csharp, ```ts, ```razor, …).
 
-Then print, in a few lines:
-- **What it does** — 2–3 sentences from the title, description, and diffstat.
-- **Changed files** — the diffstat (files, +/-), collapsed to a one-line "N files, +X/-Y" if long.
-- **Highlights** — the 2–4 excerpts/bullets with `file:line`, each noting why it matters.
+Then print the summary as a **top-down flow** — broadest context first, narrowing to specific code — so the user reads from "what/where" down into "how" and can stop as soon as they've seen enough. Use these sections in this order:
+
+1. **Header** — one line: `PR #<id> "<title>"`, `<source> → <target>`, state, author. The at-a-glance identity of the PR.
+2. **What it does** — 2–3 sentences from the title, description, and diffstat. The intent, before any code.
+3. **Changed files** — the diffstat (files, +/-), collapsed to a one-line "N files, +X/-Y" if long. Where the change lives.
+4. **Highlights** — last, because it's the deepest detail: the 2–4 excerpts, each shown as a fenced code block preceded by a `file:line` label and a one-line note on why it matters. Prefer showing the changed lines with enough surrounding context to read (a diff `+/-` hunk is fine when the change is a small edit; a plain snippet when it's new code). For example:
+
+  `LoginWithUsernameRoutes.cs:37` — impersonation is gated on the four tile sections, not a single role.
+  ````
+  ```csharp
+  routeGroup.MapPost("/impersonate", ImpersonateAsync)
+      .RequireAuthorization(SectionAccessPolicy.ForSections(
+          Sections.OwnerRelations, Sections.OnProperty, Sections.Arm, Sections.Sales));
+  ```
+  ````
 
 Keep it tight — a pre-read teaser, not the review. If a fetch fails (network, bad ref), say so and fall back to summarizing from the PR title/description alone.
 
