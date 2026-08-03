@@ -17,6 +17,14 @@
       "strict": false
     },
     {
+      "name": "review-pr",
+      "description": "End-to-end Azure DevOps pull request review: summarize the PR, delegate the critical review to deep-review, then post selected findings as inline comments and cast a vote — only after you confirm",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/review-pr",
+      "category": "productivity",
+      "strict": false
+    },
+    {
       "name": "craft-commit",
       "description": "Craft a commit message for staged changes, output as text and a ready-to-run command",
       "author": { "name": "Tim Zander" },
