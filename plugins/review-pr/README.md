@@ -38,19 +38,19 @@ selector.
    comments and whether to cast the vote.
 5. **Publish** — only after you say go: post the overview + your selected findings as inline
    comments anchored to `file:line`, and cast the vote (which auto-adds you as a reviewer).
+   A finding whose file isn't in the PR diff — or whose line isn't on the diff's right side —
+   is posted as a top-level comment instead, since ADO would otherwise bury it in the Overview
+   tab. The plan flags those before you approve it.
 
 The Step 1b summary only *fetches* refs — it never changes your working directory. The checkout
 happens inside `deep-review` in Step 2, after the first gate.
 
 ## Verdict → vote mapping
 
-| deep-review verdict | Findings | Recommended vote |
-|---|---|---|
-| APPROVE | only 💡 or none | `Approved` |
-| APPROVE | some 💡 worth noting | `ApprovedWithSuggestions` |
-| NEEDS DISCUSSION | any | `NoVote` |
-| REQUEST CHANGES | 🟡 only | `WaitingForAuthor` |
-| REQUEST CHANGES | one or more 🔴 | `WaitingForAuthor` (default), `Rejected` offered |
+deep-review's verdict plus the 🔴/🟡/💡 counts map to one recommended ADO vote —
+`Approved`, `ApprovedWithSuggestions`, `NoVote`, `WaitingForAuthor` or `Rejected`. The
+mapping table lives in **Step 4 of [`commands/review-pr.md`](commands/review-pr.md)** and
+is deliberately kept in one place: two copies of it drifted apart once already.
 
 The vote is always a recommendation you confirm or override at the gate — never a silent choice.
 
@@ -59,13 +59,17 @@ The vote is always a recommendation you confirm or override at the gate — neve
 - An **Azure DevOps** `origin` remote.
 - The [`deep-review`](../deep-review) plugin installed (this plugin delegates the actual review to it).
 - The `azure-devops` MCP server connected — `review-pr` loads its tools on demand via `ToolSearch`
-  and uses them for PR lookup, comment threads, and the vote.
+  and uses them for PR lookup, comment threads, and the vote. If the server is not connected the
+  command stops at Step 1 and says so, rather than improvising tool calls.
 
-## Agent invocation
+## Invocation
 
-The command is model-invocable (`disable-model-invocation: false`), so an agent can call it via
-the Skill tool:
+`review-pr` is **user-invoked only** (`disable-model-invocation: true`). Unlike `deep-review`,
+which is read-only and safe for an agent to reach for, this command writes comments and a vote
+onto someone else's pull request — so it is never auto-selected by a model. Run it yourself:
 
 ```
-Skill({ skill: "review-pr", args: "pr 4846 focus on error handling" })
+/review-pr pr 4846
 ```
+
+An agent that wants the analysis without the publish path should invoke `deep-review` instead.
