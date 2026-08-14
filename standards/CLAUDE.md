@@ -232,6 +232,18 @@ When a deployment, infrastructure operation, or third-party integration fails wi
 - **State your confidence level.** If speculating about a root cause, say so explicitly rather than presenting it as a conclusion. "I suspect X but haven't confirmed" is better than "X is the issue."
 - **Ask: could this be a known limitation?** Especially with preview/new runtime versions, unsupported plan types, or region availability — these are commonly documented in vendor issue trackers.
 
+### Separate the failure from whatever escalated it
+
+A build or test command often fails on a condition that is only fatal because a project setting made it fatal. Read the whole error line rather than just the message: `error NU1900: Warning As Error: ...` is a **warning** that something promoted.
+
+This is the usual reason the "don't retry with variations" rule gets violated — each new flag targets the underlying condition, while the escalation that actually stopped the build goes untouched.
+
+- **Check whether the code is natively an error.** Grep the build config for the promotion: `TreatWarningsAsErrors`, `WarningsAsErrors`, `-Werror`, `-D warnings`, `--strict`, `set -e`, or an explicit code list — in `Directory.Build.props`, `.csproj`, `pyproject.toml`, `Makefile`, or the CI yaml.
+- **Suppress the specific code, not the policy.** `-p:NoWarn=NU1900` beats `-p:TreatWarningsAsErrors=false`: the first unblocks one known-benign condition, the second masks every real defect for the rest of the run.
+- **Note that a suppression is a local workaround.** It belongs in the command you run and in the PR description as a reproduction recipe — not committed into the build config, unless the team has agreed the code is benign everywhere.
+
+**Worked example.** `dotnet test` failed with `NU1900` because a private package feed was unreachable. The feed genuinely was unreachable, but that is normally a warning; `TreatWarningsAsErrors=true` in `Directory.Build.props` is what stopped the build. `-p:NoWarn=NU1900` ran the full suite offline against already-restored packages. `--no-restore` and disabling the audit both failed, because neither addressed the promotion — and chasing feed credentials would have been the wrong fix entirely.
+
 ## GitHub Issue Relationships
 
 GitHub's "Relationships" feature (Blocked by / Blocking) can be managed via `gh api graphql`.
