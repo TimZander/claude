@@ -118,6 +118,8 @@ Runs a structured, skeptical code review covering:
 
 Uses parallel subagents to deeply analyze correctness/security, test coverage, design quality, and assumptions simultaneously — then merges and verifies findings into a single comprehensive output.
 
+Running `/deep-review` **is** the request for those subagents — you never have to ask for them separately, and a standing instruction elsewhere in the session that discourages spawning agents does not apply here. The fan-out is skipped only when the Agent tool genuinely fails, and when that happens the review says so in a 🎯 Context line rather than quietly returning a single-reviewer pass that looks the same.
+
 Outputs a structured verdict with critical issues, simplification opportunities, and actionable feedback.
 
 ## Agent Invocation
