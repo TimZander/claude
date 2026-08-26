@@ -99,6 +99,12 @@ case "${STUB_MODE:-ok}" in
     fork)
         printf 'patch-1\tmain\tOPEN\ttrue\n'; exit 0 ;;
 esac
+# The work-item lookup's second call, asking only for the PR body. Placed after
+# the STUB_MODE case so the failure modes still exit first — a body fetch is
+# only ever reached once the branch lookup has already succeeded.
+case "$*" in
+    *"--json body"*) printf '%s\n' "${STUB_PR_BODY:-A description with no linked issue.}"; exit 0 ;;
+esac
 printf 'branches/142-anchor-pr-review-comments-on-changed-lines\tmain\t%s\tfalse\n' "${STUB_STATE:-MERGED}"
 STUB
 
@@ -120,6 +126,10 @@ case "${STUB_MODE:-ok}" in
         printf 'refs/heads/branches/7493-apm-errors-noticeerror-poc\r\nrefs/heads/main\r\ncompleted\r\nBgvCore\r\n'; exit 0 ;;
     otherrepo)
         printf 'refs/heads/branches/7493-apm-errors-noticeerror-poc\r\nrefs/heads/main\r\ncompleted\r\nSomeOtherRepo\r\n'; exit 0 ;;
+esac
+# Work-item lookup's description query — see the note on the gh stub above.
+case "$*" in
+    *description*) printf '%s\r\n' "${STUB_PR_BODY:-A description with no linked work item.}"; exit 0 ;;
 esac
 printf 'refs/heads/branches/7493-apm-errors-noticeerror-poc\r\nrefs/heads/main\r\n%s\r\nBgvCore\r\n' "${STUB_STATE:-completed}"
 STUB
@@ -475,6 +485,69 @@ assert_contains "REF_ID=170" "$out" "the pr token is case-insensitive"
 
 out=$(run_in "$GH_REPO" --args "pr #170")
 assert_contains "REF_ID=170" "$out" "'pr #170' matches with the optional hash"
+
+# ── Work item resolution ─────────────────────────────────────────────
+# The headline case: a PR reference and a story reference in one invocation.
+# Before WORKITEM_* existed, the single precedence chain resolved the PR and
+# silently dropped the issue, so Feature Fitness graded the diff against the
+# branch name instead of the acceptance criteria.
+
+out=$(run_in "$GH_REPO" --args "pr 170 https://github.com/TimZander/claude/issues/42")
+assert_contains "REF_ID=170" "$out" "PR + issue URL: the PR is still selected"
+assert_contains "WORKITEM_KIND=issue" "$out" "PR + issue URL: the issue is resolved too"
+assert_contains "WORKITEM_ID=42" "$out" "PR + issue URL: the issue id survives"
+assert_contains "WORKITEM_SOURCE=argument" "$out" "PR + issue URL: route reported as argument"
+
+out=$(run_in "$ADO_REPO" --args "pr 4506 https://dev.azure.com/bgvone/Proj/_workitems/edit/7775")
+assert_contains "REF_ID=4506" "$out" "ADO PR + work-item URL: the PR is still selected"
+assert_contains "WORKITEM_KIND=workitem" "$out" "ADO PR + work-item URL: the work item resolves"
+assert_contains "WORKITEM_ID=7775" "$out" "ADO PR + work-item URL: the work-item id survives"
+
+# Route 2 — the PR's own description. The keyword match is case-insensitive and
+# tolerates the past-tense forms GitHub accepts.
+out=$(STUB_PR_BODY="Rework the thing. Fixes #318" run_in "$GH_REPO" --args "pr 170")
+assert_contains "WORKITEM_ID=318" "$out" "pr-body: 'Fixes #318' is discovered"
+assert_contains "WORKITEM_SOURCE=pr-body" "$out" "pr-body: route reported as pr-body"
+
+out=$(STUB_PR_BODY="closed #77 as part of this" run_in "$GH_REPO" --args "pr 170")
+assert_contains "WORKITEM_ID=77" "$out" "pr-body: lowercase past-tense 'closed' matches"
+
+out=$(STUB_PR_BODY="Linked to AB#9912 for tracking" run_in "$ADO_REPO" --args "pr 4506")
+assert_contains "WORKITEM_KIND=workitem" "$out" "pr-body: AB#<id> is an ADO work item"
+assert_contains "WORKITEM_ID=9912" "$out" "pr-body: AB#<id> id is extracted"
+
+# Route 3 — our own branches/<id>-<slug> convention. The gh stub's PR resolves
+# to branches/142-..., and its default body carries no link, so the fall-through
+# to the branch name is what supplies the id.
+out=$(run_in "$GH_REPO" --args "pr 170")
+assert_contains "WORKITEM_ID=142" "$out" "branch-prefix: id read from the PR's source branch"
+assert_contains "WORKITEM_SOURCE=branch-prefix" "$out" "branch-prefix: route reported as branch-prefix"
+
+# With no PR at all the branch under review is the checked-out one.
+WI_REPO="$TEST_TMPDIR/wi-repo"
+setup_repo "$WI_REPO" "https://github.com/TimZander/claude.git" || exit 1
+git -C "$WI_REPO" checkout -q -b "branches/220-deep-review-read-the-story" || exit 1
+out=$(run_in "$WI_REPO" --args "focus on tests")
+assert_contains "KIND=none" "$out" "branch-prefix: no PR reference is still no PR"
+assert_contains "WORKITEM_ID=220" "$out" "branch-prefix: id read from the current branch"
+
+# A number that is not the branch's leading segment must not be mistaken for
+# the story id — anchoring is the whole reason this route is safe to trust.
+git -C "$WI_REPO" checkout -q -b "branches/fix-220-thing" || exit 1
+out=$(run_in "$WI_REPO" --args "focus on tests")
+assert_contains "WORKITEM_KIND=none" "$out" "branch-prefix: an embedded number does not match"
+
+# "No story found" must be reported explicitly, and must stay distinguishable
+# from a story that was found — a review that skipped fitness-checking should
+# not look identical to one that passed it.
+out=$(run_in "$GH_REPO" --args "focus on error handling")
+assert_contains "WORKITEM_KIND=none" "$out" "no reference and no numbered branch reports none"
+assert_not_contains "WORKITEM_ID=" "$out" "no work item omits WORKITEM_ID entirely"
+
+# A host we cannot query cannot classify a bare number either, so the work item
+# stays unresolved rather than being reported as a kind we cannot fetch.
+out=$(run_in "$ODD_REPO" --args "#143")
+assert_contains "WORKITEM_KIND=none" "$out" "unknown host does not classify a bare #<N>"
 
 echo
 echo "  $pass passed, $fail failed"

@@ -29,6 +29,16 @@ set -euo pipefail
 #   OTHER_REFS=<N>[,<N>...]     Other PR numbers mentioned in the arguments but
 #                               NOT selected (KIND=pr only; omitted when there
 #                               are none). See MULTIPLE REFERENCES below.
+#   WORKITEM_KIND=issue|workitem|none
+#                               The story behind the work — resolved INDEPENDENTLY
+#                               of the PR above, so one invocation reports both.
+#                               See WORK ITEM RESOLUTION below.
+#   WORKITEM_ID=<N>             The work item / issue number (omitted when none)
+#   WORKITEM_SOURCE=argument|pr-body|branch-prefix|commit-trailer
+#                               HOW it was found (omitted when none). Confidence
+#                               falls off down that list — the caller should name
+#                               the route when it reports the item, so the user
+#                               can reject a wrong guess.
 #   CURRENT_BRANCH=<name>       Checked-out branch (empty when detached)
 #   BRANCH_MATCH=true|false     SOURCE_BRANCH == CURRENT_BRANCH (KIND=pr only).
 #                               Never true on an empty branch name.
@@ -53,6 +63,20 @@ set -euo pipefail
 # KNOWN AMBIGUITY: `pr <N>` is matched anywhere in the arguments, so prose such
 # as "regression from PR 4" parses as a PR selector. The caller MUST confirm
 # with the user before switching branches, which is what bounds the damage.
+#
+# WORK ITEM RESOLUTION: the precedence chain above selects at most one
+# reference, which used to mean `deep-review pr 4506 <issue-url>` resolved the
+# PR and silently discarded the issue — the most common invocation was exactly
+# the one that threw away the acceptance criteria. A PR reference and a story
+# reference answer different questions ("which branch do I review" vs "what was
+# asked for"), so they are now resolved independently and both are reported.
+#
+# The WORKITEM_* keys are context only: they never select a branch, and a
+# failure to find one is never an error. Routes, first hit wins:
+#   1. argument       — an explicit issue / work-item reference in the arguments
+#   2. pr-body        — Closes/Fixes/Resolves #N, or AB#<id>, in the PR description
+#   3. branch-prefix  — the numeric prefix of our branches/<id>-<slug> convention
+#   4. commit-trailer — AB#<id> in the commits the branch adds over its base
 #
 # MULTIPLE REFERENCES: exactly one reference is ever selected — the leftmost,
 # which matches how people write ("pr 3, and check against work done in pr 4"
@@ -423,6 +447,125 @@ if [[ "$KIND" == "pr" ]]; then
     done
 fi
 
+# ── Resolve the work item behind the work ────────────────────────────
+# Independent of the PR resolution above — see WORK ITEM RESOLUTION in the
+# header. Every lookup here is best-effort: a failure leaves WORKITEM_KIND=none
+# and the caller reports "no story found", which is a legitimate outcome and
+# must stay distinguishable from a story that was found and graded against.
+
+WORKITEM_KIND="none"
+WORKITEM_ID=""
+WORKITEM_SOURCE=""
+
+# Classify a bare number for this host. ADO numbers work items separately from
+# PRs, so a bare number there is always a work item. GitHub shares one counter,
+# so #<N> might name a PR — but that only costs the caller a failed fetch, not a
+# wrong review target, because nothing here selects a branch.
+workitem_kind_for_host() {
+    if [[ "$HOST" == "azdo" ]]; then
+        printf 'workitem'
+    else
+        printf 'issue'
+    fi
+}
+
+# Route 1 — an explicit reference in the arguments. Same patterns as the
+# precedence chain above, matched again here because that chain may have spent
+# its single slot on the PR.
+if [[ "$ARGS" =~ https?://[^[:space:]]*/_workitems/edit/([0-9]+) ]]; then
+    WORKITEM_KIND="workitem"
+    WORKITEM_ID="${BASH_REMATCH[1]}"
+    WORKITEM_SOURCE="argument"
+elif [[ "$ARGS" =~ https?://[^[:space:]]*/issues/([0-9]+) ]]; then
+    WORKITEM_KIND="issue"
+    WORKITEM_ID="${BASH_REMATCH[1]}"
+    WORKITEM_SOURCE="argument"
+elif [[ "$HOST" != "unknown" && "$ARGS" =~ ${BOUNDARY_L}#([0-9]+)${BOUNDARY_R} ]]; then
+    # Skip the case where this same `#<N>` is the PR we already selected —
+    # on GitHub that would report the PR back as its own story.
+    if [[ "$KIND" != "pr" || "${BASH_REMATCH[2]}" != "$REF_ID" ]]; then
+        WORKITEM_ID="${BASH_REMATCH[2]}"
+        WORKITEM_KIND=$(workitem_kind_for_host)
+        WORKITEM_SOURCE="argument"
+    fi
+fi
+
+# Route 2 — the PR's own description. Matched with grep rather than a bash
+# regex because the keywords are case-insensitive and `${var,,}` is bash 4+;
+# macOS ships bash 3.2.
+if [[ "$WORKITEM_KIND" == "none" && "$KIND" == "pr" ]]; then
+    PR_BODY=""
+    if [[ "$HOST" == "github" ]]; then
+        PR_BODY=$(gh pr view "$REF_ID" --json body --jq '.body' 2>/dev/null || printf '')
+    else
+        PR_BODY=$(az repos pr show --id "$REF_ID" --org "${ORG:-}" \
+            --query "description" -o tsv 2>/dev/null || printf '')
+    fi
+
+    CLOSE_HIT=$(printf '%s' "$PR_BODY" \
+        | grep -Eio '(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]*:?[[:space:]]*#[0-9]+' \
+        | head -1 || printf '')
+    AB_HIT=$(printf '%s' "$PR_BODY" | grep -Eio 'AB#[0-9]+' | head -1 || printf '')
+
+    if [[ -n "$CLOSE_HIT" ]]; then
+        WORKITEM_ID="${CLOSE_HIT##*#}"
+        WORKITEM_KIND=$(workitem_kind_for_host)
+        WORKITEM_SOURCE="pr-body"
+    elif [[ -n "$AB_HIT" ]]; then
+        # AB#<id> is an ADO work-item link regardless of where it is written.
+        WORKITEM_ID="${AB_HIT##*#}"
+        WORKITEM_KIND="workitem"
+        WORKITEM_SOURCE="pr-body"
+    fi
+fi
+
+# Route 3 — our own branch convention, branches/<id>-<slug>. The id is right
+# there in the name; nothing has to be fetched to read it. Anchored to the
+# start of a path segment so `branches/fix-220-thing` does not match.
+if [[ "$WORKITEM_KIND" == "none" && "$HOST" != "unknown" ]]; then
+    WI_BRANCH="$CURRENT_BRANCH"
+    if [[ "$KIND" == "pr" ]]; then
+        WI_BRANCH="$SOURCE_BRANCH"
+    fi
+    if [[ "$WI_BRANCH" =~ (^|/)([0-9]+)- ]]; then
+        WORKITEM_ID="${BASH_REMATCH[2]}"
+        WORKITEM_KIND=$(workitem_kind_for_host)
+        WORKITEM_SOURCE="branch-prefix"
+    fi
+fi
+
+# Route 4 — AB#<id> in the commits the branch ADDS over its base. Bounded to
+# that range deliberately: scanning recent HEAD history instead would happily
+# return an AB#<id> from a commit that merged months ago. When the refs needed
+# to compute the range are not fetched, this route simply does not fire.
+if [[ "$WORKITEM_KIND" == "none" && "$HOST" != "unknown" ]]; then
+    WI_RANGE=""
+    if [[ "$KIND" == "pr" ]]; then
+        # HEAD is not the PR's branch — the caller has not checked it out yet —
+        # so the range must be expressed in remote refs on both ends.
+        if git rev-parse --verify --quiet "origin/$TARGET_BRANCH" >/dev/null 2>&1 \
+            && git rev-parse --verify --quiet "origin/$SOURCE_BRANCH" >/dev/null 2>&1; then
+            WI_RANGE="origin/$TARGET_BRANCH..origin/$SOURCE_BRANCH"
+        fi
+    else
+        for wi_base in origin/main origin/master; do
+            if git rev-parse --verify --quiet "$wi_base" >/dev/null 2>&1; then
+                WI_RANGE="$wi_base..HEAD"
+                break
+            fi
+        done
+    fi
+    if [[ -n "$WI_RANGE" ]]; then
+        WI_HIT=$(git log --format=%B -n 50 "$WI_RANGE" 2>/dev/null \
+            | grep -Eio 'AB#[0-9]+' | head -1 || printf '')
+        if [[ -n "$WI_HIT" ]]; then
+            WORKITEM_ID="${WI_HIT##*#}"
+            WORKITEM_KIND="workitem"
+            WORKITEM_SOURCE="commit-trailer"
+        fi
+    fi
+fi
+
 # ── Report ───────────────────────────────────────────────────────────
 
 echo "HOST=$HOST"
@@ -444,6 +587,11 @@ if [[ "$KIND" == "pr" ]]; then
     if [[ -n "$OTHER_REFS" ]]; then
         echo "OTHER_REFS=$OTHER_REFS"
     fi
+fi
+echo "WORKITEM_KIND=$WORKITEM_KIND"
+if [[ -n "$WORKITEM_ID" ]]; then
+    echo "WORKITEM_ID=$WORKITEM_ID"
+    echo "WORKITEM_SOURCE=$WORKITEM_SOURCE"
 fi
 echo "CURRENT_BRANCH=$CURRENT_BRANCH"
 echo "IN_WORKTREE=$IN_WORKTREE"
