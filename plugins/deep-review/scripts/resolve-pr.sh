@@ -39,13 +39,18 @@ set -euo pipefail
 #                               falls off down that list — the caller should name
 #                               the route when it reports the item, so the user
 #                               can reject a wrong guess.
-#   WORKITEM_LOOKUP=ok|pr-body-unreadable
+#   WORKITEM_LOOKUP=ok|pr-body-unreadable|reference-not-local
 #                               Whether every route that was TRIED completed.
 #                               `pr-body-unreadable` means the PR description
 #                               could not be fetched, so a link that may exist
-#                               there was never seen — the caller must not report
-#                               a fallback result as if the stronger route had
-#                               been checked and come back empty.
+#                               there was never seen. `reference-not-local`
+#                               means a reference URL was supplied but pointed
+#                               at another repository/organization and was
+#                               refused. In BOTH cases the caller must not
+#                               report whatever a weaker route produced as if
+#                               the stronger one had been checked and come back
+#                               empty — and must never say "no story was
+#                               referenced" when one was, and was declined.
 #   ORG=<url>                   ADO organization URL (HOST=azdo only). Emitted
 #                               because a work item cannot be fetched without it:
 #                               `az boards work-item show --id <N> --org <ORG>`.
@@ -88,9 +93,10 @@ set -euo pipefail
 #   3. branch-prefix  — the id in our branches/<id>-<slug> naming convention
 #
 # A WRONG story is worse than no story: it grades the diff against someone
-# else's acceptance criteria while looking like a successful resolution. Every
-# pattern below is therefore anchored on BOTH sides, and every route reports
-# how it decided so the caller can put the guess in front of the user.
+# else's acceptance criteria while looking like a successful resolution. So the
+# body patterns are anchored on BOTH sides, reference URLs must belong to this
+# repository/organization, and every route reports how it decided so the caller
+# can put the guess in front of the user.
 #
 # There is deliberately NO commit-message route. A previous draft scanned the
 # branch's commits for AB#<id>, but it could not fire where it was needed: this
@@ -110,7 +116,9 @@ set -euo pipefail
 # Exit codes:
 #   0 — Resolved (including KIND=none: no reference present, review HEAD)
 #   1 — Error (no origin remote, unsupported host, missing CLI, lookup failed,
-#       lookup returned no branch, cross-host or cross-repo reference)
+#       lookup returned no branch, cross-host PR URL). A cross-repo CONTEXT
+#       reference is not an error: it exits 0, resolves no story, and says so
+#       via WORKITEM_LOOKUP=reference-not-local.
 
 # ── Arguments ────────────────────────────────────────────────────────
 
@@ -184,9 +192,9 @@ remote_host() {
     printf '%s' "$url"
 }
 
-# An unknown host is NOT an error here. /deep-review runs this step for ANY
-# non-empty arguments, and most invocations are a plain focus area with no PR
-# reference at all. Failing early would break `/deep-review focus on X` for
+# An unknown host is NOT an error here. /deep-review runs this step on EVERY
+# invocation, including with no arguments at all, and most invocations are a
+# plain focus area with no PR reference. Failing early would break `/deep-review focus on X` for
 # every GitLab, Bitbucket, self-hosted and remote-less repo — a review that
 # works today. The host only has to be known to LOOK UP a PR, so that
 # requirement is enforced at the resolution step instead.
@@ -232,10 +240,138 @@ fi
 
 CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || true)
 
+# ── Reference locality ───────────────────────────────────────────────
+# Defined here, ABOVE the parse chain, because both the KIND path and the
+# WORKITEM_* path need them. An earlier version defined them only alongside the
+# work-item routes, so the KIND path published a foreign id unchecked while the
+# guard sat twenty lines below it.
+#
+# Why locality matters at all: a reference URL's NUMBER is meaningless without
+# its repository. The caller fetches with `gh issue view <N>` / `az boards
+# work-item show --id <N>` scoped to origin, so an id lifted from someone
+# else's repository resolves to a DIFFERENT, real story and grades the diff
+# against it. The PR-URL path already refuses a foreign host; this is the same
+# guard for every other reference.
+
+lower() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# The ADO organization NAME, reconciled across every remote dialect. The v3 ssh
+# forms must be matched BEFORE the generic visualstudio.com arm, or
+# vs-ssh.visualstudio.com yields the org "vs-ssh".
+ado_org_name() {
+    local url="$1"
+    if [[ "$url" =~ (ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)[:/]v3/([^/]+) ]]; then
+        printf '%s' "${BASH_REMATCH[2]}"
+    elif [[ "$url" =~ dev\.azure\.com/([^/]+) ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    elif [[ "$url" =~ ([A-Za-z0-9_-]+)\.visualstudio\.com ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    else
+        return 1
+    fi
+}
+
+# The organization URL `az --org` needs. Preserves each dialect's own form:
+# a legacy <org>.visualstudio.com remote keeps that host.
+ado_org_url() {
+    local url="$1" org
+    org=$(ado_org_name "$url") || return 1
+    if [[ "$url" =~ \.visualstudio\.com ]] && [[ ! "$url" =~ vs-ssh\.visualstudio\.com ]]; then
+        printf 'https://%s.visualstudio.com' "$org"
+    else
+        printf 'https://dev.azure.com/%s' "$org"
+    fi
+}
+
+# The repository name from a remote (last path segment, minus .git).
+origin_repo_name() {
+    local url="${1%/}"
+    url="${url%.git}"
+    printf '%s' "${url##*/}"
+}
+
+# Path portion of a URL, host stripped. scp-style remotes (git@host:path) are
+# normalized to host/path first so both forms compare segment-wise.
+url_after_host() {
+    local url="$1"
+    if [[ "$url" != *://* ]]; then
+        url="${url/:/\/}"   # scp-style: first colon becomes the path separator
+    else
+        url="${url#*://}"
+    fi
+    url="${url%%\?*}"       # drop a query string
+    url="${url#*@}"         # drop userinfo
+    url="${url#*/}"         # drop the host
+    url="${url%/}"
+    printf '%s' "${url%.git}"
+}
+
+# owner/repo — GitHub numbers issues per REPOSITORY, so both segments matter.
+url_owner_repo() {
+    local path parts IFS='/'
+    path=$(url_after_host "$1")
+    read -r -a parts <<< "$path"
+    # Test the elements with :- defaults rather than ${#parts[@]}: on bash 3.2
+    # (macOS) `read -a` can leave the array unset when the input is empty, and
+    # ${#parts[@]} is then an unbound-variable error under `set -u`.
+    if [[ -z "${parts[0]:-}" || -z "${parts[1]:-}" ]]; then
+        return 1
+    fi
+    printf '%s/%s' "${parts[0]}" "${parts[1]}"
+}
+
+# A canonical identity for "which repository/organization does this number
+# belong to", comparable across dialects and casing.
+#
+# ADO goes through ado_org_name rather than a raw host comparison. Comparing
+# hosts rejected `git@ssh.dev.azure.com:v3/<org>/...` against the very
+# work-item URL the ADO web UI produces for that same org — and a legacy
+# <org>.visualstudio.com remote against a dev.azure.com URL, which are the same
+# organization spelled two ways.
+#
+# Lowercased because GitHub owners/repos and ADO orgs are case-insensitive,
+# while a clone URL carries whatever casing was typed. A user pasting the
+# browser's canonical-cased URL is routine, not exotic.
+reference_scope() {
+    local url="$1" host owner_repo org
+    if [[ "$HOST" == "azdo" ]]; then
+        # Assign first: `lower "$(ado_org_name ...)" || return 1` would bind the
+        # || to lower, which succeeds on empty input, silently making an
+        # underivable org compare equal to another underivable one.
+        org=$(ado_org_name "$url") || return 1
+        lower "$org"
+        return 0
+    fi
+    host=$(remote_host "$url")
+    # Mirror the *.github.com tolerance of host detection above; an exact-match
+    # guard here rejected www.github.com while detection accepted it.
+    case "$host" in
+        *.github.com) host="${host#*.}" ;;
+    esac
+    owner_repo=$(url_owner_repo "$url") || return 1
+    lower "$host/$owner_repo"
+}
+
+# Does a reference URL point at the repository this review is about?
+reference_url_is_local() {
+    local url_scope origin_scope
+    [[ -n "$REMOTE_URL" ]] || return 1
+    url_scope=$(reference_scope "$1") || return 1
+    origin_scope=$(reference_scope "$REMOTE_URL") || return 1
+    [[ -n "$url_scope" && "$url_scope" == "$origin_scope" ]]
+}
+
 # ── Parse the reference ──────────────────────────────────────────────
 
 KIND="none"
 REF_ID=""
+# Set when a reference URL was present but pointed somewhere else. Reported via
+# WORKITEM_LOOKUP so "you named a story I refused" never looks like "you named
+# no story" — the caller would otherwise present a branch-name guess as though
+# nothing had been supplied.
+REFERENCE_REFUSED=false
 
 # Boundaries are non-alphanumeric rather than whitespace, so that `(pr 170)`,
 # `PR #170, focus on tests` and `pr 4506.` all match while `compr 4` and
@@ -260,13 +396,27 @@ elif [[ "$ARGS" =~ ${BOUNDARY_L}[Pp][Rr][[:space:]]+#?([0-9]+)${BOUNDARY_R} ]]; 
     KIND="pr"
     REF_ID="${BASH_REMATCH[2]}"
 # ADO work item URL: .../_workitems/edit/<N>
-elif [[ "$ARGS" =~ https?://[^[:space:]]*/_workitems/edit/([0-9]+) ]]; then
-    KIND="workitem"
-    REF_ID="${BASH_REMATCH[1]}"
+#
+# Both URL arms below refuse a FOREIGN reference. The number alone is
+# meaningless: the caller fetches it scoped to origin, so an id from another
+# repository resolves to a different, real story. This mirrors the PR-URL arm
+# above, which has always refused a foreign host — an earlier version guarded
+# only the WORKITEM_* routes and let a foreign id through here unchecked.
+elif [[ "$ARGS" =~ (https?://[^[:space:]]+)/_workitems/edit/([0-9]+) ]]; then
+    if reference_url_is_local "${BASH_REMATCH[1]}"; then
+        KIND="workitem"
+        REF_ID="${BASH_REMATCH[2]}"
+    else
+        REFERENCE_REFUSED=true
+    fi
 # GitHub issue URL: https://github.com/<owner>/<repo>/issues/<N>
-elif [[ "$ARGS" =~ https?://[^[:space:]]*/issues/([0-9]+) ]]; then
-    KIND="issue"
-    REF_ID="${BASH_REMATCH[1]}"
+elif [[ "$ARGS" =~ (https?://[^[:space:]]+)/issues/([0-9]+) ]]; then
+    if reference_url_is_local "${BASH_REMATCH[1]}"; then
+        KIND="issue"
+        REF_ID="${BASH_REMATCH[2]}"
+    else
+        REFERENCE_REFUSED=true
+    fi
 # Bare `#<N>` — meaning depends on the host (see header).
 elif [[ "$ARGS" =~ ${BOUNDARY_L}#([0-9]+)${BOUNDARY_R} ]]; then
     REF_ID="${BASH_REMATCH[2]}"
@@ -304,29 +454,6 @@ STATE=""
 # must yield `branches/7493-foo`, never `7493-foo` (a branch that does not exist).
 normalize_ref() {
     printf '%s' "${1#refs/heads/}"
-}
-
-# Derive the ADO organization URL from the origin remote. The v3 ssh dialects
-# must be matched BEFORE the generic visualstudio.com arm, or
-# vs-ssh.visualstudio.com derives the org as "vs-ssh".
-ado_org_url() {
-    local url="$1"
-    if [[ "$url" =~ (ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)[:/]v3/([^/]+) ]]; then
-        printf 'https://dev.azure.com/%s' "${BASH_REMATCH[2]}"
-    elif [[ "$url" =~ dev\.azure\.com/([^/]+) ]]; then
-        printf 'https://dev.azure.com/%s' "${BASH_REMATCH[1]}"
-    elif [[ "$url" =~ ([A-Za-z0-9_-]+)\.visualstudio\.com ]]; then
-        printf 'https://%s.visualstudio.com' "${BASH_REMATCH[1]}"
-    else
-        return 1
-    fi
-}
-
-# The repository name from the origin remote (last path segment, minus .git).
-origin_repo_name() {
-    local url="${1%/}"
-    url="${url%.git}"
-    printf '%s' "${url##*/}"
 }
 
 # Every PR number mentioned in the arguments, space-separated, in order of
@@ -500,78 +627,40 @@ workitem_kind_for_host() {
     fi
 }
 
-# Normalize scp-style remotes (git@host:path) to host/path so the two forms can
-# be compared segment-wise. Everything else is returned host-first, unchanged.
-url_after_host() {
-    local url="$1"
-    if [[ "$url" != *://* ]]; then
-        url="${url/:/\/}"
-    else
-        url="${url#*://}"
-    fi
-    url="${url#*@}"
-    url="${url#*/}"
-    url="${url%/}"
-    printf '%s' "${url%.git}"
-}
-
-# The leading path segments that scope a number to a repository. GitHub numbers
-# issues per REPOSITORY, so owner/repo must match; anything less and `gh issue
-# view <N>` silently reads this repo's issue of the same number.
-url_owner_repo() {
-    local path parts IFS='/'
-    path=$(url_after_host "$1")
-    read -r -a parts <<< "$path"
-    if [[ ${#parts[@]} -lt 2 ]]; then
-        return 1
-    fi
-    printf '%s/%s' "${parts[0]}" "${parts[1]}"
-}
-
-# Does a reference URL point at the repository this review is about?
-#
-# The bare number is NOT enough on its own: the caller fetches with `gh issue
-# view <N>` / `az boards work-item show --id <N>` scoped to origin, so an id
-# lifted from someone else's repository resolves to a DIFFERENT, real story and
-# grades the diff against it while reporting provenance "argument" —
-# "authoritative". The PR-URL path above already refuses a foreign host (see
-# "Refusing to look up a PR number from one host against another"); this is the
-# same guard for the context routes.
-#
-# KNOWN LIMIT: on ADO only the ORGANIZATION is compared, not the project. ADO
-# numbers work items per project, so a cross-project URL within one org still
-# passes. Comparing projects would mean reconciling percent-encoding across six
-# remote dialects; the org check covers the realistic cross-tenant mistake.
-reference_url_is_local() {
-    local url="$1" url_host url_scope origin_scope
-    url_host=$(remote_host "$url")
-    if [[ -n "$REMOTE_HOST" && "$url_host" != "$REMOTE_HOST" ]]; then
-        return 1
-    fi
-    if [[ "$HOST" == "azdo" ]]; then
-        url_scope=$(ado_org_url "$url") || return 1
-        origin_scope=$(ado_org_url "$REMOTE_URL") || return 1
-    else
-        url_scope=$(url_owner_repo "$url") || return 1
-        origin_scope=$(url_owner_repo "$REMOTE_URL") || return 1
-    fi
-    [[ "$url_scope" == "$origin_scope" ]]
-}
-
 # Route 1 — an explicit reference in the arguments.
-if [[ "$ARGS" =~ (https?://[^[:space:]]+)/_workitems/edit/([0-9]+) ]]; then
+#
+# Every arm is gated on a known host: an id we cannot classify or fetch is not
+# a story, and the bare-`#N` arm has always said so. The URL arms used to skip
+# that gate, so a GitLab repo produced WORKITEM_KIND=issue and the caller was
+# then told to run `gh issue view` in it.
+#
+# NOTE the deliberate absence of `elif` between the URL arms and the bare-`#N`
+# scan. A URL that matches but is REFUSED must not consume the route: on
+# `<foreign-url> see also #143` an elif chain discarded the perfectly local
+# #143 — the same "silently dropped the user's reference" bug the scan below
+# was written to fix, reintroduced one level up.
+if [[ "$HOST" != "unknown" && "$ARGS" =~ (https?://[^[:space:]]+)/_workitems/edit/([0-9]+) ]]; then
     if reference_url_is_local "${BASH_REMATCH[1]}"; then
         WORKITEM_KIND="workitem"
         WORKITEM_ID="${BASH_REMATCH[2]}"
         WORKITEM_SOURCE="argument"
+    else
+        REFERENCE_REFUSED=true
     fi
-elif [[ "$ARGS" =~ (https?://[^[:space:]]+)/issues/([0-9]+) ]]; then
+fi
+
+if [[ "$WORKITEM_KIND" == "none" && "$HOST" != "unknown" \
+    && "$ARGS" =~ (https?://[^[:space:]]+)/issues/([0-9]+) ]]; then
     if reference_url_is_local "${BASH_REMATCH[1]}"; then
         WORKITEM_KIND="issue"
         WORKITEM_ID="${BASH_REMATCH[2]}"
         WORKITEM_SOURCE="argument"
+    else
+        REFERENCE_REFUSED=true
     fi
-elif [[ "$HOST" != "unknown" ]]; then
+fi
+
+if [[ "$WORKITEM_KIND" == "none" && "$HOST" != "unknown" ]]; then
     # Bare `#<N>`. Bash regex has no global match, so scan by consuming each
     # match from a working copy — the same technique collect_pr_refs uses.
     #
@@ -641,18 +730,28 @@ if [[ "$WORKITEM_KIND" == "none" && "$KIND" == "pr" ]]; then
         WI_CLOSE_HIT="${WI_CLOSE_HIT%%[^0-9]}"
         WI_AB_HIT="${WI_AB_HIT%%[^0-9]}"
 
-        if [[ "$HOST" == "azdo" && -n "$WI_AB_HIT" ]]; then
-            WORKITEM_ID="${WI_AB_HIT##*#}"
-            WORKITEM_KIND="workitem"
-            WORKITEM_SOURCE="pr-body"
+        if [[ "$HOST" == "azdo" ]]; then
+            # On ADO, AB#<id> is the ONLY work-item link syntax in a PR
+            # description. A bare `#5` there is not a work-item reference —
+            # which is exactly why the header refuses to let `#N` select an
+            # ADO branch — so it must not resolve a story either. An earlier
+            # version fell through to the generic arm and returned work item
+            # 5, a number that exists in every ADO project.
+            if [[ -n "$WI_AB_HIT" ]]; then
+                WORKITEM_ID="${WI_AB_HIT##*#}"
+                WORKITEM_KIND="workitem"
+                WORKITEM_SOURCE="pr-body"
+            fi
         elif [[ -n "$WI_CLOSE_HIT" ]]; then
             WORKITEM_ID="${WI_CLOSE_HIT##*#}"
             WORKITEM_KIND=$(workitem_kind_for_host)
             WORKITEM_SOURCE="pr-body"
-        elif [[ -n "$WI_AB_HIT" ]]; then
-            # AB#<id> is an ADO work-item link wherever it is written — but a
-            # GitHub-hosted repo has no ADO org to fetch it from, so the caller
-            # is told the kind and left to decide (see ORG in the header).
+        elif [[ -n "$WI_AB_HIT" && -n "${ORG:-}" ]]; then
+            # AB#<id> outside ADO. Only accept it when an ADO org is actually
+            # derivable, because the caller needs `--org` to fetch it. Taking
+            # it unconditionally set a known-unfetchable kind AND suppressed
+            # route 3, so a perfectly good branches/<id>-<slug> story was
+            # displaced by an id nobody could read.
             WORKITEM_ID="${WI_AB_HIT##*#}"
             WORKITEM_KIND="workitem"
             WORKITEM_SOURCE="pr-body"
@@ -707,6 +806,11 @@ echo "WORKITEM_KIND=$WORKITEM_KIND"
 if [[ "$WORKITEM_KIND" != "none" ]]; then
     echo "WORKITEM_ID=$WORKITEM_ID"
     echo "WORKITEM_SOURCE=$WORKITEM_SOURCE"
+fi
+# A refused reference outranks a body-fetch failure in the report: the user
+# named something and we declined it, which they need to know about first.
+if [[ "$REFERENCE_REFUSED" == true ]]; then
+    WORKITEM_LOOKUP="reference-not-local"
 fi
 echo "WORKITEM_LOOKUP=$WORKITEM_LOOKUP"
 # The org is required to fetch an ADO work item at all, so publish the one the

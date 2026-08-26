@@ -73,6 +73,29 @@ $needle
     esac
 }
 
+# Exact whole-line negative. assert_not_contains is substring-based and
+# therefore OVER-strict on numbers: a correct `WORKITEM_ID=51` fails an
+# assert_not_contains "WORKITEM_ID=5". Use this for any numeric negative.
+assert_no_line() {
+    local needle="$1" out="$2" label="$3"
+    case "
+$out
+" in
+        *"
+$needle
+"*) fail=$((fail + 1)); echo "  FAIL $label: unexpected line '$needle'"; echo "    got: $out" ;;
+        *) pass=$((pass + 1)); echo "  PASS $label" ;;
+    esac
+}
+
+# Self-test, because a broken matcher turns every assertion using it into a
+# silent pass — the same blind spot as an untested code path.
+assert_line "b" "$(printf 'a\nb\nc')" "assert_line matches an interior line"
+assert_line "a" "$(printf 'a\nb')" "assert_line matches the first line"
+assert_line "c" "$(printf 'a\nc')" "assert_line matches the last line"
+assert_no_line "WORKITEM_ID=4" "WORKITEM_ID=42" "assert_line is not a substring match"
+assert_no_line "b" "$(printf 'a\nc')" "assert_no_line passes when absent"
+
 assert_not_contains() {
     local needle="$1" out="$2" label="$3"
     case "$out" in
@@ -705,6 +728,117 @@ assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "work-item keys land on stdou
 
 out=$(run_in "$GH_REPO" --args "pr 170"); rc=$?
 assert_exit 0 "$rc" "work-item resolution never changes the exit code"
+
+
+# --- Reference locality across dialects ------------------------------
+# A mutation study proved these paths were entirely unexercised: every URL the
+# suite fed the helpers was https, so the scp normalization, the short-path
+# guard, the cross-host check and the ADO dialect reconciliation could all be
+# broken at once with the suite still green. Each case below kills one mutant.
+
+SCP_REPO="$TEST_TMPDIR/scp-repo"
+setup_repo "$SCP_REPO" "git@github.com:TimZander/claude.git" || exit 1
+out=$(run_in "$SCP_REPO" --args "https://github.com/TimZander/claude/issues/42")
+assert_line "WORKITEM_ID=42" "$out" "scp-style origin accepts its own https issue URL"
+assert_line "WORKITEM_SOURCE=argument" "$out" "scp-style origin: reported as an explicit argument"
+
+# Same owner/repo, different host — the only shape that isolates the cross-host
+# check. The pre-existing cross-host test used a different owner too, so the
+# owner/repo comparison caught it and the host check was never exercised.
+out=$(run_in "$GH_REPO" --args "https://gitlab.com/TimZander/claude/issues/99")
+assert_no_line "WORKITEM_ID=99" "$out" "same owner/repo on another host is refused"
+assert_line "WORKITEM_LOOKUP=reference-not-local" "$out" "cross-host refusal is reported"
+
+ADO_SSH_REPO="$TEST_TMPDIR/ado-ssh-repo"
+setup_repo "$ADO_SSH_REPO" "git@ssh.dev.azure.com:v3/bgvone/BGV Development/BgvCore" || exit 1
+out=$(run_in "$ADO_SSH_REPO" --args "https://dev.azure.com/bgvone/Proj/_workitems/edit/7775")
+assert_line "WORKITEM_ID=7775" "$out" "ADO ssh origin accepts a same-org work-item URL"
+assert_line "ORG=https://dev.azure.com/bgvone" "$out" "ADO ssh origin still derives the org"
+
+# The legacy and modern ADO hosts are the same organization spelled two ways.
+ADO_VS_REPO="$TEST_TMPDIR/ado-vs-repo"
+setup_repo "$ADO_VS_REPO" "https://bgvone.visualstudio.com/BGV/_git/BgvCore" || exit 1
+out=$(run_in "$ADO_VS_REPO" --args "https://dev.azure.com/bgvone/Proj/_workitems/edit/7775")
+assert_line "WORKITEM_ID=7775" "$out" "visualstudio.com origin accepts a dev.azure.com URL for the same org"
+
+out=$(run_in "$ADO_VS_REPO" --args "https://dev.azure.com/OTHERORG/P/_workitems/edit/555")
+assert_no_line "WORKITEM_ID=555" "$out" "a genuinely different ADO org is still refused"
+
+# Owners, repos and orgs are case-insensitive on both platforms; a clone URL
+# carries whatever casing was typed, and users paste the browser's canonical form.
+out=$(run_in "$GH_REPO" --args "https://github.com/TIMZANDER/Claude/issues/42")
+assert_line "WORKITEM_ID=42" "$out" "owner/repo comparison is case-insensitive"
+
+# Host detection accepts *.github.com, so the locality guard must too.
+out=$(run_in "$GH_REPO" --args "https://www.github.com/TimZander/claude/issues/42")
+assert_line "WORKITEM_ID=42" "$out" "www.github.com matches a github.com origin"
+
+# --- A refusal must never look like an absence ------------------------
+# The whole point of the guard is that a wrong story is worse than none. A
+# silent refusal that falls through to the branch name produces exactly the
+# wrong story, with no signal that the user named a different one.
+
+out=$(run_in "$GH_REPO" --args "https://github.com/SOMEONE-ELSE/other/issues/42")
+assert_no_line "WORKITEM_ID=42" "$out" "foreign issue URL: the id is refused"
+assert_line "WORKITEM_LOOKUP=reference-not-local" "$out" "foreign issue URL: refusal is reported"
+assert_no_line "KIND=issue" "$out" "foreign issue URL: KIND is refused too, not just WORKITEM_*"
+assert_no_line "REF_ID=42" "$out" "foreign issue URL: the id does not leak via REF_ID"
+
+# A refused URL must not consume the route. An if/elif chain here discarded a
+# perfectly local #<N> sitting beside the foreign one.
+out=$(run_in "$GH_REPO" --args "https://github.com/SOMEONE-ELSE/other/issues/42 see also #143")
+assert_line "WORKITEM_ID=143" "$out" "a refused URL does not blind the route to a local #<N>"
+assert_line "WORKITEM_SOURCE=argument" "$out" "the surviving local reference is still an argument"
+
+# --- Host gating is consistent across every route ---------------------
+
+out=$(run_in "$ODD_REPO" --args "https://gitlab.com/someone/thing/issues/99")
+assert_line "WORKITEM_KIND=none" "$out" "unknown host resolves no story even from its own issue URL"
+
+UNKNOWN_BRANCH_REPO="$TEST_TMPDIR/unknown-branch-repo"
+setup_repo "$UNKNOWN_BRANCH_REPO" "https://gitlab.com/someone/thing.git" || exit 1
+git -C "$UNKNOWN_BRANCH_REPO" checkout -q -b "branches/220-on-an-unknown-host" || exit 1
+out=$(run_in "$UNKNOWN_BRANCH_REPO" --args "focus on tests")
+assert_line "WORKITEM_KIND=none" "$out" "unknown host resolves no story from a branches/<id>- name"
+
+# --- AB#<id> and host classification ----------------------------------
+
+# On ADO a bare closing keyword is NOT a work-item link; only AB#<id> is. An
+# earlier version returned work item 5, a number every ADO project has.
+out=$(STUB_PR_BODY="Fixes #5, nothing else here" run_in "$ADO_REPO" --args "pr 4506")
+assert_no_line "WORKITEM_ID=5" "$out" "ADO: a bare closing keyword is not a work-item link"
+assert_line "WORKITEM_ID=7493" "$out" "ADO: falls through to the branch name instead"
+
+# AB#<id> on a GitHub repo names a work item nobody here can fetch — there is
+# no org. Taking it set an unfetchable kind AND suppressed the usable
+# branch-name story below it.
+out=$(STUB_PR_BODY="Tracked as AB#9912 upstream" run_in "$GH_REPO" --args "pr 170")
+assert_line "WORKITEM_ID=142" "$out" "GitHub: an unfetchable AB#<id> does not displace the branch story"
+assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "GitHub: route 3 still runs after an AB#-only body"
+
+# --- The unreadable-body path, on both hosts --------------------------
+# Previously only the gh arm was exercised, though az auth failures are the
+# more common real-world case.
+
+out=$(STUB_BODY_FAIL=1 run_in "$ADO_REPO" --args "pr 4506")
+assert_line "WORKITEM_LOOKUP=pr-body-unreadable" "$out" "ADO body-fetch failure is reported"
+assert_line "WORKITEM_ID=7493" "$out" "ADO body-fetch failure still falls back to the branch"
+
+# The combination the caller actually keys on: a fallback result PLUS the
+# signal that the stronger route was skipped rather than checked.
+out=$(STUB_BODY_FAIL=1 run_in "$GH_REPO" --args "pr 170")
+assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "unreadable body: a fallback route supplies the id"
+assert_line "WORKITEM_LOOKUP=pr-body-unreadable" "$out" "unreadable body: the caveat travels with it"
+
+# --- The newly-mandated entry point -----------------------------------
+# deep-review.md now requires this step to run on EVERY invocation, including
+# with no arguments. Nothing exercised that before.
+
+out=$(run_in "$WI_REPO" --args "")
+assert_line "WORKITEM_KIND=none" "$out" "empty --args still reports the always-present keys"
+assert_line "KIND=none" "$out" "empty --args resolves no PR"
+out=$(run_in "$WI_REPO" --args ""); rc=$?
+assert_exit 0 "$rc" "empty --args exits 0"
 
 echo
 echo "  $pass passed, $fail failed"
