@@ -52,7 +52,11 @@ Pass a GitHub issue or Azure DevOps work item URL. The review fetches the requir
 /deep-review #7775 focus on error handling
 ```
 
-**The story is resolved automatically — you rarely need to pass one.** A PR reference and a story reference answer different questions, so they no longer compete: `/deep-review pr 4506 <issue-url>` resolves **both**. When you pass no story at all, the review looks for one in the PR's `Closes/Fixes #N` (or `AB#<id>`), then the numeric prefix of a `branches/<id>-<slug>` branch, then `AB#<id>` in the branch's commits — and reports which route it used, so you can reject a wrong guess.
+**The story is resolved automatically — you rarely need to pass one.** A PR reference and a story reference answer different questions, so they no longer compete: `/deep-review pr 4506 <issue-url>` resolves **both**. When you pass no story, the review looks for one in the PR's `Closes/Fixes #N` (or ADO's `AB#<id>`), then in a `branches/<id>-<slug>` branch name — including on a bare `/deep-review` with no arguments at all.
+
+It always reports **which route** it used, because confidence differs: a reference you passed is authoritative, a link in the PR body is the author's own assertion, and a branch name is a convention rather than a guarantee. A wrong story is worse than none — it grades your diff against someone else's acceptance criteria — so the route is stated where you can reject it.
+
+A reference to another repository is refused rather than reduced to its number: `.../SOMEONE-ELSE/other/issues/42` would otherwise resolve to *your* issue 42.
 
 The 📋 Summary then carries an **acceptance-criteria checklist** — each criterion marked ✅ met / ❌ not met / ❓ can't tell from the diff. When no story is found, the checklist says so explicitly rather than going silent: a review that never checked fitness should not look like one that checked and passed.
 

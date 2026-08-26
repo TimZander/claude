@@ -44,7 +44,9 @@ Otherwise, use the text as **additional context** for your review. It may contai
 - **A base branch** (`base:<name>`, e.g., `base:develop`) — compare against this branch instead of the default. Use this when the target branch will merge into a branch other than `main` (e.g., `develop`, `release/2.0`). Strip the `base:<name>` token from the arguments before processing other inputs. Only one `base:` token is allowed; if multiple are provided, use the first and ignore the rest. If the value after `base:` is empty or blank, fall back to the PR's target branch when a PR was resolved, otherwise `main`. An explicit `base:` wins over the PR's target branch.
 - **A combination** — multiple inputs separated by spaces or newlines. Process all of them. `resolve-pr.sh` selects at most one **branch target**, by the precedence `PR URL` > `pr <N>` > work-item URL > issue URL > `#<N>` — but it resolves the **story** separately and reports both, so `pr 4506` plus an issue URL now gives you the PR *and* the issue. See Step 1a's `WORKITEM_*` keys.
 
-When context is provided, add a **🎯 Context** line at the very top of your output (before ⚖️ Verdict) summarizing what additional context you used and how it informed your review. This is the ONLY additional section allowed — it goes above the five standard sections, not inside them. When evaluating Feature Fitness (Step 4), cross-reference the requirements from the context to verify the implementation addresses what was asked for — flag any gaps or scope drift.
+Add a **🎯 Context** line at the very top of your output (before ⚖️ Verdict) summarizing what additional context you used and how it informed your review. This is the ONLY additional section allowed — it goes above the five standard sections, not inside them.
+
+**The line is not conditional on the user having passed arguments.** Step 1c resolves a story on a bare `/deep-review` too, and other steps are told to disclose things there — a story found by inference, a story that could not be fetched, a skipped Step 2 fan-out. Add the line whenever there is any of that to report, and omit it only when there is genuinely nothing: no context, no story, nothing skipped. When evaluating Feature Fitness (Step 4), cross-reference the requirements from the context to verify the implementation addresses what was asked for — flag any gaps or scope drift.
 
 <!-- Keep in sync with standards/CLAUDE.md "Code Review Standards" -->
 **Non-negotiable principles:**
@@ -67,7 +69,9 @@ Your final output MUST follow the exact template in Step 11. Violations that wil
 
 ### Step 1a: Resolve the review target
 
-**Skip this step entirely if the arguments are empty.** Otherwise, always run it before gathering any diff — reviewing the wrong branch produces a confident, complete, and entirely useless review.
+**Always run this step, including when the arguments are empty.** Run it before gathering any diff — reviewing the wrong branch produces a confident, complete, and entirely useless review.
+
+An earlier version skipped this step on empty arguments, which was a defect: the script resolves the **story** as well as the review target, and a bare `/deep-review` is precisely the invocation with no explicit reference to fall back on. Skipping it meant the branch name — the one signal always available — was never read, and the review reported "no linked story found" while standing on `branches/<id>-<slug>`. With no arguments there is simply no PR to resolve (`KIND=none`, no network calls), but `WORKITEM_KIND` still comes back.
 
 **Locate the script.** Use Glob with the pattern `**/deep-review/**/resolve-pr.sh` rooted at the user's home directory `~/.claude/plugins` (resolve `~` to an absolute path before calling Glob). If Glob returns multiple candidates, skip any whose version directory (the parent of `scripts/`) contains a `.orphaned_at` marker (check with Read). If zero candidates remain, tell the user the plugin may need reinstalling and stop. If multiple remain, use the first (Glob returns most-recently-modified first).
 
@@ -77,7 +81,9 @@ Your final output MUST follow the exact template in Step 11. Violations that wil
 bash <resolved-script-path> --args "<the arguments>"
 ```
 
-It prints `KEY=value` lines on stdout. `HOST`, `KIND`, `WORKITEM_KIND`, `CURRENT_BRANCH` and `IN_WORKTREE` are always present. `REF_ID` appears whenever a reference was found; `SOURCE_BRANCH`, `TARGET_BRANCH`, `STATE` and `BRANCH_MATCH` appear only when `KIND=pr`; `OTHER_REFS` appears only when `KIND=pr` and the arguments named more PR numbers than the one selected; and `WORKITEM_ID`/`WORKITEM_SOURCE` appear only when `WORKITEM_KIND` is not `none`. Errors go to stderr, so stdout is never anything but `KEY=value` lines.
+It prints `KEY=value` lines on stdout. `HOST`, `KIND`, `WORKITEM_KIND`, `WORKITEM_LOOKUP`, `CURRENT_BRANCH` and `IN_WORKTREE` are always present. `REF_ID` appears whenever a reference was found; `SOURCE_BRANCH`, `TARGET_BRANCH`, `STATE` and `BRANCH_MATCH` appear only when `KIND=pr`; `OTHER_REFS` appears only when `KIND=pr` and the arguments named more PR numbers than the one selected; `WORKITEM_ID`/`WORKITEM_SOURCE` appear only when `WORKITEM_KIND` is not `none`; and `ORG` appears only when `HOST=azdo`. Errors go to stderr, so stdout is never anything but `KEY=value` lines.
+
+**If `WORKITEM_KIND` is missing from the output entirely, an older `resolve-pr.sh` is installed than this command file expects.** That is a version skew, not a story-less review, and the two must not be reported the same way: say "story resolution unavailable — the installed `resolve-pr.sh` predates this feature; reinstall or update the plugin" and grade fitness without it. Silently printing "no linked story found" would be a confident false statement, which is the exact failure the acceptance-criteria block exists to prevent.
 
 If it exits non-zero, surface its stderr verbatim and stop — **do not fall back to reviewing `HEAD`**, which is the exact failure this step exists to prevent. The script only **reports**; it never checks anything out, so the decision below is yours to make and the user's to see.
 
@@ -124,24 +130,27 @@ When you do need to read files or grep for references (Steps 7-9), **make parall
 
 `KIND` answers "which branch do I review". `WORKITEM_KIND` (from Step 1a) answers "what was asked for" — a different question, resolved independently, so both survive one invocation. Act on it **in addition to** `KIND`, never instead of it.
 
-- **`WORKITEM_KIND=issue`** — `gh issue view <WORKITEM_ID> --json title,body`.
-- **`WORKITEM_KIND=workitem`** — `az boards work-item show --id <WORKITEM_ID> --org <org-url> -o json`.
+- **`WORKITEM_KIND=issue`** — `gh issue view <WORKITEM_ID> --json title,body,labels,comments`. Acceptance criteria often live in a label or a follow-up comment, not only the body. The script has already guaranteed the id belongs to `origin`, so no `--repo` is needed.
+- **`WORKITEM_KIND=workitem`** — `az boards work-item show --id <WORKITEM_ID> --org <ORG> -o json`, using the `ORG` key from Step 1a. Do **not** invent an org URL: if `ORG` is absent (a GitHub-hosted repo whose commits mention `AB#<id>`), say the work item cannot be fetched from here and treat it as `none`.
 - **`WORKITEM_KIND=none`** — no story was discoverable. Say so explicitly in the 🎯 Context line and in Step 4. **A review that skipped fitness-checking must not look identical to one that passed it.**
 
-If the fetch fails (deleted item, wrong host, no auth), treat it exactly like `none`: report that a reference was found but could not be read, and continue. A failed story fetch never blocks the review.
+**`WORKITEM_LOOKUP=pr-body-unreadable`** means the PR description could not be fetched, so a `Closes #N` that may be sitting in it was never seen. Whatever the routes below it produced is therefore a *fallback*, not a checked-and-empty stronger signal — say so, and do not present a `branch-prefix` result as though the body had been read and found bare.
 
-**Always report `WORKITEM_SOURCE` in the 🎯 Context line**, because confidence falls off across the four routes and only the user can catch a wrong guess:
+If the fetch itself fails (deleted item, wrong host, no auth, no `ORG`), treat it like `none`: report that a reference was found but could not be read, and continue. A failed story fetch never blocks the review.
+
+**Do not fetch the same item twice.** When `KIND` is `issue`/`workitem` and `WORKITEM_ID` equals `REF_ID`, Step 1a and this step name the same object — fetch once and report it once.
+
+**Always report `WORKITEM_SOURCE` in the 🎯 Context line**, because confidence falls off across the three routes and only the user can catch a wrong guess:
 
 | `WORKITEM_SOURCE` | How it was found | How much to trust it |
 |---|---|---|
 | `argument` | the user named it | authoritative |
 | `pr-body` | `Closes/Fixes/Resolves #N` or `AB#<id>` in the PR description | strong — the author asserted the link |
-| `branch-prefix` | the numeric prefix of `branches/<id>-<slug>` | good, but a convention, not a guarantee |
-| `commit-trailer` | `AB#<id>` in the branch's commits | weakest — say so, and let the user reject it |
+| `branch-prefix` | the id in a `branches/<id>-<slug>` branch name | good, but a convention, not a guarantee |
 
-On `branch-prefix` or `commit-trailer`, phrase it as an inference: "no explicit story reference — grading against #220, inferred from the branch name." If the fetched item is plainly unrelated to the diff (a different feature area, a closed item from months ago), say that and grade against nothing rather than against the wrong story.
+On `branch-prefix`, phrase it as an inference: "no explicit story reference — grading against #220, inferred from the branch name." If the fetched item is plainly unrelated to the diff (a different feature area, a closed item from months ago), say that and grade against nothing rather than against the wrong story.
 
-This step runs **after** the diff is gathered, deliberately: reading the criteria with the diff already in hand is what lets Step 4 mark each one met / not met / can't-tell instead of restating the story back.
+**Read the story with the diff already in hand.** That is what lets Step 4 mark each criterion met / not met / can't-tell instead of restating the story back. Note the keys themselves came from Step 1a, before the diff — it is the *fetch and the grading* that belong here, not the resolution.
 
 ## Step 2: Parallel Deep Analysis
 
@@ -172,7 +181,7 @@ If the Agent tool is unavailable or denied, skip this step and proceed to Step 3
 
 ## Step 4: Feature Fitness
 
-**Grade against the acceptance criteria, when a story was resolved in Step 1a-ii.** This is the section that decides a vote — "does this satisfy what was asked for" outranks every style finding below it.
+**Grade against the acceptance criteria, when a story was resolved in Step 1c.** This is the section that decides a vote — "does this satisfy what was asked for" outranks every style finding below it.
 
 Enumerate the criteria from the story's description and acceptance-criteria field. They are free prose here, not a machine-readable list, so enumerate **best-effort and show your work**: quote or paraphrase each criterion you extracted, so the user can see one you split wrong or missed. Then mark each:
 
@@ -275,6 +284,8 @@ Flag assumptions that weren't validated. If the code assumes something that coul
 
 **IMPORTANT: Use actual Unicode emoji characters (🔴 🟡 💡 ✅ ⬜), NOT markdown shortcodes (:red_circle:, :yellow_circle:, etc.).**
 
+**About the acceptance-criteria block in 📋 Summary.** It lives inside Summary because it is a property of the change, and the output has exactly five sections — do not promote it to a sixth. Substitute real criteria for the ✅/❌/❓ placeholder lines. When no story was resolved, replace the whole block with a single line — **Acceptance criteria:** not checked — no linked story found (fitness graded against the branch name and commit messages only) — or, on a version skew (Step 1a), *not checked — story resolution unavailable, plugin needs updating*. Never omit the block silently. This paragraph is guidance about the template, not part of it; nothing here is copied into your output.
+
 Here is the exact template — follow it precisely:
 
 ---
@@ -292,10 +303,6 @@ One paragraph restating what this change does and whether it achieves its goal.
 ✅ Criterion as you extracted it — `path/to/file.ts:42` satisfies it
 ❌ Criterion the diff omits or contradicts — say what is missing
 ❓ Criterion the diff neither shows nor rules out — say what would demonstrate it
-
-When no story was resolved, replace the whole block with one line: **Acceptance criteria:** not checked — no linked story found (fitness graded against the branch name and commit messages only). Never omit the block silently.
-
-This lives inside 📋 Summary deliberately: it is a *property of the change*, and the output has exactly five sections. Do not promote it to a sixth.
 
 **Complexity:** Increases / Decreases / Neutral — with brief justification.
 
@@ -334,11 +341,11 @@ If coverage is adequate, write "Coverage is adequate."
 Before writing your response, verify ALL of the following. If any check fails, fix your output before presenting it:
 
 1. **Sections**: Your output has EXACTLY five sections: ⚖️ Verdict, 📋 Summary, 🔍 Findings, 🧪 Test Gaps, ⚡ Bottom Line. No other sections exist. (The acceptance-criteria block is part of 📋 Summary, not a sixth section.)
-1b. **Acceptance criteria stated either way**: 📋 Summary contains the acceptance-criteria block — either a per-criterion ✅/❌/❓ list, or the explicit "not checked — no linked story found" line. An output that is silent about fitness is indistinguishable from one that checked and passed, which is the exact failure this block exists to prevent.
-2. **No sub-sections in Findings**: The 🔍 Findings section is a flat list of emoji-prefixed lines. There are NO headers, NO numbered lists, NO sub-sections like "Critical Issues" or "Assumptions to Verify" anywhere in your output.
-3. **Real emoji only**: Search your output for any colon-wrapped shortcodes (`:red_circle:`, `:yellow_circle:`, `:bulb:`, `:white_check_mark:`, `:mag:`, etc.). If you find ANY, replace them with the real Unicode characters (🔴, 🟡, 💡, ✅, 🔍, etc.).
-4. **Finding format**: Every finding line starts with an emoji (🔴/🟡/💡/✅), followed by a backtick-wrapped `file:line`, an em dash (—), and a description. No exceptions.
-5. **Test gaps format**: Every test gap line starts with ⬜ followed by a scenario description.
-6. **Completeness re-read**: Re-read the diff one final time top to bottom. For each file in the diff, confirm you have at least considered it — either it has findings or you consciously determined it is clean. If you spot anything you missed, add it to Findings now before outputting.
-7. **Severity coverage**: Confirm your findings include items at multiple severity levels (🔴, 🟡, 💡) if warranted by the diff. If you only have 🔴 findings, ask yourself: are there really no style improvements, naming suggestions, or logging gaps? If you only have 💡 findings, ask yourself: are there really no correctness or behavioral concerns?
-8. **Subagent reconciliation**: If you used parallel agents in Step 2, confirm you reviewed every line of subagent output and either included or explicitly discarded each finding. No subagent finding should be silently dropped.
+2. **Acceptance criteria stated either way**: 📋 Summary contains the acceptance-criteria block — either a per-criterion ✅/❌/❓ list, or the explicit "not checked" line naming which reason applies. An output silent about fitness is indistinguishable from one that checked and passed, which is the exact failure this block exists to prevent. Confirm too that no guidance text about the template (the paragraph above it, or placeholder criterion lines) was copied into the output.
+3. **No sub-sections in Findings**: The 🔍 Findings section is a flat list of emoji-prefixed lines. There are NO headers, NO numbered lists, NO sub-sections like "Critical Issues" or "Assumptions to Verify" anywhere in your output.
+4. **Real emoji only**: Search your output for any colon-wrapped shortcodes (`:red_circle:`, `:yellow_circle:`, `:bulb:`, `:white_check_mark:`, `:mag:`, etc.). If you find ANY, replace them with the real Unicode characters (🔴, 🟡, 💡, ✅, 🔍, etc.).
+5. **Finding format**: Every finding line starts with an emoji (🔴/🟡/💡/✅), followed by a backtick-wrapped `file:line`, an em dash (—), and a description. No exceptions.
+6. **Test gaps format**: Every test gap line starts with ⬜ followed by a scenario description.
+7. **Completeness re-read**: Re-read the diff one final time top to bottom. For each file in the diff, confirm you have at least considered it — either it has findings or you consciously determined it is clean. If you spot anything you missed, add it to Findings now before outputting.
+8. **Severity coverage**: Confirm your findings include items at multiple severity levels (🔴, 🟡, 💡) if warranted by the diff. If you only have 🔴 findings, ask yourself: are there really no style improvements, naming suggestions, or logging gaps? If you only have 💡 findings, ask yourself: are there really no correctness or behavioral concerns?
+9. **Subagent reconciliation**: If you used parallel agents in Step 2, confirm you reviewed every line of subagent output and either included or explicitly discarded each finding. No subagent finding should be silently dropped.
