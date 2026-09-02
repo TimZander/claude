@@ -44,7 +44,7 @@ Otherwise, use the text as **additional context** for your review. It may contai
 - **A base branch** (`base:<name>`, e.g., `base:develop`) — compare against this branch instead of the default. Use this when the target branch will merge into a branch other than `main` (e.g., `develop`, `release/2.0`). Strip the `base:<name>` token from the arguments before processing other inputs. Only one `base:` token is allowed; if multiple are provided, use the first and ignore the rest. If the value after `base:` is empty or blank, fall back to the PR's target branch when a PR was resolved, otherwise `main`. An explicit `base:` wins over the PR's target branch.
 - **A combination** — multiple inputs separated by spaces or newlines. Process all of them. `resolve-pr.sh` selects at most one **branch target**, by the precedence `PR URL` > `pr <N>` > work-item URL > issue URL > `#<N>` — but it resolves the **story** separately and reports both, so `pr 4506` plus an issue URL now gives you the PR *and* the issue. See Step 1a's `WORKITEM_*` keys.
 
-Add a **🎯 Context** line at the very top of your output (before ⚖️ Verdict) summarizing what additional context you used and how it informed your review. This is the ONLY additional section allowed — it goes above the five standard sections, not inside them.
+Add a **🎯 Context** line at the very top of your output (before ⚖️ Verdict) summarizing what additional context you used and how it informed your review. It goes above the five standard sections, not inside them. It and the acceptance-criteria block inside 📋 Summary are the only two additions to the template — self-check item 1 carves out exactly these two.
 
 **The line is not conditional on the user having passed arguments.** Step 1c resolves a story on a bare `/deep-review` too, and other steps are told to disclose things there — a story found by inference, a story that could not be fetched, a skipped Step 2 fan-out. Add the line whenever there is any of that to report — which is nearly always, since a resolved story, a refused reference, an unreadable PR body, a skipped Step 2 and even "no story found" are all things other steps require you to state there. Omit it only when every one of those is absent. When evaluating Feature Fitness (Step 4), cross-reference the requirements from the context to verify the implementation addresses what was asked for — flag any gaps or scope drift.
 
@@ -61,7 +61,7 @@ Add a **🎯 Context** line at the very top of your output (before ⚖️ Verdic
 Your final output MUST follow the exact template in Step 11. Violations that will cause your review to be rejected:
 - ❌ Creating sections like "Critical Issues", "Assumptions to Verify", "Simplification Opportunities", or "Minor Issues" — ALL findings go in ONE flat list under "🔍 Findings"
 - ❌ Using numbered lists for findings — use emoji-prefixed single lines
-- ❌ Using markdown emoji shortcodes like `:red_circle:` or `:yellow_circle:` — use ONLY real Unicode emoji characters: 🔴 🟡 💡 ✅ ⬜ ⚖️ 📋 🔍 🧪 ⚡
+- ❌ Using markdown emoji shortcodes like `:red_circle:` or `:yellow_circle:` — use ONLY real Unicode emoji characters: 🔴 🟡 💡 ✅ ❌ ❓ ⬜ ⚖️ 📋 🔍 🧪 ⚡ 🎯
 - ❌ Omitting the five required sections (⚖️ Verdict, 📋 Summary, 🔍 Findings, 🧪 Test Gaps, ⚡ Bottom Line)
 - ❌ Adding any sections not in the template
 
@@ -83,11 +83,13 @@ If several remain, **do not assume the ordering is meaningful** — it is not so
 bash <resolved-script-path> --args "<the arguments>"
 ```
 
-It prints `KEY=value` lines on stdout. `HOST`, `KIND`, `WORKITEM_KIND`, `WORKITEM_LOOKUP`, `CURRENT_BRANCH` and `IN_WORKTREE` are always present. `REF_ID` appears whenever a reference was found; `SOURCE_BRANCH`, `TARGET_BRANCH`, `STATE` and `BRANCH_MATCH` appear only when `KIND=pr`; `OTHER_REFS` appears only when `KIND=pr` and the arguments named more PR numbers than the one selected; `WORKITEM_ID`/`WORKITEM_SOURCE` appear only when `WORKITEM_KIND` is not `none`; and `ORG` appears only when `HOST=azdo`. Errors go to stderr, so stdout is never anything but `KEY=value` lines.
+It prints `KEY=value` lines on stdout. `HOST`, `KIND`, `WORKITEM_KIND`, `WORKITEM_LOOKUP`, `REFERENCE_REFUSED`, `CURRENT_BRANCH` and `IN_WORKTREE` are always present. `REF_ID` appears whenever a reference was **accepted** — a refused foreign reference is found and deliberately withheld; `SOURCE_BRANCH`, `TARGET_BRANCH`, `STATE` and `BRANCH_MATCH` appear only when `KIND=pr`; `OTHER_REFS` appears only when `KIND=pr` and the arguments named more PR numbers than the one selected; `WORKITEM_ID`/`WORKITEM_SOURCE` appear only when `WORKITEM_KIND` is not `none`; and `ORG` appears only when `HOST=azdo` **and** an organization was derivable from the remote — so an ADO repo can report `HOST=azdo` with no `ORG`. Errors go to stderr, so stdout is never anything but `KEY=value` lines.
 
-**Verify the output before acting on it.** `HOST`, `KIND`, `WORKITEM_KIND`, `WORKITEM_LOOKUP`, `CURRENT_BRANCH` and `IN_WORKTREE` are all documented as always present. If **any** of them is missing — including the case where the script printed nothing at all and still exited 0 — stop and tell the user the plugin install looks broken. Do **not** fall back to reviewing `HEAD`; that is the exact failure this step exists to prevent, and a zero-byte or `exit 0` stub is a real install state, not a hypothetical.
+**Verify the output before acting on it, in two tiers.** The tiers matter: an older script is a normal, recoverable state, and treating it as a broken install would take the whole review offline for anyone who has not updated the plugin.
 
-**If the only missing key is `WORKITEM_KIND`** and the rest are present, an older `resolve-pr.sh` is installed than this command file expects. That is a version skew, not a story-less review, and the two must not be reported the same way: say "story resolution unavailable — the installed `resolve-pr.sh` predates this feature; reinstall or update the plugin" and grade fitness without it. Silently printing "no linked story found" would be a confident false statement, which is the exact failure the acceptance-criteria block exists to prevent.
+**Tier 1 — the review cannot proceed without these.** `HOST`, `KIND`, `CURRENT_BRANCH` and `IN_WORKTREE`. Every version of the script has emitted all four. If any is missing — including the case where the script printed nothing at all and still exited 0 — stop and tell the user the plugin install looks broken. Do **not** fall back to reviewing `HEAD`; that is the exact failure this step exists to prevent, and a zero-byte or `exit 0` stub script is a real install state, not a hypothetical.
+
+**Tier 2 — story resolution only.** `WORKITEM_KIND` and `WORKITEM_LOOKUP` were added together, so an older script is missing **both**. If tier 1 is intact but either of these is absent, the install is fine and merely predates this feature: continue the review normally, skip Step 1c, and say "story resolution unavailable — the installed `resolve-pr.sh` predates this feature; update the plugin to grade against acceptance criteria." That is a different statement from "no linked story found", and reporting one as the other would be a confident false claim — the exact failure the acceptance-criteria block exists to prevent.
 
 If it exits non-zero, surface its stderr verbatim and stop — **do not fall back to reviewing `HEAD`**, which is the exact failure this step exists to prevent. The script only **reports**; it never checks anything out, so the decision below is yours to make and the user's to see.
 
@@ -107,7 +109,7 @@ Act on `KIND`:
 
 **Before any checkout (PR or `branch:`), check for uncommitted changes** with `git status --porcelain`. If the tree is dirty, stop and tell the user: `git checkout --detach` would either carry their changes onto the reviewed branch — where they would be reported as that branch's uncommitted diff — or abort outright. Let them commit or stash first.
 
-**If a `branch:<name>` target was specified in the arguments:** This feature is intended for use inside a worktree-isolated Agent. To detect whether you are in a worktree, run `test -f .git` — worktrees have a `.git` **file** (not a directory). If you are NOT in a worktree, warn the user that `branch:<name>` will switch their working directory and ask for confirmation before proceeding. Before checking out, save the current ref so it can be restored: `ORIG_REF=$(git symbolic-ref -q HEAD || git rev-parse HEAD)`. Run `git fetch origin <name> && git checkout --detach origin/<name>` — if either command fails, report the error and stop. Using `--detach` avoids "already checked out" errors in git worktrees. After the review is complete, restore the original state: `git checkout $ORIG_REF 2>/dev/null` (skip this step if running inside a worktree, since the worktree is disposable).
+**If a `branch:<name>` target was specified in the arguments:** This feature is intended for use inside a worktree-isolated Agent. Use the `IN_WORKTREE` value from Step 1a. Do not re-detect with `test -f .git`: that is false from any subdirectory and true inside a submodule, which is why the script reports it for you. If you are NOT in a worktree, warn the user that `branch:<name>` will switch their working directory and ask for confirmation before proceeding. Before checking out, save the current ref so it can be restored: `ORIG_REF=$(git symbolic-ref -q HEAD || git rev-parse HEAD)`. Run `git fetch origin <name> && git checkout --detach origin/<name>` — if either command fails, report the error and stop. Using `--detach` avoids "already checked out" errors in git worktrees. After the review is complete, restore the original state: `git checkout $ORIG_REF 2>/dev/null` (skip this step if running inside a worktree, since the worktree is disposable).
 
 **Resolve the base branch** in this precedence order: an explicit `base:<name>` token, then the `TARGET_BRANCH` reported by Step 1a when a PR was resolved **and its branch is the one being reviewed**, then `main`. (When `branch:` overrode a PR-derived branch, the PR's target no longer describes the reviewed branch — fall through to `main` unless `base:` says otherwise.) Define two variables for use in the commands below:
 - `BASE_NAME` = the bare branch name (e.g., `develop`). Used for `git fetch`.
@@ -141,8 +143,11 @@ When you do need to read files or grep for references (Steps 7-9), **make parall
 **`WORKITEM_LOOKUP` tells you whether a stronger route was skipped rather than checked.** Whatever a weaker route produced is then a *fallback*, not a checked-and-empty signal, and must be reported as one:
 
 - **`pr-body-unreadable`** — the PR description could not be fetched, so a `Closes #N` sitting in it was never seen. Do not present a `branch-prefix` result as though the body had been read and found bare.
-- **`reference-not-local`** — the user supplied a reference URL pointing at another repository or organization, and it was refused. **Say this explicitly.** Never report "no story was referenced" here: one was, and you declined it. If a weaker route then produced an id, make clear it is not the story they named.
 - **`ok`** — every route that ran completed.
+
+**`REFERENCE_REFUSED=true` is a separate, orthogonal fact:** the user supplied a reference URL naming another repository or ADO organization, and it was declined because its number would otherwise have been fetched against *this* repo and resolved to a different, real story. **Say so explicitly whenever it is true** — never report "no story was referenced", because one was.
+
+It is orthogonal in both directions, so check it independently of everything else. It can be `true` alongside `WORKITEM_LOOKUP=pr-body-unreadable` (both happened), and — because a refused URL and an accepted `#<N>` can sit in the same arguments — it can be `true` alongside a perfectly good `WORKITEM_SOURCE=argument`. In that case do **not** disown the story you found; report that one reference was declined *and* which story you are grading against.
 
 If the fetch itself fails (deleted item, wrong host, no auth, no `ORG`), treat it like `none`: report that a reference was found but could not be read, and continue. A failed story fetch never blocks the review.
 
@@ -298,7 +303,17 @@ Flag assumptions that weren't validated. If the code assumes something that coul
 
 **IMPORTANT: Use actual Unicode emoji characters (🔴 🟡 💡 ✅ ⬜), NOT markdown shortcodes (:red_circle:, :yellow_circle:, etc.).**
 
-**About the acceptance-criteria block in 📋 Summary.** It lives inside Summary because it is a property of the change, and the output has exactly five sections — do not promote it to a sixth. Substitute real criteria for the ✅/❌/❓ placeholder lines. When no story was resolved, replace the whole block with a single line — **Acceptance criteria:** not checked — no linked story found (fitness graded against the branch name and commit messages only) — or, on a version skew (Step 1a), *not checked — story resolution unavailable, plugin needs updating*. Never omit the block silently. This paragraph is guidance about the template, not part of it; nothing here is copied into your output.
+**About the acceptance-criteria block in 📋 Summary.** It lives inside Summary because it is a property of the change, and the output has exactly five sections — do not promote it to a sixth. Substitute real criteria for the ✅/❌/❓ placeholder lines.
+
+When no story was resolved, replace the whole block with a single **Acceptance criteria: not checked —** line, and state *which* of these applies rather than defaulting to the first:
+
+- *no linked story found* — nothing was referenced and nothing was discoverable; fitness graded against the branch name and commit messages only.
+- *a reference was declined* — `REFERENCE_REFUSED=true`; the user named a story in another repository or organization. Never report this as "no linked story found".
+- *the PR description could not be read* — `WORKITEM_LOOKUP=pr-body-unreadable`; a link may exist there and was never seen.
+- *found but not fetchable* — a story resolved but the fetch failed, or `WORKITEM_KIND=workitem` arrived with no `ORG`. Name the id you could not read.
+- *story resolution unavailable* — the tier-2 version skew from Step 1a; the plugin needs updating.
+
+More than one can apply; say all that do. This paragraph is guidance about the template, not part of it; nothing here is copied into your output.
 
 **Rules for the 🔍 Findings section.** Guidance about the template, not part of it — none of this is copied into your output.
 - **Severity calibration against standards.** When the project's CLAUDE.md or documented standards explicitly prohibit a pattern, grade violations at 🟡 or 🔴 — never 💡 — regardless of whether pre-existing code also violates the rule. Existing violations do not grandfather new ones.
@@ -311,6 +326,8 @@ Flag assumptions that weren't validated. If the code assumes something that coul
 Here is the exact template — follow it precisely:
 
 ---
+
+🎯 **Context** — One line: what additional context you used and how it informed the review; the story you graded against and which route found it; and anything skipped or declined (a refused reference, an unreadable PR body, a Step 2 fan-out that did not run). Omit this line only when there is genuinely none of that to report.
 
 ## ⚖️ Verdict
 

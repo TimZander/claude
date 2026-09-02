@@ -406,7 +406,8 @@ assert_contains "REF_ID=170" "$out" "PR URL yields the right number"
 
 out=$(run_in "$GH_REPO" --args "https://dev.azure.com/o/p/_git/r/pullrequest/9"); rc=$?
 assert_exit 1 "$rc" "PR URL from another host exits 1"
-assert_contains "but origin is" "$out" "cross-host PR URL explains itself"
+assert_contains "different repository" "$out" "cross-host PR URL explains itself"
+assert_contains "origin:" "$out" "cross-host PR URL names the origin it compared against"
 
 # ── GitHub #<N> ambiguity ────────────────────────────────────────────
 out=$(run_in "$GH_REPO" --args "#170"); rc=$?
@@ -732,9 +733,14 @@ assert_exit 0 "$rc" "work-item resolution never changes the exit code"
 
 # --- Reference locality across dialects ------------------------------
 # A mutation study proved these paths were entirely unexercised: every URL the
-# suite fed the helpers was https, so the scp normalization, the short-path
-# guard, the cross-host check and the ADO dialect reconciliation could all be
-# broken at once with the suite still green. Each case below kills one mutant.
+# suite fed the helpers was https, so the scp normalization, the cross-host
+# check and the ADO dialect reconciliation could all be broken at once with the
+# suite still green.
+#
+# Do NOT read this block as covering every helper branch. An earlier version of
+# this comment claimed it killed a "short-path guard" mutant; it did not, and a
+# coverage claim a test does not back is worse than no claim at all. What is
+# covered is asserted below and nothing more.
 
 SCP_REPO="$TEST_TMPDIR/scp-repo"
 setup_repo "$SCP_REPO" "git@github.com:TimZander/claude.git" || exit 1
@@ -747,13 +753,28 @@ assert_line "WORKITEM_SOURCE=argument" "$out" "scp-style origin: reported as an 
 # owner/repo comparison caught it and the host check was never exercised.
 out=$(run_in "$GH_REPO" --args "https://gitlab.com/TimZander/claude/issues/99")
 assert_no_line "WORKITEM_ID=99" "$out" "same owner/repo on another host is refused"
-assert_line "WORKITEM_LOOKUP=reference-not-local" "$out" "cross-host refusal is reported"
+assert_line "REFERENCE_REFUSED=true" "$out" "cross-host refusal is reported"
 
 ADO_SSH_REPO="$TEST_TMPDIR/ado-ssh-repo"
 setup_repo "$ADO_SSH_REPO" "git@ssh.dev.azure.com:v3/bgvone/BGV Development/BgvCore" || exit 1
 out=$(run_in "$ADO_SSH_REPO" --args "https://dev.azure.com/bgvone/Proj/_workitems/edit/7775")
 assert_line "WORKITEM_ID=7775" "$out" "ADO ssh origin accepts a same-org work-item URL"
 assert_line "ORG=https://dev.azure.com/bgvone" "$out" "ADO ssh origin still derives the org"
+
+# An ssh:// clone URL may carry an explicit port. The org sits one path segment
+# further along than in the scp-style form, so a port-blind pattern reads the
+# port as the org and refuses the repo's own work items.
+ADO_PORT_REPO="$TEST_TMPDIR/ado-port-repo"
+setup_repo "$ADO_PORT_REPO" "ssh://git@ssh.dev.azure.com:22/v3/bgvone/BGV Development/BgvCore" || exit 1
+out=$(run_in "$ADO_PORT_REPO" --args "https://dev.azure.com/bgvone/Proj/_workitems/edit/7775")
+assert_line "WORKITEM_ID=7775" "$out" "ADO ssh origin with an explicit port accepts its own work item"
+assert_line "REFERENCE_REFUSED=false" "$out" "an explicit port is not mistaken for a different org"
+assert_line "ORG=https://dev.azure.com/bgvone" "$out" "ADO ssh with a port still derives the org"
+
+# ADO orgs are case-insensitive too, and the ADO comparison runs through a
+# different helper than the owner/repo one above.
+out=$(run_in "$ADO_PORT_REPO" --args "https://dev.azure.com/BGVONE/Proj/_workitems/edit/7775")
+assert_line "WORKITEM_ID=7775" "$out" "ADO org comparison is case-insensitive"
 
 # The legacy and modern ADO hosts are the same organization spelled two ways.
 ADO_VS_REPO="$TEST_TMPDIR/ado-vs-repo"
@@ -780,13 +801,17 @@ assert_line "WORKITEM_ID=42" "$out" "www.github.com matches a github.com origin"
 
 out=$(run_in "$GH_REPO" --args "https://github.com/SOMEONE-ELSE/other/issues/42")
 assert_no_line "WORKITEM_ID=42" "$out" "foreign issue URL: the id is refused"
-assert_line "WORKITEM_LOOKUP=reference-not-local" "$out" "foreign issue URL: refusal is reported"
+assert_line "REFERENCE_REFUSED=true" "$out" "foreign issue URL: refusal is reported"
 assert_no_line "KIND=issue" "$out" "foreign issue URL: KIND is refused too, not just WORKITEM_*"
 assert_no_line "REF_ID=42" "$out" "foreign issue URL: the id does not leak via REF_ID"
 
 # A refused URL must not consume the route. An if/elif chain here discarded a
 # perfectly local #<N> sitting beside the foreign one.
-out=$(run_in "$GH_REPO" --args "https://github.com/SOMEONE-ELSE/other/issues/42 see also #143")
+#
+# `pr 170` pins the review target so the trailing #<N> lands in the STORY slot.
+# Without it, GitHub's shared numbering makes #143 the PR itself (see the KIND
+# chain test below), and this would be asserting selection rather than routing.
+out=$(run_in "$GH_REPO" --args "pr 170 https://github.com/SOMEONE-ELSE/other/issues/42 see also #143")
 assert_line "WORKITEM_ID=143" "$out" "a refused URL does not blind the route to a local #<N>"
 assert_line "WORKITEM_SOURCE=argument" "$out" "the surviving local reference is still an argument"
 
@@ -839,6 +864,66 @@ assert_line "WORKITEM_KIND=none" "$out" "empty --args still reports the always-p
 assert_line "KIND=none" "$out" "empty --args resolves no PR"
 out=$(run_in "$WI_REPO" --args ""); rc=$?
 assert_exit 0 "$rc" "empty --args exits 0"
+
+
+# --- Refusal is orthogonal, and never consumes a slot -----------------
+# WORKITEM_LOOKUP used to carry the refusal too, so a refused URL clobbered
+# `pr-body-unreadable` and contradicted a perfectly good `argument` result.
+
+out=$(run_in "$GH_REPO" --args "https://github.com/SOMEONE-ELSE/other/issues/42 see also #143")
+assert_line "REFERENCE_REFUSED=true" "$out" "a refused URL sets its own key"
+assert_line "WORKITEM_LOOKUP=ok" "$out" "a refusal does not masquerade as a lookup failure"
+
+# The KIND chain had the same elif bug one level up: a refused URL swallowed
+# the slot, so a following local #<N> never selected anything and the review
+# target silently fell back to HEAD. Nothing pins the target here, so GitHub's
+# shared numbering resolves #143 as the PR — which is the assertion: the local
+# reference was reached and selected something, rather than being discarded.
+assert_line "KIND=pr" "$out" "KIND chain: a refused URL does not consume the slot"
+assert_no_line "KIND=unknown" "$out" "KIND chain: the refusal does not leave the slot empty"
+assert_line "REF_ID=143" "$out" "KIND chain: the local reference is selected"
+
+out=$(run_in "$GH_REPO" --args "focus on tests")
+assert_line "REFERENCE_REFUSED=false" "$out" "no reference means no refusal"
+assert_line "WORKITEM_LOOKUP=ok" "$out" "and a clean lookup"
+
+# Both conditions at once must both be reported — one key cannot carry two facts.
+out=$(STUB_BODY_FAIL=1 run_in "$GH_REPO" --args "pr 170 https://github.com/SOMEONE-ELSE/other/issues/42")
+assert_line "REFERENCE_REFUSED=true" "$out" "refusal survives alongside an unreadable body"
+assert_line "WORKITEM_LOOKUP=pr-body-unreadable" "$out" "unreadable body survives alongside a refusal"
+
+# --- The PR URL selects a branch, so its guard is the strictest -------
+# A same-host, cross-REPOSITORY PR URL used to pass a host-only check and the
+# number was then looked up against origin, selecting the wrong branch.
+
+out=$(run_in "$GH_REPO" --args "https://github.com/SOMEONE-ELSE/other/pull/99"); rc=$?
+assert_exit 1 "$rc" "cross-repo PR URL exits 1 rather than reviewing the wrong branch"
+assert_contains "different repository" "$out" "cross-repo PR URL explains itself"
+assert_not_contains "KIND=pr" "$out" "cross-repo PR URL selects nothing"
+
+out=$(run_in "$ADO_REPO" --args "https://dev.azure.com/OTHERORG/P/_git/R/pullrequest/4506"); rc=$?
+assert_exit 1 "$rc" "cross-org ADO PR URL exits 1"
+
+# `--repo` is what pins the lookup to origin rather than gh's default remote.
+ARGS_LOG="$TEST_TMPDIR/gh-args.txt"
+: > "$ARGS_LOG"
+STUB_ARGS_FILE="$ARGS_LOG" run_in "$GH_REPO" --args "pr 170" >/dev/null 2>&1
+assert_contains "--repo TimZander/claude" "$(cat "$ARGS_LOG")" "gh pr view is scoped with --repo"
+
+# --- ORG is derived, never inherited ---------------------------------
+
+out=$(ORG="https://dev.azure.com/ATTACKER" run_in "$ADO_REPO" --args "focus on tests")
+assert_line "ORG=https://dev.azure.com/bgvone" "$out" "ORG is derived, not inherited from the environment"
+assert_no_line "ORG=https://dev.azure.com/ATTACKER" "$out" "an exported ORG cannot be published"
+
+# --- AB#<id> on a non-ADO host resolves nothing ----------------------
+# The old arm set WORKITEM_KIND=workitem with no ORG to fetch it, and in doing
+# so suppressed the usable branch-name story below.
+
+out=$(STUB_PR_BODY="Tracked upstream as AB#9912" run_in "$GH_REPO" --args "pr 170")
+assert_line "WORKITEM_ID=142" "$out" "GitHub: AB#<id> does not displace the branch story"
+assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "GitHub: route 3 still runs"
+assert_no_line "WORKITEM_KIND=workitem" "$out" "GitHub: no unfetchable workitem kind is published"
 
 echo
 echo "  $pass passed, $fail failed"

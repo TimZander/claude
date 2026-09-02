@@ -39,19 +39,27 @@ set -euo pipefail
 #                               falls off down that list — the caller should name
 #                               the route when it reports the item, so the user
 #                               can reject a wrong guess.
-#   WORKITEM_LOOKUP=ok|pr-body-unreadable|reference-not-local
+#   WORKITEM_LOOKUP=ok|pr-body-unreadable
 #                               Whether every route that was TRIED completed.
 #                               `pr-body-unreadable` means the PR description
 #                               could not be fetched, so a link that may exist
-#                               there was never seen. `reference-not-local`
-#                               means a reference URL was supplied but pointed
-#                               at another repository/organization and was
-#                               refused. In BOTH cases the caller must not
+#                               there was never seen — the caller must not
 #                               report whatever a weaker route produced as if
 #                               the stronger one had been checked and come back
-#                               empty — and must never say "no story was
-#                               referenced" when one was, and was declined.
-#   ORG=<url>                   ADO organization URL (HOST=azdo only). Emitted
+#                               empty.
+#   REFERENCE_REFUSED=true|false
+#                               Always present. `true` means a reference URL was
+#                               supplied but named another repository or ADO
+#                               organization, so it was declined. ORTHOGONAL to
+#                               WORKITEM_LOOKUP — both can be true at once, and
+#                               a refusal can coexist with a perfectly good
+#                               story found by another route in the same
+#                               arguments. The caller must never say "no story
+#                               was referenced" while this is `true`.
+#   ORG=<url>                   ADO organization URL. Emitted only when
+#                               HOST=azdo AND an organization was derivable
+#                               from the remote — an ADO remote with no parsable
+#                               org yields HOST=azdo and NO ORG. Emitted at all
 #                               because a work item cannot be fetched without it:
 #                               `az boards work-item show --id <N> --org <ORG>`.
 #   CURRENT_BRANCH=<name>       Checked-out branch (empty when detached)
@@ -87,9 +95,13 @@ set -euo pipefail
 # asked for"), so they are now resolved independently and both are reported.
 #
 # The WORKITEM_* keys are context only: they never select a branch, and a
-# failure to find one is never an error. Routes, first hit wins:
+# failure to find one is never an error. All three routes are gated on a known
+# host — a story that cannot be fetched is not a story — so WORKITEM_KIND is
+# always `none` when HOST=unknown, even though KIND may still name a local
+# reference there. Routes, first hit wins:
 #   1. argument       — an explicit issue / work-item reference in the arguments
-#   2. pr-body        — Closes/Fixes/Resolves #N, or AB#<id>, in the PR description
+#   2. pr-body        — Closes/Fixes/Resolves #N on GitHub; AB#<id> on ADO, where
+#                       a bare `#N` in a description is not a work-item link
 #   3. branch-prefix  — the id in our branches/<id>-<slug> naming convention
 #
 # A WRONG story is worse than no story: it grades the diff against someone
@@ -115,10 +127,18 @@ set -euo pipefail
 #
 # Exit codes:
 #   0 — Resolved (including KIND=none: no reference present, review HEAD)
-#   1 — Error (no origin remote, unsupported host, missing CLI, lookup failed,
-#       lookup returned no branch, cross-host PR URL). A cross-repo CONTEXT
-#       reference is not an error: it exits 0, resolves no story, and says so
-#       via WORKITEM_LOOKUP=reference-not-local.
+#   1 — Error. Every case: a usage error in this script's own arguments; no
+#       origin remote, an unsupported host, or a missing CLI when a PR must be
+#       looked up; a PR URL naming a different repository or host; a PR lookup
+#       that failed, returned no branch names, or returned a PR belonging to
+#       another ADO repository; a GitHub PR whose source is in a fork; an ADO
+#       remote with no derivable organization URL on the PR path; and the
+#       internal-error guard for an unresolved `ambiguous` reference.
+#
+#       A cross-repo CONTEXT reference is deliberately NOT an error: it exits 0,
+#       resolves no story from that reference, and reports REFERENCE_REFUSED=true.
+#       Only the branch-SELECTING path exits non-zero, because there the wrong
+#       answer is a review of the wrong code.
 
 # ── Arguments ────────────────────────────────────────────────────────
 
@@ -201,6 +221,11 @@ remote_host() {
 REMOTE_URL=$(git remote get-url origin 2>/dev/null || printf '')
 REMOTE_HOST=""
 HOST="unknown"
+# Initialized like every other output variable. Without this, `${ORG:-}` reads
+# the CALLER'S exported ORG — a plausible variable for someone working with az
+# to have set — which then skips derivation and gets published as this repo's
+# organization. Every other emitted value is initialized here or at its section.
+ORG=""
 
 if [[ -n "$REMOTE_URL" ]]; then
     REMOTE_HOST=$(remote_host "$REMOTE_URL")
@@ -253,8 +278,24 @@ CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || true)
 # against it. The PR-URL path already refuses a foreign host; this is the same
 # guard for every other reference.
 
-lower() {
-    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+# Case-insensitive string equality, without lowercasing.
+#
+# An earlier version ran both operands through `printf | tr`. That is one FORK
+# PER CALL, and locality is checked up to three times per invocation — on Git
+# Bash, where process creation is expensive, it added minutes to the test suite.
+# `nocasematch` does the same job in-process. It is a shell-global option, so it
+# is restored immediately; `shopt -p` reproduces the prior state exactly whether
+# it was set or unset.
+equals_ignoring_case() {
+    local restore
+    restore=$(shopt -p nocasematch)
+    shopt -s nocasematch
+    if [[ "$1" == "$2" ]]; then
+        eval "$restore"
+        return 0
+    fi
+    eval "$restore"
+    return 1
 }
 
 # The ADO organization NAME, reconciled across every remote dialect. The v3 ssh
@@ -262,8 +303,11 @@ lower() {
 # vs-ssh.visualstudio.com yields the org "vs-ssh".
 ado_org_name() {
     local url="$1"
-    if [[ "$url" =~ (ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)[:/]v3/([^/]+) ]]; then
-        printf '%s' "${BASH_REMATCH[2]}"
+    # `[:/]` alone rejected an explicit port — ssh://git@ssh.dev.azure.com:22/v3/…
+    # matched no arm, and since HOST is decided on the host alone that turned a
+    # legitimate remote into a hard failure on the PR path.
+    if [[ "$url" =~ (ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)(:[0-9]+)?[:/]v3/([^/]+) ]]; then
+        printf '%s' "${BASH_REMATCH[3]}"
     elif [[ "$url" =~ dev\.azure\.com/([^/]+) ]]; then
         printf '%s' "${BASH_REMATCH[1]}"
     elif [[ "$url" =~ ([A-Za-z0-9_-]+)\.visualstudio\.com ]]; then
@@ -295,23 +339,39 @@ origin_repo_name() {
 # Path portion of a URL, host stripped. scp-style remotes (git@host:path) are
 # normalized to host/path first so both forms compare segment-wise.
 url_after_host() {
-    local url="$1"
+    local url="$1" authority path
     if [[ "$url" != *://* ]]; then
         url="${url/:/\/}"   # scp-style: first colon becomes the path separator
     else
         url="${url#*://}"
     fi
     url="${url%%\?*}"       # drop a query string
-    url="${url#*@}"         # drop userinfo
-    url="${url#*/}"         # drop the host
-    url="${url%/}"
-    printf '%s' "${url%.git}"
+    url="${url%%#*}"        # drop a fragment
+    # Split the authority off FIRST, then strip userinfo inside it. Stripping
+    # `*@` from the whole string instead let any later `@` in the path eat
+    # everything before it — `.../tree/main/@types` came back as `types`.
+    authority="${url%%/*}"
+    if [[ "$url" == */* ]]; then
+        path="${url#*/}"
+    else
+        path=""
+    fi
+    authority="${authority#*@}"
+    : "$authority"          # parsed for correctness; only the path is returned
+    path="${path%/}"
+    printf '%s' "${path%.git}"
 }
 
 # owner/repo — GitHub numbers issues per REPOSITORY, so both segments matter.
 url_owner_repo() {
     local path parts IFS='/'
     path=$(url_after_host "$1")
+    # Collapse repeated slashes: `github.com//owner/repo/...` otherwise yields an
+    # empty first field and a legitimate same-repo reference is refused.
+    while [[ "$path" == *//* ]]; do
+        path="${path//\/\//\/}"
+    done
+    path="${path#/}"
     read -r -a parts <<< "$path"
     # Test the elements with :- defaults rather than ${#parts[@]}: on bash 3.2
     # (macOS) `read -a` can leave the array unset when the input is empty, and
@@ -337,30 +397,44 @@ url_owner_repo() {
 reference_scope() {
     local url="$1" host owner_repo org
     if [[ "$HOST" == "azdo" ]]; then
-        # Assign first: `lower "$(ado_org_name ...)" || return 1` would bind the
-        # || to lower, which succeeds on empty input, silently making an
+        # Assign first, then print: `printf "$(f)" || return 1` would bind the
+        # || to printf, which succeeds on empty input, silently making an
         # underivable org compare equal to another underivable one.
         org=$(ado_org_name "$url") || return 1
-        lower "$org"
+        printf '%s' "$org"
         return 0
     fi
     host=$(remote_host "$url")
     # Mirror the *.github.com tolerance of host detection above; an exact-match
-    # guard here rejected www.github.com while detection accepted it.
+    # guard here rejected www.github.com while detection accepted it. Normalize
+    # to the bare host rather than stripping one label — `${host#*.}` turned
+    # a.b.github.com into b.github.com, which still would not match.
     case "$host" in
-        *.github.com) host="${host#*.}" ;;
+        *.github.com) host="github.com" ;;
     esac
     owner_repo=$(url_owner_repo "$url") || return 1
-    lower "$host/$owner_repo"
+    printf '%s/%s' "$host" "$owner_repo"
 }
 
 # Does a reference URL point at the repository this review is about?
+#
+# Distinguishes WHOSE fault a "no" is, because the two are not the same claim
+# and only one of them is about the user's input:
+#   0  — yes, local
+#   1  — the reference names somewhere else. The user's URL is foreign.
+#   2  — OUR OWN origin could not be identified (absent, or unparsable). Nothing
+#        can be said about the reference either way, and blaming it would be a
+#        confident false statement — an earlier version reported a perfectly
+#        ordinary same-repo URL as "pointed at another repository" purely
+#        because the repo had no origin remote.
 reference_url_is_local() {
     local url_scope origin_scope
-    [[ -n "$REMOTE_URL" ]] || return 1
+    [[ -n "$REMOTE_URL" ]] || return 2
+    origin_scope=$(reference_scope "$REMOTE_URL") || return 2
+    [[ -n "$origin_scope" ]] || return 2
     url_scope=$(reference_scope "$1") || return 1
-    origin_scope=$(reference_scope "$REMOTE_URL") || return 1
-    [[ -n "$url_scope" && "$url_scope" == "$origin_scope" ]]
+    [[ -n "$url_scope" ]] || return 1
+    equals_ignoring_case "$url_scope" "$origin_scope"
 }
 
 # ── Parse the reference ──────────────────────────────────────────────
@@ -385,40 +459,69 @@ BOUNDARY_R='($|[^0-9A-Za-z])'
 if [[ "$ARGS" =~ (https?://[^[:space:]]+)/(pull|pullrequest)/([0-9]+) ]]; then
     KIND="pr"
     REF_ID="${BASH_REMATCH[3]}"
-    PR_URL_HOST=$(remote_host "${BASH_REMATCH[1]}")
-    if [[ -n "$REMOTE_HOST" && "$PR_URL_HOST" != "$REMOTE_HOST" ]]; then
-        echo "Error: PR URL points at '$PR_URL_HOST' but origin is '$REMOTE_HOST'." >&2
-        echo "Refusing to look up a PR number from one host against another." >&2
+    # Scope, not just host. A same-host PR URL from ANOTHER repository used to
+    # pass this guard, and the number was then looked up against origin — so
+    # `github.com/other/repo/pull/99` selected THIS repo's PR 99 and reviewed
+    # its branch. That is the widest blast radius in the file: every other
+    # refusal costs context, this one costs the review target.
+    PR_URL_LOCAL=0
+    reference_url_is_local "${BASH_REMATCH[1]}" || PR_URL_LOCAL=$?
+    if [[ "$PR_URL_LOCAL" == 1 ]]; then
+        echo "Error: PR URL names a different repository than origin." >&2
+        echo "  PR URL: ${BASH_REMATCH[1]}" >&2
+        echo "  origin: $REMOTE_URL" >&2
+        echo "Refusing to look up a PR number against a repository, organization or host that is not this one." >&2
         exit 1
     fi
+    # PR_URL_LOCAL=2 means origin itself is missing or unparsable. Say nothing
+    # here: require_known_host below reports that accurately, and claiming the
+    # user's URL is foreign would blame the wrong thing.
 # Bare `pr <N>` — outranks the context URLs below; see the header.
 elif [[ "$ARGS" =~ ${BOUNDARY_L}[Pp][Rr][[:space:]]+#?([0-9]+)${BOUNDARY_R} ]]; then
     KIND="pr"
     REF_ID="${BASH_REMATCH[2]}"
-# ADO work item URL: .../_workitems/edit/<N>
+fi
+
+# The context references below are NOT part of the elif chain above, and the
+# three of them are not chained to each other either.
 #
-# Both URL arms below refuse a FOREIGN reference. The number alone is
-# meaningless: the caller fetches it scoped to origin, so an id from another
-# repository resolves to a different, real story. This mirrors the PR-URL arm
-# above, which has always refused a foreign host — an earlier version guarded
-# only the WORKITEM_* routes and let a foreign id through here unchecked.
-elif [[ "$ARGS" =~ (https?://[^[:space:]]+)/_workitems/edit/([0-9]+) ]]; then
-    if reference_url_is_local "${BASH_REMATCH[1]}"; then
+# Each URL arm can MATCH and then be REFUSED as foreign, and a refusal must not
+# consume the slot: on `<foreign-url> and see #143` an elif chain swallowed the
+# perfectly local `#143`, so a stray URL in the prose silently moved the review
+# target off the PR's branch and onto HEAD. The WORKITEM routes below hit this
+# same bug and fixed it there only — this is the same fix, one level up.
+#
+# Why refuse at all: the number alone is meaningless, because the caller
+# fetches it scoped to origin, so an id from another repository resolves to a
+# different, real story. That mirrors the PR-URL arm above, which has always
+# refused a foreign host.
+
+# ADO work item URL: .../_workitems/edit/<N>
+if [[ "$KIND" == "none" && "$ARGS" =~ (https?://[^[:space:]]+)/_workitems/edit/([0-9]+) ]]; then
+    REF_LOCAL=0
+    reference_url_is_local "${BASH_REMATCH[1]}" || REF_LOCAL=$?
+    if [[ "$REF_LOCAL" == 0 ]]; then
         KIND="workitem"
         REF_ID="${BASH_REMATCH[2]}"
-    else
+    elif [[ "$REF_LOCAL" == 1 ]]; then
         REFERENCE_REFUSED=true
     fi
+fi
+
 # GitHub issue URL: https://github.com/<owner>/<repo>/issues/<N>
-elif [[ "$ARGS" =~ (https?://[^[:space:]]+)/issues/([0-9]+) ]]; then
-    if reference_url_is_local "${BASH_REMATCH[1]}"; then
+if [[ "$KIND" == "none" && "$ARGS" =~ (https?://[^[:space:]]+)/issues/([0-9]+) ]]; then
+    REF_LOCAL=0
+    reference_url_is_local "${BASH_REMATCH[1]}" || REF_LOCAL=$?
+    if [[ "$REF_LOCAL" == 0 ]]; then
         KIND="issue"
         REF_ID="${BASH_REMATCH[2]}"
-    else
+    elif [[ "$REF_LOCAL" == 1 ]]; then
         REFERENCE_REFUSED=true
     fi
+fi
+
 # Bare `#<N>` — meaning depends on the host (see header).
-elif [[ "$ARGS" =~ ${BOUNDARY_L}#([0-9]+)${BOUNDARY_R} ]]; then
+if [[ "$KIND" == "none" && "$ARGS" =~ ${BOUNDARY_L}#([0-9]+)${BOUNDARY_R} ]]; then
     REF_ID="${BASH_REMATCH[2]}"
     if [[ "$HOST" == "unknown" ]]; then
         # Without a known host, `#<N>` cannot even be classified — GitHub shares
@@ -483,7 +586,16 @@ if [[ "$KIND" == "pr" || "$KIND" == "ambiguous" ]]; then
         #
         # This lookup doubles as the PR-vs-issue test for an ambiguous #<N>:
         # a genuine not-found means the number is an issue, not a PR.
-        if PR_TSV=$(gh pr view "$REF_ID" \
+        # --repo, always. A bare `gh pr view <N>` resolves against gh's DEFAULT
+        # remote, which `gh repo set-default` can point anywhere — so without
+        # this the whole locality model, which is built on `origin`, can be
+        # bypassed by a setting this script never reads. The ADO arm below has
+        # always checked repository.name for the same reason.
+        GH_SLUG=$(url_owner_repo "$REMOTE_URL") || {
+            echo "Error: Could not derive owner/repo from the origin remote: $REMOTE_URL" >&2
+            exit 1
+        }
+        if PR_TSV=$(gh pr view "$REF_ID" --repo "$GH_SLUG" \
                 --json headRefName,baseRefName,state,isCrossRepository \
                 --jq '[.headRefName, .baseRefName, .state, .isCrossRepository] | @tsv' \
                 2>"$ERR_FILE"); then
@@ -640,22 +752,26 @@ workitem_kind_for_host() {
 # #143 — the same "silently dropped the user's reference" bug the scan below
 # was written to fix, reintroduced one level up.
 if [[ "$HOST" != "unknown" && "$ARGS" =~ (https?://[^[:space:]]+)/_workitems/edit/([0-9]+) ]]; then
-    if reference_url_is_local "${BASH_REMATCH[1]}"; then
+    REF_LOCAL=0
+    reference_url_is_local "${BASH_REMATCH[1]}" || REF_LOCAL=$?
+    if [[ "$REF_LOCAL" == 0 ]]; then
         WORKITEM_KIND="workitem"
         WORKITEM_ID="${BASH_REMATCH[2]}"
         WORKITEM_SOURCE="argument"
-    else
+    elif [[ "$REF_LOCAL" == 1 ]]; then
         REFERENCE_REFUSED=true
     fi
 fi
 
 if [[ "$WORKITEM_KIND" == "none" && "$HOST" != "unknown" \
     && "$ARGS" =~ (https?://[^[:space:]]+)/issues/([0-9]+) ]]; then
-    if reference_url_is_local "${BASH_REMATCH[1]}"; then
+    REF_LOCAL=0
+    reference_url_is_local "${BASH_REMATCH[1]}" || REF_LOCAL=$?
+    if [[ "$REF_LOCAL" == 0 ]]; then
         WORKITEM_KIND="issue"
         WORKITEM_ID="${BASH_REMATCH[2]}"
         WORKITEM_SOURCE="argument"
-    else
+    elif [[ "$REF_LOCAL" == 1 ]]; then
         REFERENCE_REFUSED=true
     fi
 fi
@@ -701,7 +817,9 @@ if [[ "$WORKITEM_KIND" == "none" && "$KIND" == "pr" ]]; then
         # @tsv, and a multi-line description would shift every field — the
         # branch names silently become garbage. The ADO arm has the same
         # hazard with its line-wise `read -r` parse.
-        PR_BODY=$(gh pr view "$REF_ID" --json body --jq '.body' 2>"$ERR_FILE") || PR_BODY_OK=false
+        # --repo for the same reason as the branch lookup above; GH_SLUG is set
+        # there, on the only path that reaches this line (KIND=pr on GitHub).
+        PR_BODY=$(gh pr view "$REF_ID" --repo "${GH_SLUG:-}" --json body --jq '.body' 2>"$ERR_FILE") || PR_BODY_OK=false
     else
         PR_BODY=$(az repos pr show --id "$REF_ID" --org "${ORG:-}" \
             --query "description" -o tsv 2>"$ERR_FILE") || PR_BODY_OK=false
@@ -715,16 +833,19 @@ if [[ "$WORKITEM_KIND" == "none" && "$KIND" == "pr" ]]; then
         # checked-and-empty stronger route.
         WORKITEM_LOOKUP="pr-body-unreadable"
     else
-        WI_BOUNDARY_L='(^|[^0-9A-Za-z])'
-        WI_BOUNDARY_R='($|[^0-9A-Za-z])'
+        # BOUNDARY_L/BOUNDARY_R are reused directly — they are ERE and valid in
+        # both `[[ =~ ]]` and `grep -E`. A duplicate WI_ pair lived here and
+        # drifting copies of one invariant is exactly what this file already
+        # learned to avoid.
+        #
         # AB#<id> is checked FIRST on ADO: it is ADO's own work-item link
         # syntax, whereas a bare `#5` in an ADO description is not a work-item
         # reference at all. On GitHub the precedence is reversed.
         WI_CLOSE_HIT=$(printf '%s' "$PR_BODY" \
-            | grep -Eio "${WI_BOUNDARY_L}(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]*:?[[:space:]]*#[0-9]+${WI_BOUNDARY_R}" \
+            | grep -Eio "${BOUNDARY_L}(close[sd]?|fix(es|ed)?|resolve[sd]?)[[:space:]]*:?[[:space:]]*#[0-9]+${BOUNDARY_R}" \
             | head -1 || printf '')
         WI_AB_HIT=$(printf '%s' "$PR_BODY" \
-            | grep -Eo "${WI_BOUNDARY_L}AB#[0-9]+${WI_BOUNDARY_R}" \
+            | grep -Eo "${BOUNDARY_L}AB#[0-9]+${BOUNDARY_R}" \
             | head -1 || printf '')
         # Trailing boundary character, if any, is not part of the number.
         WI_CLOSE_HIT="${WI_CLOSE_HIT%%[^0-9]}"
@@ -746,16 +867,14 @@ if [[ "$WORKITEM_KIND" == "none" && "$KIND" == "pr" ]]; then
             WORKITEM_ID="${WI_CLOSE_HIT##*#}"
             WORKITEM_KIND=$(workitem_kind_for_host)
             WORKITEM_SOURCE="pr-body"
-        elif [[ -n "$WI_AB_HIT" && -n "${ORG:-}" ]]; then
-            # AB#<id> outside ADO. Only accept it when an ADO org is actually
-            # derivable, because the caller needs `--org` to fetch it. Taking
-            # it unconditionally set a known-unfetchable kind AND suppressed
-            # route 3, so a perfectly good branches/<id>-<slug> story was
-            # displaced by an id nobody could read.
-            WORKITEM_ID="${WI_AB_HIT##*#}"
-            WORKITEM_KIND="workitem"
-            WORKITEM_SOURCE="pr-body"
         fi
+        # There is deliberately no `AB#<id> outside ADO` arm. An earlier draft
+        # had one, gated on a derivable ORG — but ORG is only ever set on the
+        # azdo path, so the arm was unreachable except through an inherited
+        # environment variable, and when it did fire it set a kind the caller
+        # cannot fetch (no org) while suppressing the usable branch-name story
+        # below. On a non-ADO host an AB#<id> in a PR body is a mention, not a
+        # link this script can resolve; fall through to route 3.
     fi
 fi
 
@@ -807,12 +926,15 @@ if [[ "$WORKITEM_KIND" != "none" ]]; then
     echo "WORKITEM_ID=$WORKITEM_ID"
     echo "WORKITEM_SOURCE=$WORKITEM_SOURCE"
 fi
-# A refused reference outranks a body-fetch failure in the report: the user
-# named something and we declined it, which they need to know about first.
-if [[ "$REFERENCE_REFUSED" == true ]]; then
-    WORKITEM_LOOKUP="reference-not-local"
-fi
+# A refusal and an unreadable body are ORTHOGONAL facts, so they get separate
+# keys. Folding the refusal into WORKITEM_LOOKUP made one field carry two
+# meanings: it clobbered `pr-body-unreadable` when both happened, and — worse —
+# it reported `reference-not-local` alongside a perfectly good
+# `WORKITEM_SOURCE=argument`, because a refused URL and an accepted `#<N>` can
+# occur in the same arguments. The caller then disowned a story the user did
+# name.
 echo "WORKITEM_LOOKUP=$WORKITEM_LOOKUP"
+echo "REFERENCE_REFUSED=$REFERENCE_REFUSED"
 # The org is required to fetch an ADO work item at all, so publish the one the
 # PR lookup already derived instead of making the caller re-derive it.
 if [[ "$HOST" == "azdo" && -n "${ORG:-}" ]]; then

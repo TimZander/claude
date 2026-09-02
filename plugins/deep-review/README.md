@@ -58,7 +58,12 @@ When you pass no story, the review looks for one in the PR's `Closes/Fixes #N` (
 
 It always reports **which route** it used, because confidence differs: a reference you passed is authoritative, a link in the PR body is the author's own assertion, and a branch name is a convention rather than a guarantee. A wrong story is worse than none — it grades your diff against someone else's acceptance criteria — so the route is stated where you can reject it.
 
-A reference pointing at another repository or ADO organization is **refused and reported as refused**, never quietly reduced to its number: `.../SOMEONE-ELSE/other/issues/42` would otherwise resolve to *your* issue 42. Refusal is compared across remote dialects, so an `ssh.dev.azure.com` clone still accepts the `dev.azure.com` work-item URL its own web UI produces, and casing differences don't matter.
+A reference pointing at another repository or ADO organization is **refused**, never quietly reduced to its number: `.../SOMEONE-ELSE/other/issues/42` would otherwise resolve to *your* issue 42. How it refuses depends on what the reference was for:
+
+- A **context** reference (issue or work item) is declined and the review continues, saying so in the 🎯 Context line. It never silently becomes "no story was referenced".
+- A **PR URL** stops the review outright, because that one selects which code gets reviewed — a wrong answer there reviews the wrong branch, not merely the wrong story.
+
+Refusal compares across remote dialects and ignores casing, so an `ssh.dev.azure.com` clone still accepts the `dev.azure.com` work-item URL its own web UI produces.
 
 The 📋 Summary then carries an **acceptance-criteria checklist** — each criterion marked ✅ met / ❌ not met / ❓ can't tell from the diff. When no story is found, the checklist says so explicitly rather than going silent: a review that never checked fitness should not look like one that checked and passed.
 
