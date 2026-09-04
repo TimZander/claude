@@ -73,9 +73,15 @@ Your final output MUST follow the exact template in Step 11. Violations that wil
 
 An earlier version skipped this step on empty arguments, which was a defect: the script resolves the **story** as well as the review target, and a bare `/deep-review` is precisely the invocation with no explicit reference to fall back on. Skipping it meant the branch name — the one signal always available — was never read, and the review reported "no linked story found" while standing on `branches/<id>-<slug>`. With no arguments there is simply no PR to resolve (`KIND=none`, no network calls), but `WORKITEM_KIND` still comes back.
 
-**Locate the script.** Use Glob with the pattern `**/deep-review/**/resolve-pr.sh` rooted at the user's home directory `~/.claude/plugins` (resolve `~` to an absolute path before calling Glob). If Glob returns multiple candidates, skip any whose parent-of-`scripts/` directory contains a `.orphaned_at` marker (check with Read). If zero candidates remain, tell the user the plugin may need reinstalling and stop.
+**Locate the script — ask the registry, do not guess.** Read `~/.claude/plugins/installed_plugins.json` (resolve `~` to an absolute path) and take the `installPath` recorded for `deep-review@tzander-skills`; the script is at `<installPath>/scripts/resolve-pr.sh`. That file is the installer's own record of which copy is active, so it is an answer rather than an inference.
 
-If several remain, **do not assume the ordering is meaningful** — it is not sorted by modification time, and installs can include a `vendored/` or `marketplaces/` copy that the `.orphaned_at` convention does not cover. Prefer the largest candidate (a truncated or stub script is a real install state), and confirm the choice was right by the output check below rather than by the ordering.
+Only if the registry is unreadable, has no entry for the plugin, or names a path that does not exist, fall back to Glob with the pattern `**/deep-review/**/resolve-pr.sh` rooted at `~/.claude/plugins`. In that case:
+
+- Skip any candidate whose parent-of-`scripts/` directory contains a `.orphaned_at` marker (check with Read).
+- **Do not assume Glob's ordering is meaningful** — it is not sorted by modification time, and installs routinely include `vendored/` and `marketplaces/` copies that the `.orphaned_at` convention does not cover. A stub or truncated script is a real install state and has been observed first in the list.
+- **Do not rank by file size.** An earlier version of this step said to prefer the largest candidate; that silently assumed the script only ever grows, and it does not — extracting shared code into `scripts/lib-remote.sh` made the current script *smaller* than its predecessor, so size ranking selects the stalest copy present. Prefer instead the candidate whose directory name matches the newest version marker, and failing that, ask the user which install to use rather than guessing.
+
+If nothing resolves, tell the user the plugin may need reinstalling and stop. Whichever path you took, confirm the choice by the output check below rather than by how it was found.
 
 **Run it,** passing the arguments verbatim:
 

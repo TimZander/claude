@@ -1,26 +1,25 @@
-# lib-remote.sh — Git remote URL parsing, shared by this plugin's scripts.
+# shellcheck shell=bash
+# lib-remote.sh — Git remote URL parsing and scope comparison, shared by this
+# plugin's scripts.
 #
 # SOURCE this file; do not execute it. It defines functions and nothing else:
 # no top-level statements, no shell options, no output. The sourcing script
 # owns `set -euo pipefail` — a library that sets shell options changes the
-# behaviour of whoever sourced it, which is not its call to make.
+# behaviour of whoever sourced it, which is not its call to make. It has no
+# shebang and mode 644 by design, so it cannot be run by accident.
 #
 #   SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 #   . "$SCRIPT_DIR/lib-remote.sh"
 #
-# SCOPE: every function here is PURE — it takes a URL as "$1" and reads no
-# global state. That is what makes them safe to share. Anything that compares
-# a reference against *this* review's origin (reference_scope,
-# reference_url_is_local) stays in resolve-pr.sh, because it depends on that
-# script's notion of which repository is under review.
+# SCOPE: no function here reads a global. Everything it needs arrives as an
+# argument — including the host classification, which callers pass in rather
+# than the library reading a `HOST` global. That is what makes these safe to
+# share between scripts that have no other state in common.
 #
-# Why a sourced file rather than a second copy: resolve-pr.sh's own note above
-# `remote_host` says host detection was "copied rather than sourced — plugins
-# are installed independently and must stand alone". That constraint is about
-# reaching ACROSS plugin boundaries, and it still holds: this file ships inside
-# deep-review/scripts/, so deep-review remains self-contained and installable on
-# its own. A different plugin still cannot source this — it would have to vendor
-# its own copy or shell out to a deep-review script.
+# CALLING CONSTRAINT — `equals_ignoring_case` and `urls_same_scope` return
+# non-zero to mean "no", not "error". Under `set -e` a BARE call therefore
+# aborts the shell. Call them in conditional context (`if f …`, `f … || rc=$?`),
+# which is how every current caller uses them.
 
 # Extract the host component from a git remote URL, handling https://,
 # ssh://, and scp-style (git@host:path) forms.
@@ -43,13 +42,17 @@ remote_host() {
 # sites, not here.
 host_kind() {
     case "$(remote_host "$1")" in
-        github.com|*.github.com)                        printf 'github' ;;
-        dev.azure.com|ssh.dev.azure.com|*.visualstudio.com) printf 'azdo' ;;
-        *)                                              printf 'unknown' ;;
+        github.com|*.github.com)
+            printf 'github' ;;
+        dev.azure.com|ssh.dev.azure.com|*.visualstudio.com)
+            printf 'azdo' ;;
+        *)
+            printf 'unknown' ;;
     esac
 }
 
-# Case-insensitive string equality, without lowercasing.
+# Case-insensitive string equality, without lowercasing. Takes two arbitrary
+# strings — the one function here that is not about URLs.
 #
 # An earlier version ran both operands through `printf | tr`. That is one FORK
 # PER CALL, and locality is checked up to three times per invocation — on Git
@@ -57,9 +60,13 @@ host_kind() {
 # `nocasematch` does the same job in-process. It is a shell-global option, so it
 # is restored immediately; `shopt -p` reproduces the prior state exactly whether
 # it was set or unset.
+#
+# `|| true` on the capture: `shopt -p <name>` exits 1 when the option is UNSET,
+# which is the common case. Without it the assignment carries that status and a
+# bare call under `set -e` kills the shell before the comparison ever runs.
 equals_ignoring_case() {
     local restore
-    restore=$(shopt -p nocasematch)
+    restore=$(shopt -p nocasematch || true)
     shopt -s nocasematch
     if [[ "$1" == "$2" ]]; then
         eval "$restore"
@@ -100,8 +107,10 @@ ado_org_url() {
     fi
 }
 
-# The repository name from a remote (last path segment, minus .git).
-origin_repo_name() {
+# The repository name from a URL (last path segment, minus .git). Named for what
+# it takes, not for who happens to pass it: in a shared library "origin" would be
+# a promise the argument cannot keep.
+repo_name_from_url() {
     local url="${1%/}"
     url="${url%.git}"
     printf '%s' "${url##*/}"
@@ -110,7 +119,7 @@ origin_repo_name() {
 # Path portion of a URL, host stripped. scp-style remotes (git@host:path) are
 # normalized to host/path first so both forms compare segment-wise.
 url_after_host() {
-    local url="$1" authority path
+    local url="$1" path
     if [[ "$url" != *://* ]]; then
         url="${url/:/\/}"   # scp-style: first colon becomes the path separator
     else
@@ -121,14 +130,11 @@ url_after_host() {
     # Split the authority off FIRST, then strip userinfo inside it. Stripping
     # `*@` from the whole string instead let any later `@` in the path eat
     # everything before it — `.../tree/main/@types` came back as `types`.
-    authority="${url%%/*}"
     if [[ "$url" == */* ]]; then
         path="${url#*/}"
     else
         path=""
     fi
-    authority="${authority#*@}"
-    : "$authority"          # parsed for correctness; only the path is returned
     path="${path%/}"
     printf '%s' "${path%.git}"
 }
@@ -151,4 +157,71 @@ url_owner_repo() {
         return 1
     fi
     printf '%s/%s' "${parts[0]}" "${parts[1]}"
+}
+
+# A canonical identity for "which repository/organization does this number
+# belong to", comparable across dialects and casing.
+#
+#   $1  the URL to identify
+#   $2  the host family to interpret it as: github|azdo|unknown
+#
+# $2 is the ORIGIN's classification, not the URL's own — deliberately. The
+# question being answered is "is this reference about the repo under review",
+# so an ADO repo compares organizations and a GitHub repo compares owner/repo.
+# Classifying each URL independently would be a different (and arguably better)
+# design; it is not this one, and changing it is a behaviour change, not a move.
+#
+# ADO goes through ado_org_name rather than a raw host comparison. Comparing
+# hosts rejected `git@ssh.dev.azure.com:v3/<org>/...` against the very
+# work-item URL the ADO web UI produces for that same org — and a legacy
+# <org>.visualstudio.com remote against a dev.azure.com URL, which are the same
+# organization spelled two ways.
+reference_scope() {
+    local url="$1" kind="${2:-unknown}" host owner_repo org
+    if [[ "$kind" == "azdo" ]]; then
+        # Assign first, then print: `printf "$(f)" || return 1` would bind the
+        # || to printf, which succeeds on empty input, silently making an
+        # underivable org compare equal to another underivable one.
+        org=$(ado_org_name "$url") || return 1
+        printf '%s' "$org"
+        return 0
+    fi
+    host=$(remote_host "$url")
+    # Same `*.github.com` tolerance host_kind applies above — an exact-match
+    # guard here rejected www.github.com while detection accepted it. Keep the
+    # two in step; they are adjacent in this file so the pairing stays visible.
+    # Normalize to the bare host rather than stripping one label — `${host#*.}`
+    # turned a.b.github.com into b.github.com, which still would not match.
+    case "$host" in
+        *.github.com) host="github.com" ;;
+    esac
+    owner_repo=$(url_owner_repo "$url") || return 1
+    printf '%s/%s' "$host" "$owner_repo"
+}
+
+# Do two URLs name the same repository/organization?
+#
+#   $1  the reference URL under test
+#   $2  the URL to compare it against (in practice, origin)
+#   $3  the host family, as for reference_scope
+#
+# Distinguishes WHOSE fault a "no" is, because the two are not the same claim
+# and only one of them is about the user's input:
+#   0  — yes, same scope
+#   1  — the reference names somewhere else. The user's URL is foreign.
+#   2  — the COMPARISON url could not be identified (absent, or unparsable).
+#        Nothing can be said about the reference either way, and blaming it
+#        would be a confident false statement — an earlier version reported a
+#        perfectly ordinary same-repo URL as "pointed at another repository"
+#        purely because the repo had no origin remote.
+#
+# Returns non-zero to mean "no", so call it in conditional context under set -e.
+urls_same_scope() {
+    local ref_url="$1" against_url="$2" kind="${3:-unknown}" ref_scope against_scope
+    [[ -n "$against_url" ]] || return 2
+    against_scope=$(reference_scope "$against_url" "$kind") || return 2
+    [[ -n "$against_scope" ]] || return 2
+    ref_scope=$(reference_scope "$ref_url" "$kind") || return 1
+    [[ -n "$ref_scope" ]] || return 1
+    equals_ignoring_case "$ref_scope" "$against_scope"
 }

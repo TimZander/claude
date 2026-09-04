@@ -127,13 +127,17 @@ set -euo pipefail
 #
 # Exit codes:
 #   0 — Resolved (including KIND=none: no reference present, review HEAD)
-#   1 — Error. Every case: a usage error in this script's own arguments; no
+#   1 — Error. Every case: lib-remote.sh unreadable or incomplete beside this
+#       script; a usage error in this script's own arguments; no
 #       origin remote, an unsupported host, or a missing CLI when a PR must be
 #       looked up; a PR URL naming a different repository or host; a PR lookup
 #       that failed, returned no branch names, or returned a PR belonging to
 #       another ADO repository; a GitHub PR whose source is in a fork; an ADO
 #       remote with no derivable organization URL on the PR path; and the
 #       internal-error guard for an unresolved `ambiguous` reference.
+#   2 — Not produced by this script: bash's own exit status when lib-remote.sh
+#       is present but does not parse. The message names the file and line, so
+#       it is left to bash rather than papered over with a friendlier one.
 #
 #       A cross-repo CONTEXT reference is deliberately NOT an error: it exits 0,
 #       resolves no story from that reference, and reports REFERENCE_REFUSED=true.
@@ -145,14 +149,35 @@ set -euo pipefail
 # by absolute path from a plugin directory that is not the working directory,
 # and in CI from a staged read-only copy.
 
-RESOLVE_PR_LIB_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-if [[ ! -f "$RESOLVE_PR_LIB_DIR/lib-remote.sh" ]]; then
-    echo "Error: lib-remote.sh not found beside resolve-pr.sh (looked in $RESOLVE_PR_LIB_DIR)." >&2
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+# `-r`, not `-f`: a present-but-unreadable file passes an existence test and
+# then dies at the `.` below with a bare "Permission denied", skipping the
+# remediation this branch exists to print.
+if [[ ! -r "$SCRIPT_DIR/lib-remote.sh" ]]; then
+    echo "Error: lib-remote.sh not readable beside resolve-pr.sh (looked in $SCRIPT_DIR)." >&2
     echo "The plugin install is incomplete — reinstall or re-sync it." >&2
     exit 1
 fi
 # shellcheck source=lib-remote.sh
-. "$RESOLVE_PR_LIB_DIR/lib-remote.sh"
+. "$SCRIPT_DIR/lib-remote.sh"
+
+# Existence is not integrity. An interrupted copy or a truncated vendor snapshot
+# leaves a readable file that loads without error and is missing functions, and
+# the failure then surfaces hundreds of lines later as `command not found` on a
+# name the user has no reason to recognize. Check the surface up front so the
+# same remediation message covers the partial-install case, which is the more
+# likely one. (A truncation landing mid-function is a parse error instead; that
+# is loud on its own and names the file and line.)
+for _fn in remote_host host_kind equals_ignoring_case ado_org_name ado_org_url \
+           repo_name_from_url url_after_host url_owner_repo reference_scope \
+           urls_same_scope; do
+    if ! declare -F "$_fn" >/dev/null 2>&1; then
+        echo "Error: lib-remote.sh loaded but does not define '$_fn' — the file is incomplete." >&2
+        echo "The plugin install is incomplete — reinstall or re-sync it." >&2
+        exit 1
+    fi
+done
+unset _fn
 
 # ── Arguments ────────────────────────────────────────────────────────
 
@@ -213,8 +238,9 @@ require_cli() {
 # ── Detect platform ──────────────────────────────────────────────────
 # Host detection derived from craft-pr/scripts/create-pr.sh. Copied from that
 # plugin rather than sourced from it — plugins are installed independently and
-# must stand alone. lib-remote.sh below is a different case: it ships inside
-# THIS plugin, so sourcing it keeps deep-review self-contained.
+# must stand alone. lib-remote.sh, sourced at the top of this file, is a
+# different case: it ships inside THIS plugin, so sourcing it keeps deep-review
+# self-contained and separately installable.
 
 # An unknown host is NOT an error here. /deep-review runs this step on EVERY
 # invocation, including with no arguments at all, and most invocations are a
@@ -223,7 +249,6 @@ require_cli() {
 # works today. The host only has to be known to LOOK UP a PR, so that
 # requirement is enforced at the resolution step instead.
 REMOTE_URL=$(git remote get-url origin 2>/dev/null || printf '')
-REMOTE_HOST=""
 HOST="unknown"
 # Initialized like every other output variable. Without this, `${ORG:-}` reads
 # the CALLER'S exported ORG — a plausible variable for someone working with az
@@ -231,10 +256,9 @@ HOST="unknown"
 # organization. Every other emitted value is initialized here or at its section.
 ORG=""
 
-if [[ -n "$REMOTE_URL" ]]; then
-    REMOTE_HOST=$(remote_host "$REMOTE_URL")
-    HOST=$(host_kind "$REMOTE_URL")
-fi
+# Unconditional: host_kind "" already yields `unknown`, which is what the
+# initializer above says. Guarding it would only re-state that.
+HOST=$(host_kind "$REMOTE_URL")
 
 # Called only from paths that genuinely need to reach a PR API.
 require_known_host() {
@@ -277,47 +301,14 @@ CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || true)
 # against it. The PR-URL path already refuses a foreign host; this is the same
 # guard for every other reference.
 
-# equals_ignoring_case, ado_org_name, ado_org_url, origin_repo_name,
-# url_after_host and url_owner_repo now live in lib-remote.sh, sourced above.
-
-# A canonical identity for "which repository/organization does this number
-# belong to", comparable across dialects and casing.
-#
-# ADO goes through ado_org_name rather than a raw host comparison. Comparing
-# hosts rejected `git@ssh.dev.azure.com:v3/<org>/...` against the very
-# work-item URL the ADO web UI produces for that same org — and a legacy
-# <org>.visualstudio.com remote against a dev.azure.com URL, which are the same
-# organization spelled two ways.
-#
-# Lowercased because GitHub owners/repos and ADO orgs are case-insensitive,
-# while a clone URL carries whatever casing was typed. A user pasting the
-# browser's canonical-cased URL is routine, not exotic.
-reference_scope() {
-    local url="$1" host owner_repo org
-    if [[ "$HOST" == "azdo" ]]; then
-        # Assign first, then print: `printf "$(f)" || return 1` would bind the
-        # || to printf, which succeeds on empty input, silently making an
-        # underivable org compare equal to another underivable one.
-        org=$(ado_org_name "$url") || return 1
-        printf '%s' "$org"
-        return 0
-    fi
-    host=$(remote_host "$url")
-    # Mirror the *.github.com tolerance of host detection above; an exact-match
-    # guard here rejected www.github.com while detection accepted it. Normalize
-    # to the bare host rather than stripping one label — `${host#*.}` turned
-    # a.b.github.com into b.github.com, which still would not match.
-    case "$host" in
-        *.github.com) host="github.com" ;;
-    esac
-    owner_repo=$(url_owner_repo "$url") || return 1
-    printf '%s/%s' "$host" "$owner_repo"
-}
-
 # Does a reference URL point at the repository this review is about?
 #
-# Distinguishes WHOSE fault a "no" is, because the two are not the same claim
-# and only one of them is about the user's input:
+# The comparison itself is urls_same_scope in lib-remote.sh, which takes both
+# URLs and the host family as arguments so it can be shared. This wrapper is the
+# only thing that has to know which globals hold "the repo under review", and it
+# keeps that knowledge in the script that owns them.
+#
+# Returns non-zero to mean "no", so call it in conditional context under set -e:
 #   0  — yes, local
 #   1  — the reference names somewhere else. The user's URL is foreign.
 #   2  — OUR OWN origin could not be identified (absent, or unparsable). Nothing
@@ -326,13 +317,7 @@ reference_scope() {
 #        ordinary same-repo URL as "pointed at another repository" purely
 #        because the repo had no origin remote.
 reference_url_is_local() {
-    local url_scope origin_scope
-    [[ -n "$REMOTE_URL" ]] || return 2
-    origin_scope=$(reference_scope "$REMOTE_URL") || return 2
-    [[ -n "$origin_scope" ]] || return 2
-    url_scope=$(reference_scope "$1") || return 1
-    [[ -n "$url_scope" ]] || return 1
-    equals_ignoring_case "$url_scope" "$origin_scope"
+    urls_same_scope "$1" "$REMOTE_URL" "$HOST"
 }
 
 # ── Parse the reference ──────────────────────────────────────────────
@@ -561,7 +546,7 @@ if [[ "$KIND" == "pr" || "$KIND" == "ambiguous" ]]; then
             abandoned) STATE="abandoned" ;;
             *)         STATE="$AZ_STATUS" ;;
         esac
-        ORIGIN_REPO=$(origin_repo_name "$REMOTE_URL")
+        ORIGIN_REPO=$(repo_name_from_url "$REMOTE_URL")
         if [[ -n "$AZ_REPO" && -n "$ORIGIN_REPO" && "$AZ_REPO" != "$ORIGIN_REPO" ]]; then
             echo "Error: PR #$REF_ID belongs to repository '$AZ_REPO', but origin is '$ORIGIN_REPO'." >&2
             echo "Azure DevOps PR ids are unique per organization, not per repository." >&2
