@@ -140,6 +140,20 @@ set -euo pipefail
 #       Only the branch-SELECTING path exits non-zero, because there the wrong
 #       answer is a review of the wrong code.
 
+# ── Shared remote parsing ────────────────────────────────────────────
+# Resolved from BASH_SOURCE, not $0 or the caller's cwd: this script is invoked
+# by absolute path from a plugin directory that is not the working directory,
+# and in CI from a staged read-only copy.
+
+RESOLVE_PR_LIB_DIR=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+if [[ ! -f "$RESOLVE_PR_LIB_DIR/lib-remote.sh" ]]; then
+    echo "Error: lib-remote.sh not found beside resolve-pr.sh (looked in $RESOLVE_PR_LIB_DIR)." >&2
+    echo "The plugin install is incomplete — reinstall or re-sync it." >&2
+    exit 1
+fi
+# shellcheck source=lib-remote.sh
+. "$RESOLVE_PR_LIB_DIR/lib-remote.sh"
+
 # ── Arguments ────────────────────────────────────────────────────────
 
 ARGS=""
@@ -197,20 +211,10 @@ require_cli() {
 }
 
 # ── Detect platform ──────────────────────────────────────────────────
-# Host detection derived from craft-pr/scripts/create-pr.sh, but matched on the
-# URL's HOST COMPONENT rather than as a substring of the whole URL: a substring
-# test misclassifies e.g. https://gitlab.com/me/github.com-mirror.git. Copied
-# rather than sourced — plugins are installed independently and must stand alone.
-
-# Extract the host component from a git remote URL, handling https://,
-# ssh://, and scp-style (git@host:path) forms.
-remote_host() {
-    local url="$1"
-    url="${url#*://}"   # strip scheme
-    url="${url#*@}"     # strip userinfo
-    url="${url%%[:/]*}" # keep up to the first : or /
-    printf '%s' "$url"
-}
+# Host detection derived from craft-pr/scripts/create-pr.sh. Copied from that
+# plugin rather than sourced from it — plugins are installed independently and
+# must stand alone. lib-remote.sh below is a different case: it ships inside
+# THIS plugin, so sourcing it keeps deep-review self-contained.
 
 # An unknown host is NOT an error here. /deep-review runs this step on EVERY
 # invocation, including with no arguments at all, and most invocations are a
@@ -229,12 +233,7 @@ ORG=""
 
 if [[ -n "$REMOTE_URL" ]]; then
     REMOTE_HOST=$(remote_host "$REMOTE_URL")
-    case "$REMOTE_HOST" in
-        github.com|*.github.com)
-            HOST="github" ;;
-        dev.azure.com|ssh.dev.azure.com|*.visualstudio.com)
-            HOST="azdo" ;;
-    esac
+    HOST=$(host_kind "$REMOTE_URL")
 fi
 
 # Called only from paths that genuinely need to reach a PR API.
@@ -278,109 +277,8 @@ CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || true)
 # against it. The PR-URL path already refuses a foreign host; this is the same
 # guard for every other reference.
 
-# Case-insensitive string equality, without lowercasing.
-#
-# An earlier version ran both operands through `printf | tr`. That is one FORK
-# PER CALL, and locality is checked up to three times per invocation — on Git
-# Bash, where process creation is expensive, it added minutes to the test suite.
-# `nocasematch` does the same job in-process. It is a shell-global option, so it
-# is restored immediately; `shopt -p` reproduces the prior state exactly whether
-# it was set or unset.
-equals_ignoring_case() {
-    local restore
-    restore=$(shopt -p nocasematch)
-    shopt -s nocasematch
-    if [[ "$1" == "$2" ]]; then
-        eval "$restore"
-        return 0
-    fi
-    eval "$restore"
-    return 1
-}
-
-# The ADO organization NAME, reconciled across every remote dialect. The v3 ssh
-# forms must be matched BEFORE the generic visualstudio.com arm, or
-# vs-ssh.visualstudio.com yields the org "vs-ssh".
-ado_org_name() {
-    local url="$1"
-    # `[:/]` alone rejected an explicit port — ssh://git@ssh.dev.azure.com:22/v3/…
-    # matched no arm, and since HOST is decided on the host alone that turned a
-    # legitimate remote into a hard failure on the PR path.
-    if [[ "$url" =~ (ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)(:[0-9]+)?[:/]v3/([^/]+) ]]; then
-        printf '%s' "${BASH_REMATCH[3]}"
-    elif [[ "$url" =~ dev\.azure\.com/([^/]+) ]]; then
-        printf '%s' "${BASH_REMATCH[1]}"
-    elif [[ "$url" =~ ([A-Za-z0-9_-]+)\.visualstudio\.com ]]; then
-        printf '%s' "${BASH_REMATCH[1]}"
-    else
-        return 1
-    fi
-}
-
-# The organization URL `az --org` needs. Preserves each dialect's own form:
-# a legacy <org>.visualstudio.com remote keeps that host.
-ado_org_url() {
-    local url="$1" org
-    org=$(ado_org_name "$url") || return 1
-    if [[ "$url" =~ \.visualstudio\.com ]] && [[ ! "$url" =~ vs-ssh\.visualstudio\.com ]]; then
-        printf 'https://%s.visualstudio.com' "$org"
-    else
-        printf 'https://dev.azure.com/%s' "$org"
-    fi
-}
-
-# The repository name from a remote (last path segment, minus .git).
-origin_repo_name() {
-    local url="${1%/}"
-    url="${url%.git}"
-    printf '%s' "${url##*/}"
-}
-
-# Path portion of a URL, host stripped. scp-style remotes (git@host:path) are
-# normalized to host/path first so both forms compare segment-wise.
-url_after_host() {
-    local url="$1" authority path
-    if [[ "$url" != *://* ]]; then
-        url="${url/:/\/}"   # scp-style: first colon becomes the path separator
-    else
-        url="${url#*://}"
-    fi
-    url="${url%%\?*}"       # drop a query string
-    url="${url%%#*}"        # drop a fragment
-    # Split the authority off FIRST, then strip userinfo inside it. Stripping
-    # `*@` from the whole string instead let any later `@` in the path eat
-    # everything before it — `.../tree/main/@types` came back as `types`.
-    authority="${url%%/*}"
-    if [[ "$url" == */* ]]; then
-        path="${url#*/}"
-    else
-        path=""
-    fi
-    authority="${authority#*@}"
-    : "$authority"          # parsed for correctness; only the path is returned
-    path="${path%/}"
-    printf '%s' "${path%.git}"
-}
-
-# owner/repo — GitHub numbers issues per REPOSITORY, so both segments matter.
-url_owner_repo() {
-    local path parts IFS='/'
-    path=$(url_after_host "$1")
-    # Collapse repeated slashes: `github.com//owner/repo/...` otherwise yields an
-    # empty first field and a legitimate same-repo reference is refused.
-    while [[ "$path" == *//* ]]; do
-        path="${path//\/\//\/}"
-    done
-    path="${path#/}"
-    read -r -a parts <<< "$path"
-    # Test the elements with :- defaults rather than ${#parts[@]}: on bash 3.2
-    # (macOS) `read -a` can leave the array unset when the input is empty, and
-    # ${#parts[@]} is then an unbound-variable error under `set -u`.
-    if [[ -z "${parts[0]:-}" || -z "${parts[1]:-}" ]]; then
-        return 1
-    fi
-    printf '%s/%s' "${parts[0]}" "${parts[1]}"
-}
+# equals_ignoring_case, ado_org_name, ado_org_url, origin_repo_name,
+# url_after_host and url_owner_repo now live in lib-remote.sh, sourced above.
 
 # A canonical identity for "which repository/organization does this number
 # belong to", comparable across dialects and casing.
