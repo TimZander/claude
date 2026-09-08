@@ -15,14 +15,6 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-# Windows consoles default to a legacy codepage; the em dashes and box rules
-# below raise UnicodeEncodeError when stdout is redirected or captured.
-for _s in (sys.stdout, sys.stderr):
-    try:
-        _s.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-
 SUPPORTED_SCHEMA = 4
 
 # ---------------------------------------------------------------- pricing
@@ -51,6 +43,21 @@ FALLBACK_RATE = (10.00, 50.00)
 CACHE_READ_MULT = 0.10
 CACHE_WRITE_5M_MULT = 1.25
 CACHE_WRITE_1H_MULT = 2.00
+
+
+def init_streams():
+    """Make stdout/stderr UTF-8 and line-buffered. Called from main() only.
+
+    Kept byte-identical to collect.py's copy on purpose: five parameterless
+    lines, and importing a sibling would turn a partial plugin install from
+    degraded into ImportError. See collect.py's copy for the full rationale.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace",
+                               line_buffering=True)
+        except Exception:
+            pass
 
 
 def rate_for(family, speed):
@@ -169,6 +176,7 @@ def load(paths):
 
 
 def main():
+    init_streams()
     paths = []
     for a in sys.argv[1:]:
         hits = glob.glob(a)
