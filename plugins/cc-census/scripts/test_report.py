@@ -239,6 +239,21 @@ def main():
         check("limit-shaped unmatched error raises the canary",
               "may have changed" in p.stdout, p.stdout[-400:])
 
+        print("\n-- console output " + "-" * 59)
+        # report.py carries the same init_streams() and emits an em dash on
+        # both streams; without coverage the two copies drift.
+        env = dict(os.environ)
+        for var in ("PYTHONUNBUFFERED", "PYTHONUTF8", "PYTHONIOENCODING"):
+            env.pop(var, None)
+        pm = subprocess.run([sys.executable, REPORT, good, old],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            encoding="utf-8", errors="replace", env=env)
+        check("em dash on stdout survives", "—" in pm.stdout, pm.stdout[:160])
+        check("no decode replacement", "�" not in pm.stdout)
+        check("the schema-refusal note (stderr) precedes the report body it "
+              "explains", 0 <= pm.stdout.find("SKIPPED") < pm.stdout.find("CC-CENSUS"),
+              f"skipped@{pm.stdout.find('SKIPPED')} header@{pm.stdout.find('CC-CENSUS')}")
+
     print()
     if FAILURES:
         sys.exit(f"{len(FAILURES)} check(s) failed: {FAILURES}")

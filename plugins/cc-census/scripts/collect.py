@@ -29,16 +29,6 @@ from bisect import bisect_right
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-# Windows consoles default to a legacy codepage, so the middot and em dashes in
-# Claude's own limit messages render as replacement characters. The payload is
-# unaffected (json.dumps is ensure_ascii), but a privacy tool that looks broken
-# on first run is a bad way to ask someone for their data.
-for _s in (sys.stdout, sys.stderr):
-    try:
-        _s.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-
 SCHEMA = 4
 USER_RE = re.compile(r"^[A-Za-z0-9._-]{1,40}$")
 
@@ -177,6 +167,33 @@ def parse_reset(text, at, kind):
 
 
 # ---------------------------------------------------------------- helpers
+def init_streams():
+    """Make stdout/stderr UTF-8 and line-buffered. Called from main() only.
+
+    *Encoding.* A real Windows console has been UTF-8 since PEP 528 and was
+    never the problem; **redirected or captured** stdout falls back to the ANSI
+    codepage, which is how the plugin runs this script. Claude's own error text
+    is echoed verbatim in the summary, so an unencodable character there would
+    otherwise raise mid-report. `backslashreplace` rather than `replace`
+    because that text is what the operator reviews for privacy — an escape
+    sequence still shows what the character was; U+FFFD does not.
+
+    *Line buffering.* stdout block-buffers when piped while stderr does not, so
+    every stderr write in this file would otherwise land ABOVE the stdout it
+    refers to. Fixing it here covers all of them; a per-call-site flush covers
+    only the sites someone remembered, and would leave the next one broken.
+
+    Not done at import time: this mutates process-global state, and a module
+    that repoints its importer's streams is a rude library.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace",
+                               line_buffering=True)
+        except Exception:
+            pass          # None under pythonw, StringIO under capture, closed
+
+
 def fam(model):
     m = (model or "").lower()
     for k in ("opus", "sonnet", "haiku", "fable", "mythos"):
@@ -410,6 +427,7 @@ def summarise(out, user):
 
 
 def main():
+    init_streams()
     ap = argparse.ArgumentParser(description="Collect local Claude Code usage-limit history.")
     ap.add_argument("--user", required=True, help="short label, e.g. a first name")
     ap.add_argument("-o", "--out", help="output JSON path")
@@ -428,7 +446,10 @@ def main():
 
     out = collect(args.root)
     out["user"] = args.user
-    blob = json.dumps(out, indent=2)
+    # ensure_ascii is explicit, not incidental: --full prints this blob through
+    # stdout, and a later "make the JSON readable" edit must not silently make
+    # that output encoding-dependent.
+    blob = json.dumps(out, indent=2, ensure_ascii=True)
 
     print(summarise(out, args.user))
     if args.full:
@@ -436,10 +457,6 @@ def main():
         print(blob)
 
     if not args.yes:
-        # Flush stdout first: the two streams buffer independently, so without
-        # this the note lands ABOVE the summary it refers to whenever both are
-        # captured together — which is exactly how the plugin command runs it.
-        sys.stdout.flush()
         print(f"\nNothing written. Review the above, then re-run with --yes to write "
               f"({len(blob)} bytes).", file=sys.stderr)
         return

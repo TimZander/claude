@@ -21,6 +21,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 COLLECT = os.path.join(HERE, "collect.py")
 FAILURES = []
 
+# This suite prints child output (including non-ASCII) in failure details, so
+# without this it can die with UnicodeEncodeError while reporting a FAIL —
+# crashing hardest exactly when the encoding fix is broken.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except Exception:
+        pass
+
 
 def check(label, cond, detail=""):
     print(f"  {'PASS' if cond else 'FAIL'}  {label}" + ("" if cond else f"  {detail}"))
@@ -51,12 +60,39 @@ def turn(ts, text=None, model="claude-opus-5", error=False, sidechain=False,
     return json.dumps(rec)
 
 
+def clean_env():
+    """Strip the vars that would make the console guards silently pass.
+
+    PYTHONUTF8 / PYTHONIOENCODING already give the child UTF-8 stdout, and
+    PYTHONUNBUFFERED already orders the streams — so with any of them set, both
+    guards below pass whether or not the fix is present. That is worse than no
+    guard: it goes green on every UTF-8-locale machine (i.e. every Linux and
+    macOS teammate) and in CI images that set PYTHONUNBUFFERED by default.
+    """
+    env = dict(os.environ)
+    for var in ("PYTHONUNBUFFERED", "PYTHONUTF8", "PYTHONIOENCODING", "PYTHONLEGACYWINDOWSSTDIO"):
+        env.pop(var, None)
+    return env
+
+
 def run_collect(root, *extra):
     out = os.path.join(root, "out.json")
+    # encoding= not text=: the child always emits UTF-8 now, so decoding with
+    # the parent's locale would raise on any non-ASCII byte.
     p = subprocess.run([sys.executable, COLLECT, "--user", "fixture",
                         "--root", root, "-o", out, *extra],
-                       capture_output=True, text=True)
+                       capture_output=True, encoding="utf-8",
+                       errors="replace", env=clean_env())
     return p, out
+
+
+def run_merged(root, *extra, cwd=None):
+    """Run with stderr folded into stdout, the way a captured run sees it."""
+    return subprocess.run([sys.executable, COLLECT, "--user", "fixture",
+                           "--root", root, *extra],
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          encoding="utf-8", errors="replace",
+                          env=clean_env(), cwd=cwd)
 
 
 def main():
@@ -148,21 +184,37 @@ def main():
         check("--full does dump the payload", '"limit_events"' in p2.stdout)
 
         print("\n-- console output " + "-" * 59)
-        # Read the child's stdout as UTF-8 rather than the locale codepage:
-        # this asserts what the process WROTE, not what this console can show.
-        pu = subprocess.run([sys.executable, COLLECT, "--user", "fixture", "--root", root],
-                            capture_output=True, encoding="utf-8", errors="replace")
+        # Escapes, not literals: U+FFFD in particular survives a lossy
+        # round-trip of this source file as itself, so a corrupted copy would
+        # still "pass" a literal check while testing nothing.
+        MIDDOT, EMDASH, FFFD = "·", "—", "�"
+        pm = run_merged(root)
+        check("collector exits 0", pm.returncode == 0, pm.stdout[-200:])
         check("non-ASCII in Claude's own messages survives stdout",
-              "·" in pu.stdout and "�" not in pu.stdout,
-              f"...{pu.stdout[-120:]!r}")
-        # Merge the streams the way the plugin command captures them.
-        pm = subprocess.run([sys.executable, COLLECT, "--user", "fixture", "--root", root],
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                            encoding="utf-8", errors="replace")
-        summary_at = pm.stdout.find("cc-census summary")
-        note_at = pm.stdout.find("Nothing written")
+              MIDDOT in pm.stdout, f"...{pm.stdout[-120:]!r}")
+        # '?' is the signature of CHILD-side replacement (the child encodes
+        # with errors=backslashreplace/replace, so it can never emit U+FFFD);
+        # U+FFFD is the signature of PARENT-side decode failure. Assert both.
+        check("no child-side character replacement", "?" not in pm.stdout)
+        check("no parent-side decode replacement", FFFD not in pm.stdout)
+        summary_at, note_at = pm.stdout.find("cc-census summary"), pm.stdout.find("Nothing written")
         check("the 'Nothing written' note follows the summary it refers to",
               0 <= summary_at < note_at, f"summary@{summary_at} note@{note_at}")
+        check("the middot fixture reached stdout via unmatched_api_errors, "
+              "not limit_events", "Login expired" in pm.stdout)
+
+        # The SAME ordering defect lives on the overwrite-refusal path, which
+        # is reached only after the user consents with --yes.
+        wd = os.path.join(root, "cwd")
+        os.makedirs(wd, exist_ok=True)
+        run_merged(root, "--yes", cwd=wd)                 # first write succeeds
+        po = run_merged(root, "--yes", cwd=wd)            # second must refuse
+        check("overwrite refusal exits non-zero", po.returncode != 0)
+        s2, r2 = po.stdout.find("cc-census summary"), po.stdout.find("Refusing to overwrite")
+        check("the overwrite refusal follows the summary too",
+              0 <= s2 < r2, f"summary@{s2} refusal@{r2}")
+        check("stderr is reconfigured too (em dash in the refusal survives)",
+              EMDASH in po.stdout, f"...{po.stdout[-160:]!r}")
 
         p, out = run_collect(root, "--yes")
         check("writes the file with --yes", os.path.exists(out), p.stderr[-300:])
