@@ -1,0 +1,11 @@
+# Collector output: a developer's usage profile. Never commit it, and never
+# commit a teammate's.
+#
+# NOTE: this file only covers the plugin directory. collect.py writes to the
+# CURRENT working directory, which for a plugin consumer is their own repo —
+# where this file has no effect. The /cc-census command warns about that, and
+# the repo-root .gitignore carries the same rule for this repo.
+cc-census-*.json
+
+__pycache__/
+*.pyc

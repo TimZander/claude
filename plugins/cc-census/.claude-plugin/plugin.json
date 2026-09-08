@@ -1,0 +1,7 @@
+{
+  "name": "cc-census",
+  "description": "Measure Claude Code usage-limit blocking across a team from local transcripts: per-developer outage ledger (blocked, reset, resumed, hours lost) plus an API-equivalent cost model. Reads only local files; shares no prompts, paths, or repo names",
+  "author": {
+    "name": "Tim Zander"
+  }
+}

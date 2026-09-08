@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .claude/settings.local.json
 .claude-scratch/
+
+# cc-census collector output — a developer usage profile. Never commit.
+cc-census-*.json
