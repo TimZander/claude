@@ -29,6 +29,16 @@ from bisect import bisect_right
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
+# Windows consoles default to a legacy codepage, so the middot and em dashes in
+# Claude's own limit messages render as replacement characters. The payload is
+# unaffected (json.dumps is ensure_ascii), but a privacy tool that looks broken
+# on first run is a bad way to ask someone for their data.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 SCHEMA = 4
 USER_RE = re.compile(r"^[A-Za-z0-9._-]{1,40}$")
 
@@ -426,6 +436,10 @@ def main():
         print(blob)
 
     if not args.yes:
+        # Flush stdout first: the two streams buffer independently, so without
+        # this the note lands ABOVE the summary it refers to whenever both are
+        # captured together — which is exactly how the plugin command runs it.
+        sys.stdout.flush()
         print(f"\nNothing written. Review the above, then re-run with --yes to write "
               f"({len(blob)} bytes).", file=sys.stderr)
         return

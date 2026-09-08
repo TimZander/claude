@@ -120,8 +120,11 @@ def main():
         lines.append(turn(t + timedelta(minutes=30)))
         t += timedelta(days=1)
 
-        # Non-limit error must be routed to unmatched, not scored as an outage.
+        # Non-limit errors must be routed to unmatched, not scored as outages.
+        # The second carries a middot: unmatched keys are echoed to stdout, so
+        # this is what proves the console is not mangling Claude's own text.
         lines.append(turn(t, "API Error: 529 Overloaded", error=True))
+        lines.append(turn(t, "Login expired · Please run /login", error=True))
 
         # DUPLICATED usage rows: one response split across three JSONL rows,
         # each repeating the same usage object. Must be counted ONCE.
@@ -143,6 +146,23 @@ def main():
               and '"limit_events"' not in p.stdout)
         p2, _ = run_collect(root, "--full")
         check("--full does dump the payload", '"limit_events"' in p2.stdout)
+
+        print("\n-- console output " + "-" * 59)
+        # Read the child's stdout as UTF-8 rather than the locale codepage:
+        # this asserts what the process WROTE, not what this console can show.
+        pu = subprocess.run([sys.executable, COLLECT, "--user", "fixture", "--root", root],
+                            capture_output=True, encoding="utf-8", errors="replace")
+        check("non-ASCII in Claude's own messages survives stdout",
+              "·" in pu.stdout and "�" not in pu.stdout,
+              f"...{pu.stdout[-120:]!r}")
+        # Merge the streams the way the plugin command captures them.
+        pm = subprocess.run([sys.executable, COLLECT, "--user", "fixture", "--root", root],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            encoding="utf-8", errors="replace")
+        summary_at = pm.stdout.find("cc-census summary")
+        note_at = pm.stdout.find("Nothing written")
+        check("the 'Nothing written' note follows the summary it refers to",
+              0 <= summary_at < note_at, f"summary@{summary_at} note@{note_at}")
 
         p, out = run_collect(root, "--yes")
         check("writes the file with --yes", os.path.exists(out), p.stderr[-300:])
