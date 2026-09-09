@@ -100,43 +100,46 @@ def working_band(rec):
     return lo, hi
 
 
-def overlap_hours(start, end, lo, hi, daily=None, typical_day=None):
+def overlap_hours(start, end, lo, hi, daily=None, tz=None):
     """Working hours lost to an outage spanning [start, end).
 
-    Two corrections keep this from billing time nobody would have worked, both
-    of which matter most for the common Friday-afternoon block:
+    `tz` is the developer's UTC offset and is REQUIRED for a correct answer:
+    the band (`lo`/`hi`) and the `daily` keys are both in that developer's
+    local time, while the ledger timestamps are UTC. Intersecting a local band
+    against UTC instants silently returns 0 whenever the two do not happen to
+    overlap — which is how a colleague with a 09:00-17:00 band and blocks at
+    17:47 UTC reported five real outages as zero hours lost.
 
-    * **Days with no recorded activity are skipped.** A block on Friday that
-      resumes Monday must not charge Saturday and Sunday. Absent a `daily` map
-      every day counts, which is the old, over-charging behaviour.
-    * **A day is capped at the hours that developer had left in a typical
-      day.** Someone blocked after five hours of a seven-hour day lost about
-      two hours, not the nine remaining in a wide activity band.
+    A day is charged for the part of the outage that falls inside that
+    developer's working band, and **days with no recorded activity are
+    skipped** — a Friday block that resumes Monday must not bill Saturday and
+    Sunday. Absent a `daily` map every day counts, which over-charges.
 
-    Both are modelling choices, and both are deliberately conservative: this
-    number is defended to a finance audience, so it should understate rather
-    than flatter.
+    An earlier version also capped each day at the hours left in a *typical*
+    day, reasoning that someone blocked late in a long day had lost little.
+    That was wrong, and real data showed it: `active_hours` covers the whole
+    day including the hours worked AFTER the block cleared, so working through
+    and past an outage made the model score it as costless. On the first
+    colleague's file it zeroed five genuine mid-morning outages. Working a long
+    day around a block does not make the block free, and the error ran against
+    the most-affected people — the same direction the README warns about.
     """
     if not start or not end or end <= start:
         return 0.0
+    if tz is not None:
+        start, end = start.astimezone(tz), end.astimezone(tz)
     # Guard the day loop: a mis-parsed reset must not iterate for centuries.
     end = min(end, start + timedelta(days=8))
     total = 0.0
     day = start.replace(hour=0, minute=0, second=0, microsecond=0)
     while day < end:
-        key = day.date().isoformat()
-        info = (daily or {}).get(key)
-        if daily is not None and not info:
+        if daily is not None and not daily.get(day.date().isoformat()):
             day += timedelta(days=1)          # no activity: not a working day
             continue
         w0, w1 = day + timedelta(hours=lo), day + timedelta(hours=hi)
         a, b = max(start, w0), min(end, w1)
         if b > a:
-            hours = (b - a).total_seconds() / 3600
-            if typical_day and isinstance(info, dict):
-                worked = info.get("active_hours") or 0
-                hours = min(hours, max(0.0, typical_day - worked))
-            total += hours
+            total += (b - a).total_seconds() / 3600
         day += timedelta(days=1)
     return total
 
@@ -257,14 +260,15 @@ def main():
 
         dailymap = r.get("daily") or {}
         active_days = len(dailymap)
-        typical_day = ((r.get("active_hour_count") or 0) / active_days) if active_days else None
+        # The band and the daily keys are local; the ledger is UTC. Convert.
+        localtz = timezone(timedelta(minutes=r.get("tz_offset_minutes") or 0))
 
-        user_blocked = 0.0    # modelled: skips idle days, caps at a typical day
-        window_span = 0.0     # upper bound: every band hour in the window
+        user_blocked = 0.0    # band hours in the window, idle days skipped
+        window_span = 0.0     # upper bound: idle days counted too
         for kind, spans in spans_by_kind.items():
             for s, e in merge_windows(spans):
-                user_blocked += overlap_hours(s, e, lo, hi, dailymap, typical_day)
-                window_span += overlap_hours(s, e, lo, hi)
+                user_blocked += overlap_hours(s, e, lo, hi, dailymap, localtz)
+                window_span += overlap_hours(s, e, lo, hi, None, localtz)
 
         unresolved = sum(1 for row in rows if row[4] is None)
         assumed_tz = sum(1 for row in rows if row[5])
@@ -282,11 +286,10 @@ def main():
                     lag = (resumed - reset).total_seconds() / 60
                     note = "  <- resumed BEFORE reset: reset time is suspect" if lag < 0 else ""
                     print(f"  {'':17} {'':14} resumption lag {lag:+.0f} min{note}")
-            print(f"\n  wasted working hours (modelled)         : {user_blocked:.1f} h")
+            print(f"\n  wasted working hours (working days only): {user_blocked:.1f} h")
             if window_span - user_blocked > 0.05:
-                print(f"  ...raw band hours in the same windows   : {window_span:.1f} h "
-                      f"(includes days with no recorded activity and hours beyond a "
-                      f"typical {typical_day:.1f} h day)")
+                print(f"  ...counting idle days too               : {window_span:.1f} h "
+                      f"(weekends/PTO inside a multi-day outage)")
             if unresolved:
                 print(f"  {unresolved} blocked event(s) had no usable reset or resumption "
                       f"and contribute 0 h — the total is a floor.")
