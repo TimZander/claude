@@ -181,6 +181,20 @@ case "${STUB_MODE:-ok}" in
 esac
 # Work-item lookup's description query — see the note on the gh stub above.
 # CRLF here too: the body path must strip \r exactly like the branch path does.
+# The PR's work-item LINK relation. Default is NO links, so every pre-existing
+# route-precedence test is unaffected: a stub that linked something by default
+# would make pr-link win everywhere and quietly retire the routes below it.
+case "$*" in
+    *"work-item list"*)
+        if [ -n "${STUB_WI_LINKS_FAIL:-}" ]; then
+            echo "ERROR: TF400813: The user is not authorized to access this resource." >&2
+            exit 1
+        fi
+        [ -n "${STUB_WI_LINKS:-}" ] || exit 0
+        printf '%b
+
+' "$STUB_WI_LINKS"; exit 0 ;;
+esac
 case "$*" in
     *"--query description"*)
         if [ -n "${STUB_BODY_FAIL:-}" ]; then
@@ -607,6 +621,65 @@ assert_not_contains "WORKITEM_ID=555" "$out" "cross-org ADO work-item URL is ref
 out=$(STUB_PR_BODY="Rework the thing.\n\nFixes #318" run_in "$GH_REPO" --args "pr 170")
 assert_line "WORKITEM_ID=318" "$out" "pr-body: 'Fixes #318' on its own line is discovered"
 assert_line "WORKITEM_SOURCE=pr-body" "$out" "pr-body: route reported as pr-body"
+
+# ── Route 2: the PR's own work-item link (ADO) ───────────────────────
+# The link ADO's UI shows and the REST API returns as a relation. It needs no
+# convention from the author — no AB# in the body, no numeric branch prefix —
+# which is exactly why it was worth adding: a PR linked the way ADO itself
+# links one resolved to NO story at all before this route existed.
+
+out=$(STUB_WI_LINKS="8421" run_in "$ADO_REPO" --args "pr 4506")
+assert_line "WORKITEM_KIND=workitem" "$out" "pr-link: a linked work item is a workitem"
+assert_line "WORKITEM_ID=8421" "$out" "pr-link: the linked id is discovered with no AB# and no branch prefix"
+assert_line "WORKITEM_SOURCE=pr-link" "$out" "pr-link: route reported as pr-link"
+assert_no_line "WORKITEM_OTHER_IDS=" "$out" "pr-link: a single link reports no alternatives"
+
+# Precedence. The link is structural; the two text routes are conventions, so
+# the link outranks both. The branch here carries 7493- and the body carries an
+# AB#, so a regression to either route is visible rather than silent.
+out=$(STUB_WI_LINKS="8421" STUB_PR_BODY="Rework the thing. AB#999" run_in "$ADO_REPO" --args "pr 4506")
+assert_line "WORKITEM_ID=8421" "$out" "pr-link: outranks AB#<id> in the PR body"
+assert_line "WORKITEM_SOURCE=pr-link" "$out" "pr-link: outranks pr-body, and says so"
+
+# …but an explicit argument still wins. The user naming a story is the one
+# signal that outranks a structural link.
+out=$(STUB_WI_LINKS="8421" run_in "$ADO_REPO" --args "pr 4506 #777")
+assert_line "WORKITEM_ID=777" "$out" "pr-link: an explicit argument still outranks the link"
+assert_line "WORKITEM_SOURCE=argument" "$out" "pr-link: argument route still reported as argument"
+
+# MULTIPLE LINKS. ADO permits many; grading against an arbitrary one would be a
+# wrong story wearing the confidence of a resolved one. Lowest id wins so the
+# pick is deterministic across re-runs, and the rest are reported so the caller
+# can put the ambiguity in front of the user — the OTHER_REFS contract.
+out=$(STUB_WI_LINKS="8421\\n7100\\n9002" run_in "$ADO_REPO" --args "pr 4506")
+assert_line "WORKITEM_ID=7100" "$out" "pr-link: the lowest linked id is selected, deterministically"
+assert_line "WORKITEM_OTHER_IDS=8421,9002" "$out" "pr-link: the unselected links are reported, in order"
+
+# A FAILED LOOKUP IS NOT AN EMPTY ONE. An auth or network failure must not let
+# the branch-prefix guess below masquerade as proof the strongest route was
+# checked and came back empty.
+out=$(STUB_WI_LINKS_FAIL=1 run_in "$ADO_REPO" --args "pr 4506")
+assert_line "WORKITEM_LOOKUP=pr-links-unreadable" "$out" "pr-link: a failed link lookup is reported, not swallowed"
+assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "pr-link: a failed lookup still falls through to a weaker route"
+assert_line "WORKITEM_ID=7493" "$out" "pr-link: the fallback route still resolves"
+
+# Non-numeric output cannot become a work item. The stub's other modes return
+# branch refs from this same call shape, and `refs/heads/...` must not parse as
+# an id.
+out=$(STUB_WI_LINKS="refs/heads/main" run_in "$ADO_REPO" --args "pr 4506")
+assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "pr-link: non-numeric output is ignored, not parsed as an id"
+
+# GitHub has no such relation — its linkage lives in the description, which the
+# pr-body route already reads. The route must not fire there at all.
+out=$(STUB_WI_LINKS="8421" STUB_PR_BODY="Fixes #318" run_in "$GH_REPO" --args "pr 170")
+assert_line "WORKITEM_SOURCE=pr-body" "$out" "pr-link: GitHub is unaffected — pr-body still wins there"
+assert_line "WORKITEM_ID=318" "$out" "pr-link: GitHub resolves its own way"
+
+# With no links at all, the routes below must behave exactly as before. This is
+# the assertion that catches a stub default flipping and silently retiring them.
+out=$(run_in "$ADO_REPO" --args "pr 4506")
+assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "pr-link: absent links leave the existing precedence untouched"
+assert_line "WORKITEM_LOOKUP=ok" "$out" "pr-link: absent links are a clean result, not a failure"
 
 out=$(STUB_PR_BODY="closed #77 as part of this" run_in "$GH_REPO" --args "pr 170")
 assert_line "WORKITEM_ID=77" "$out" "pr-body: lowercase past-tense 'closed' matches"

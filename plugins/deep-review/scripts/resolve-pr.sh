@@ -34,13 +34,23 @@ set -euo pipefail
 #                               of the PR above, so one invocation reports both.
 #                               See WORK ITEM RESOLUTION below.
 #   WORKITEM_ID=<N>             The work item / issue number (omitted when none)
-#   WORKITEM_SOURCE=argument|pr-body|branch-prefix
+#   WORKITEM_SOURCE=argument|pr-link|pr-body|branch-prefix
 #                               HOW it was found (omitted when none). Confidence
 #                               falls off down that list — the caller should name
 #                               the route when it reports the item, so the user
-#                               can reject a wrong guess.
-#   WORKITEM_LOOKUP=ok|pr-body-unreadable
+#                               can reject a wrong guess. `pr-link` is ADO's own
+#                               PR/work-item relation: structural, not a string
+#                               match, and it needs no convention from the author.
+#   WORKITEM_OTHER_IDS=<N>[,<N>...]
+#                               Work items the PR ALSO links but that were not
+#                               selected (pr-link route only; omitted when the
+#                               choice was forced). The lowest id wins so the
+#                               pick is deterministic; the caller must name the
+#                               others rather than let one be chosen silently.
+#   WORKITEM_LOOKUP=ok|pr-links-unreadable|pr-body-unreadable
 #                               Whether every route that was TRIED completed.
+#                               `pr-links-unreadable` means the PR's work-item
+#                               relations could not be listed;
 #                               `pr-body-unreadable` means the PR description
 #                               could not be fetched, so a link that may exist
 #                               there was never seen — the caller must not
@@ -95,14 +105,19 @@ set -euo pipefail
 # asked for"), so they are now resolved independently and both are reported.
 #
 # The WORKITEM_* keys are context only: they never select a branch, and a
-# failure to find one is never an error. All three routes are gated on a known
-# host — a story that cannot be fetched is not a story — so WORKITEM_KIND is
-# always `none` when HOST=unknown, even though KIND may still name a local
-# reference there. Routes, first hit wins:
+# failure to find one is never an error. Every route is gated on a known host —
+# a story that cannot be fetched is not a story — so WORKITEM_KIND is always
+# `none` when HOST=unknown, even though KIND may still name a local reference
+# there. Routes, first hit wins:
 #   1. argument       — an explicit issue / work-item reference in the arguments
-#   2. pr-body        — Closes/Fixes/Resolves #N on GitHub; AB#<id> on ADO, where
+#   2. pr-link        — ADO's own PR/work-item relation, the link its UI shows.
+#                       Structural rather than a string match, so it needs no
+#                       convention from the author: no AB# in the body, no
+#                       numeric branch prefix. GitHub has no equivalent — its
+#                       linkage lives in the description, which route 3 reads.
+#   3. pr-body        — Closes/Fixes/Resolves #N on GitHub; AB#<id> on ADO, where
 #                       a bare `#N` in a description is not a work-item link
-#   3. branch-prefix  — the id in our branches/<id>-<slug> naming convention
+#   4. branch-prefix  — the id in our branches/<id>-<slug> naming convention
 #
 # A WRONG story is worse than no story: it grades the diff against someone
 # else's acceptance criteria while looking like a successful resolution. So the
@@ -718,6 +733,7 @@ WORKITEM_KIND="none"
 WORKITEM_ID=""
 WORKITEM_SOURCE=""
 WORKITEM_LOOKUP="ok"
+WORKITEM_OTHER_IDS=""
 
 # The PR arm above derives ORG only when a PR was resolved, but a work item
 # needs it in every case — including a bare `/deep-review` on an ADO branch.
@@ -800,7 +816,66 @@ if [[ "$WORKITEM_KIND" == "none" && "$HOST" != "unknown" ]]; then
     done
 fi
 
-# Route 2 — the PR's own description. Matched with grep rather than a bash
+# Route 2 — the pull request's own WORK ITEM LINK (Azure DevOps only).
+#
+# This is the link ADO itself treats as authoritative: it is what the PR's
+# "Work items" tab shows, what `AB#<id>` in a commit or description ultimately
+# CREATES, and what the REST API returns as a relation. It survives a branch
+# rename and a rewritten description, and it is the one route that needs no
+# convention from the author at all — which is why it sits ahead of both
+# text-scraping routes below rather than after them.
+#
+# It was missing entirely until now, so a PR linked the way the ADO UI links
+# one — through the work-item link API, with no `AB#` in the body and no
+# numeric branch prefix — resolved to no story whatsoever. The linkage was
+# right there in the PR and this script could not see it.
+#
+# `az repos pr work-item list` returns the linked items with their FIELDS
+# already expanded, so this single call does the resolving that routes 3 and 4
+# do and hands the caller everything it needs to grade. The caller still
+# fetches the body itself (see WORK ITEM RESOLUTION in the header) — this route
+# reports the id like every other one, and stays a resolver rather than
+# becoming a second, divergent fetcher.
+#
+# ADO only. GitHub has no equivalent relation: its PR/issue linkage lives in
+# the description text, which route 3 already reads.
+if [[ "$WORKITEM_KIND" == "none" && "$KIND" == "pr" && "$HOST" == "azdo" && -n "${ORG:-}" ]]; then
+    WI_LINK_OK=true
+    # `--query` rather than parsing the whole payload: the fields block carries
+    # HTML descriptions with embedded newlines, and a line-wise read of that is
+    # the same hazard the PR-body lookup below documents. Ids are integers, so
+    # one per line is safe.
+    WI_LINK_IDS=$(az repos pr work-item list --id "$REF_ID" --org "$ORG" \
+        --query "[].id" -o tsv 2>"$ERR_FILE") || WI_LINK_OK=false
+    WI_LINK_IDS=${WI_LINK_IDS//$'\r'/}
+
+    if [[ "$WI_LINK_OK" != true ]]; then
+        # Same reasoning as pr-body-unreadable: an auth or network failure is
+        # NOT "the PR had no linked work item". Reporting them alike would let
+        # a branch-prefix guess masquerade as proof the strongest route came
+        # back empty.
+        WORKITEM_LOOKUP="pr-links-unreadable"
+    else
+        # SORTED, so the choice is deterministic rather than dependent on ADO's
+        # return order — a review that grades against a different story on a
+        # re-run for no visible reason is worse than one that grades against a
+        # predictable wrong one.
+        WI_LINK_SORTED=$(printf '%s\n' "$WI_LINK_IDS" | grep -E '^[0-9]+$' | sort -n || printf '')
+        if [[ -n "$WI_LINK_SORTED" ]]; then
+            WORKITEM_ID=$(printf '%s\n' "$WI_LINK_SORTED" | head -1)
+            WORKITEM_KIND="workitem"
+            WORKITEM_SOURCE="pr-link"
+            # A PR may link several. Picking one silently would grade the whole
+            # review against an arbitrary story, so the others are REPORTED —
+            # the same contract OTHER_REFS uses for multiple PR references, and
+            # for the same reason: a silent wrong pick is a question the user
+            # never gets asked.
+            WORKITEM_OTHER_IDS=$(printf '%s\n' "$WI_LINK_SORTED" | tail -n +2 | paste -sd, - || printf '')
+        fi
+    fi
+fi
+
+# Route 3 — the PR's own description. Matched with grep rather than a bash
 # regex because the keywords are case-insensitive and `${var,,}` is bash 4+;
 # macOS ships bash 3.2.
 #
@@ -878,7 +953,7 @@ if [[ "$WORKITEM_KIND" == "none" && "$KIND" == "pr" ]]; then
     fi
 fi
 
-# Route 3 — our own branch convention, `branches/<id>-<slug>`. The id is right
+# Route 4 — our own branch convention, `branches/<id>-<slug>`. The id is right
 # there in the name; nothing has to be fetched to read it.
 #
 # Anchored on the LITERAL `branches/` segment, not on any numeric path prefix.
@@ -925,6 +1000,12 @@ echo "WORKITEM_KIND=$WORKITEM_KIND"
 if [[ "$WORKITEM_KIND" != "none" ]]; then
     echo "WORKITEM_ID=$WORKITEM_ID"
     echo "WORKITEM_SOURCE=$WORKITEM_SOURCE"
+    # Only ever set by the pr-link route, and only when the PR links more than
+    # one. Omitted otherwise, so its presence alone means "the choice was not
+    # forced" and the caller must say so.
+    if [[ -n "$WORKITEM_OTHER_IDS" ]]; then
+        echo "WORKITEM_OTHER_IDS=$WORKITEM_OTHER_IDS"
+    fi
 fi
 # A refusal and an unreadable body are ORTHOGONAL facts, so they get separate
 # keys. Folding the refusal into WORKITEM_LOOKUP made one field carry two
