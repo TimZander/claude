@@ -120,7 +120,10 @@ away. A **negative** lag is printed with a warning — it is proof the reset was
 mis-parsed, not a real measurement.
 
 **Timestamps in the report are UTC**, since the point is pooling developers in
-different zones. Each developer's working band stays in their own local hours.
+different zones. Each developer's working band stays in their own local hours,
+and the outage window is converted into that local time before the two are
+intersected — mixing the two silently returns zero hours whenever a
+developer's band and their UTC block times do not happen to overlap.
 
 ### Two known sources of error, surfaced rather than hidden
 
@@ -177,11 +180,11 @@ agentic sessions.
   month, that is a year of data. Trending the underlying pressure requires
   sampling utilization continuously — see the note above on why that data is
   not in transcripts.
-- **Blocked hours are modelled, not measured.** Days with no recorded activity
-  are skipped and each day is capped at the developer's typical working length,
-  so a Friday-afternoon block that resumes Monday charges a few hours rather
-  than the whole weekend. The report prints the un-modelled band hours
-  alongside, so you can see how much the model is discounting.
+- **Blocked hours are modelled, not measured.** A day is charged for the part
+  of the outage falling inside that developer's working band, and days with no
+  recorded activity are skipped — so a Friday-afternoon block that resumes
+  Monday charges the Friday afternoon, not the whole weekend. The report prints
+  the idle-days-included figure alongside so you can see the difference.
 - **Consumption under a binding constraint measures the constraint, not
   demand.** Heavily-limited developers adapt — smaller models, shorter
   sessions — so token totals can *fall* while the problem worsens. Watch the

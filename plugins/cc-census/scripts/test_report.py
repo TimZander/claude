@@ -96,24 +96,52 @@ def main():
     naive = rp.overlap_hours(fri, mon, 9, 17)
     check("without the day filter this charged the whole weekend (20.0 h)",
           near(naive, 20.0), f"got {naive}")
-    skip_only = rp.overlap_hours(fri, mon, 9, 17, workdays, None)
-    check("skipping idle Sat+Sun alone drops it to 4.0 h",
+    skip_only = rp.overlap_hours(fri, mon, 9, 17, workdays)
+    check("skipping idle Sat+Sun drops it to 4.0 h",
           near(skip_only, 4.0), f"got {skip_only}")
-    modelled = rp.overlap_hours(fri, mon, 9, 17, workdays, 7.0)
-    check("with a 7 h typical day the Friday charge is 2.0 h",
-          near(modelled, 2.0), f"got {modelled}")
-    wide = rp.overlap_hours(fri, mon, 8, 22, workdays, 7.0)
-    check("a wide 08-22 band no longer inflates it (2.0 h, was 38.0 h)",
-          near(wide, 2.0), f"got {wide}")
-    check("a developer who worked a FULL day before the block is charged 0",
-          near(rp.overlap_hours(fri, mon, 9, 17,
-                                {"2026-05-15": {"turns": 9, "active_hours": 9},
-                                 "2026-05-18": {"turns": 9, "active_hours": 7}}, 7.0), 0.0))
+    # Regression: an earlier model capped each day at the hours left in a
+    # TYPICAL day, which zeroed real outages for anyone whose outage landed on
+    # a busier-than-average day. Found on the first real colleague file.
+    busy = {"2026-05-15": {"turns": 400, "active_hours": 9},
+            "2026-05-18": {"turns": 400, "active_hours": 9}}
+    check("a busier-than-typical day is still charged, not zeroed",
+          near(rp.overlap_hours(fri, mon, 9, 17, busy), 4.0),
+          f"got {rp.overlap_hours(fri, mon, 9, 17, busy)}")
+    check("a mid-morning block inside the band is charged in full",
+          near(rp.overlap_hours(datetime(2026, 5, 27, 11, 47, tzinfo=UTC),
+                                datetime(2026, 5, 27, 14, 0, tzinfo=UTC), 9, 17,
+                                {"2026-05-27": {"turns": 2790, "active_hours": 7}}),
+               2.2166666), f"got {rp.overlap_hours(datetime(2026,5,27,11,47,tzinfo=UTC), datetime(2026,5,27,14,0,tzinfo=UTC), 9, 17, {'2026-05-27': {'turns':2790,'active_hours':7}})}")
     check("Monday-morning block before a same-day resume still counts",
           near(rp.overlap_hours(datetime(2026, 5, 18, 9, tzinfo=UTC),
                                 datetime(2026, 5, 18, 12, tzinfo=UTC),
-                                9, 17, {"2026-05-18": {"turns": 9, "active_hours": 2}}, 7.0),
+                                9, 17, {"2026-05-18": {"turns": 9, "active_hours": 2}}),
                3.0))
+
+    print("\n-- band is LOCAL, ledger is UTC " + "-" * 45)
+    # Real regression: a UTC-06:00 developer with a 09:00-17:00 local band,
+    # blocked 17:47->20:00 UTC = 11:47->14:00 local. Interpreting the band in
+    # UTC puts the whole outage outside 09-17 and silently returns 0.
+    MDT = timezone(timedelta(minutes=-360))
+    b0 = datetime(2026, 8, 27, 17, 47, tzinfo=UTC)
+    b1 = datetime(2026, 8, 27, 20, 0, tzinfo=UTC)
+    day = {"2026-08-27": {"turns": 2790, "active_hours": 7}}
+    check("without tz the local band misses the UTC window entirely (0.0 h)",
+          near(rp.overlap_hours(b0, b1, 9, 17, day), 0.0),
+          f"got {rp.overlap_hours(b0, b1, 9, 17, day)}")
+    check("with tz it charges the real 2.2 h",
+          near(rp.overlap_hours(b0, b1, 9, 17, day, MDT), 2.2166666),
+          f"got {rp.overlap_hours(b0, b1, 9, 17, day, MDT)}")
+    check("the daily key is looked up in LOCAL date, not UTC date",
+          near(rp.overlap_hours(datetime(2026, 8, 28, 3, 0, tzinfo=UTC),
+                                datetime(2026, 8, 28, 5, 0, tzinfo=UTC),
+                                18, 23, {"2026-08-27": {"turns": 5, "active_hours": 5}}, MDT),
+               2.0), "21:00-23:00 on the 27th local is the 28th in UTC")
+    check("a positive offset works too (UTC+05:30)",
+          near(rp.overlap_hours(datetime(2026, 8, 27, 5, 0, tzinfo=UTC),
+                                datetime(2026, 8, 27, 7, 0, tzinfo=UTC), 10, 17,
+                                {"2026-08-27": {"turns": 5, "active_hours": 5}},
+                                timezone(timedelta(minutes=330))), 2.0))
 
     print("\n-- merge_windows (retried block bills once) " + "-" * 33)
     spans = [(d(10), d(14)), (d(10, 10), d(14)), (d(10, 25), d(14)), (d(11), d(14))]
@@ -142,9 +170,11 @@ def main():
 
     print("\n-- end-to-end: schema gate and crash-safety " + "-" * 33)
     def rec(**over):
+        # tz_offset 0 so UTC == local: these cases exercise the ledger and cost
+        # model, and the offset conversion has dedicated coverage above.
         base = {
             "schema": 4, "user": "alice", "collected_utc": "2026-05-20T10:00:00+00:00",
-            "tz_offset_minutes": -360, "tz_name": "MDT", "transcript_files": 3,
+            "tz_offset_minutes": 0, "tz_name": "UTC", "transcript_files": 3,
             "oldest_utc": "2026-05-12T09:00:00+00:00", "newest_utc": "2026-05-19T09:00:00+00:00",
             "daily": {"2026-05-12": {"turns": 10}}, "sessions_per_day": {"2026-05-12": 1},
             "working_band": [9, 17], "active_hour_count": 10,
