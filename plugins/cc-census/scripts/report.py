@@ -17,6 +17,12 @@ from datetime import datetime, timedelta, timezone
 
 SUPPORTED_SCHEMA = 4
 
+# A successful turn this soon after a block came from a CONCURRENT session that
+# got through, not from the developer regaining access. Real recoveries and
+# concurrent hits are cleanly bimodal in practice — measured 1.5-14.5s for the
+# concurrent kind against 3990-8004s for genuine ones, with nothing between.
+RESUME_MIN_GAP = timedelta(seconds=60)
+
 # ---------------------------------------------------------------- pricing
 # USD per million tokens, Anthropic first-party API rates.
 #
@@ -249,14 +255,17 @@ def main():
             resumed = dt(e.get("resumed_utc"))
             if not b:
                 continue
+            # Discard a "resumption" that is really a concurrent session
+            # squeaking through, or the window collapses to a few seconds.
+            usable = resumed if (resumed and resumed - b >= RESUME_MIN_GAP) else None
             # Prefer whichever comes first: a reset days out is not an outage
             # if the developer demonstrably resumed before it.
-            ends = [x for x in (reset, resumed) if x and x > b]
+            ends = [x for x in (reset, usable) if x and x > b]
             end = min(ends) if ends else None
             if end:
                 spans_by_kind[e.get("kind", "unknown")].append((b, end))
             rows.append((b, e.get("kind", "?"), reset, resumed, end,
-                         e.get("reset_zone_assumed"), e.get("reset_parsed_as")))
+                         e.get("reset_zone_assumed"), e.get("reset_parsed_as"), usable))
 
         dailymap = r.get("daily") or {}
         active_days = len(dailymap)
@@ -277,13 +286,21 @@ def main():
             print(f"\n  blocked events: {len(rows)}  -> {sum(len(merge_windows(v)) for v in spans_by_kind.values())} "
                   f"distinct outage window(s)   (grace {sev['grace']}, approaching {sev['approaching']})")
             print(f"  {'blocked (UTC)':17} {'kind':14} {'reset (UTC)':17} {'resumed (UTC)':17}")
-            for b, kind, reset, resumed, end, assumed, how in rows:
+            for b, kind, reset, resumed, end, assumed, how, usable in rows:
                 sr = f"{reset:%m-%d %H:%M}" if reset else f"({how or 'unparsed'})"
                 sm = f"{resumed:%m-%d %H:%M}" if resumed else "never"
                 flag = "  [zone assumed]" if assumed else ""
                 print(f"  {b:%m-%d %H:%M}{'':6} {kind:14} {sr:17} {sm:17}{flag}")
-                if resumed and reset:
-                    lag = (resumed - reset).total_seconds() / 60
+                if resumed and not usable:
+                    # A successful turn seconds after the block came from a
+                    # concurrent session, not a recovery. It says nothing about
+                    # when this developer regained access, and the window math
+                    # ignores it — so don't imply the reset time is wrong.
+                    gap = (resumed - b).total_seconds()
+                    print(f"  {'':17} {'':14} concurrent session succeeded {gap:.0f}s "
+                          f"after the block — not a resumption")
+                elif usable and reset:
+                    lag = (usable - reset).total_seconds() / 60
                     note = "  <- resumed BEFORE reset: reset time is suspect" if lag < 0 else ""
                     print(f"  {'':17} {'':14} resumption lag {lag:+.0f} min{note}")
             print(f"\n  wasted working hours (working days only): {user_blocked:.1f} h")
@@ -294,8 +311,10 @@ def main():
                 print(f"  {unresolved} blocked event(s) had no usable reset or resumption "
                       f"and contribute 0 h — the total is a floor.")
             if assumed_tz:
-                print(f"  {assumed_tz} reset time(s) used an unresolvable timezone and were "
-                      f"read as local — install tzdata for exact values.")
+                print(f"  {assumed_tz} reset time(s) named a timezone this machine could not "
+                      f"resolve (no tzdata) and were read as {user}'s local time.")
+                print(f"  That is CORRECT if {user} is in the zone the message named, and off "
+                      f"by the offset difference if not — check before discounting these.")
         else:
             print(f"\n  blocked events: 0   (grace {sev['grace']}, approaching {sev['approaching']})")
 
