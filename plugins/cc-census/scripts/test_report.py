@@ -251,6 +251,31 @@ def main():
               "-> 1 distinct outage window" in p.stdout, p.stdout[-500:])
         check("...billing 4.0h, not 16.0h", "4.0 h" in p.stdout, p.stdout[-500:])
 
+        # A concurrent session succeeding AT the block instant is not a
+        # resumption; it must not be reported as evidence the reset is wrong.
+        conc = [{"at_utc": d(10).isoformat(), "at_local": d(10).isoformat(),
+                 "kind": "session_5h", "severity": "blocked",
+                 "reset_utc": d(12).isoformat(), "reset_parsed_as": "absolute",
+                 "reset_zone_assumed": False, "message": "m",
+                 "resumed_utc": d(10).isoformat()}]
+        p = run(write("cc-census-gina.json", rec(user="gina", limit_events=conc)))
+        check("a same-instant success is called concurrent, not a suspect reset",
+              "concurrent session succeeded" in p.stdout
+              and "reset time is suspect" not in p.stdout, p.stdout[-400:])
+        check("...and the window still bills block->reset (2.0 h)",
+              "2.0 h" in p.stdout, p.stdout[-400:])
+        # Just inside vs just outside the 60s threshold.
+        near_miss = [dict(conc[0], resumed_utc=(d(10) + timedelta(seconds=59)).isoformat())]
+        p = run(write("cc-census-hana.json", rec(user="hana", limit_events=near_miss)))
+        check("59s after the block is still concurrent",
+              "concurrent session succeeded" in p.stdout and "2.0 h" in p.stdout,
+              p.stdout[-300:])
+        real = [dict(conc[0], resumed_utc=(d(10) + timedelta(minutes=30)).isoformat())]
+        p = run(write("cc-census-ivan.json", rec(user="ivan", limit_events=real)))
+        check("30 min after the block is a real resumption and shortens the window",
+              "concurrent session succeeded" not in p.stdout and "0.5 h" in p.stdout,
+              p.stdout[-300:])
+
         # resumed before reset => reset is suspect, and the SHORTER span wins
         susp = [{"at_utc": d(10).isoformat(), "at_local": d(10).isoformat(),
                  "kind": "weekly", "severity": "blocked",
