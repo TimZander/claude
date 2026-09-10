@@ -246,7 +246,25 @@ setup_repo() {
     fi
     # A real commit, so HEAD can detach and a branch can be checked out —
     # without one, BRANCH_MATCH=true and detached HEAD are untestable.
-    if ! git -C "$dir" commit -q --allow-empty -m "fixture" >/dev/null 2>&1; then
+    #
+    # IDENTITY AND HOOKS PINNED PER COMMAND, never written to config. A clean
+    # machine has no user.email, so `git commit` fails with "Please tell me who
+    # you are" and the whole suite aborts on the first fixture — which is
+    # exactly how it failed the first time CI ran it, having only ever been run
+    # on developer machines that happened to have an identity set. `-c` scopes
+    # both to this one invocation, so nothing leaks into the developer's config.
+    #
+    # core.hooksPath is redirected to an absent dir because this repo installs
+    # pre-commit hook that enforces a commit-email domain would otherwise reject
+    # the fixture commit and fail the suite for reasons that have nothing to do
+    # with the resolver. These are throwaway repos in a temp dir, not history
+    # anyone will read.
+    if ! git -C "$dir" \
+            -c user.email="fixture@example.invalid" \
+            -c user.name="resolve-pr fixture" \
+            -c commit.gpgsign=false \
+            -c core.hooksPath="$dir/.no-such-hooks" \
+            commit -q --allow-empty -m "fixture" >/dev/null 2>&1; then
         echo "setup_repo: fixture commit failed for $dir" >&2
         return 1
     fi
