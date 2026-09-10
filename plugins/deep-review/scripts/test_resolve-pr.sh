@@ -10,11 +10,15 @@
 # IN_WORKTREE both ways, fork and cross-repo rejection, the PR-vs-issue
 # fallback for an ambiguous #<N>, and work-item resolution — all four routes,
 # their precedence, the word-boundary and branch-anchoring negatives, the
-# cross-repo/cross-host/cross-org guards, ORG emission, and the difference
-# between "no story" and "the PR body could not be read".
+# cross-repo/cross-host/cross-org guards, ORG emission, and the three-way
+# difference between "no story", "the PR's work-item links could not be read"
+# and "the PR body could not be read".
 #
-#   STUB_PR_BODY=<text>   body returned by the second lookup (\n expanded)
-#   STUB_BODY_FAIL=1      fail ONLY the body call, not the branch lookup
+#   STUB_PR_BODY=<text>      body returned by the description lookup (\n expanded)
+#   STUB_BODY_FAIL=1         fail ONLY the body call, not the branch lookup
+#   STUB_WI_LINKS=<ids>      work-item ids the PR links (\n expanded, one per
+#                            line; the stub emits CRLF per line as real az does)
+#   STUB_WI_LINKS_FAIL=1     fail ONLY the work-item link call
 #
 # `gh` and `az` are STUBBED on PATH so the lookup paths run offline and
 # deterministically; a sentinel asserts the stubs — not the live CLIs — are
@@ -37,7 +41,17 @@ fail=0
 pass=0
 
 TEST_TMPDIR=""
-trap 'if [ -n "$TEST_TMPDIR" ]; then rm -rf "$TEST_TMPDIR"; fi' EXIT INT TERM
+# INT/TERM exit rather than falling through. Without the explicit exit, bash
+# runs the handler and then RESUMES the suite — against a temp dir that no
+# longer has the stubs or fixtures in it. Every remaining case then invokes a
+# missing script, and every assert_not_contains scores green against the
+# resulting error text, so an interrupted run reports a large, confident,
+# entirely fictional tally instead of simply stopping. This cost a reviewer a
+# false "126 passed / 133 failed" before it was diagnosed.
+cleanup_tmpdir() { if [ -n "$TEST_TMPDIR" ]; then rm -rf "$TEST_TMPDIR"; fi; }
+trap cleanup_tmpdir EXIT
+trap 'cleanup_tmpdir; exit 130' INT
+trap 'cleanup_tmpdir; exit 143' TERM
 
 assert_exit() {
     local want="$1" got="$2" label="$3"
@@ -165,6 +179,33 @@ STUB
 cat > "$STUB_DIR/az" <<'STUB'
 #!/usr/bin/env bash
 [ -n "${STUB_ARGS_FILE:-}" ] && echo "$@" >> "$STUB_ARGS_FILE"
+# DISPATCH BY ARGUMENT BEFORE STUB_MODE. The STUB_MODE cases below all model
+# `az repos pr show` responses; when this block sat after them, `noisy`/`short`/
+# `otherrepo` answered the work-item call with branch refs, which the resolver
+# reads as unintelligible. That made those modes silently mean something else on
+# ADO, and — worse — `noisy` is the only mode that models an az notice on
+# stderr, so the new call's stderr redirection could never be exercised by it.
+#
+# CRLF ON EVERY LINE, not just the last: real az on Windows terminates each line
+# with \r\n (verified against a live PR: `8421\r\n`). A `printf '%b\r\n'` over
+# the whole list only marked the final id, so the strip-before-numeric-filter
+# invariant was tested on one element.
+case "$*" in
+    *"work-item list"*)
+        if [ -n "${STUB_WI_LINKS_FAIL:-}" ]; then
+            echo "ERROR: TF400813: The user is not authorized to access this resource." >&2
+            exit 1
+        fi
+        [ -n "${STUB_WI_LINKS:-}" ] || exit 0
+        # `|| [ -n "$wi" ]` because `printf '%b'` emits no trailing newline, so
+        # a plain `read` loop discards the LAST line — which for a single-value
+        # fixture is the whole payload. That silently turned the
+        # unintelligible-output test into an empty-output test.
+        printf '%b' "$STUB_WI_LINKS" | while IFS= read -r wi || [ -n "$wi" ]; do
+            printf '%s\r\n' "$wi"
+        done
+        exit 0 ;;
+esac
 case "${STUB_MODE:-ok}" in
     notfound)
         echo "ERROR: TF401180: The requested pull request was not found." >&2
@@ -181,18 +222,6 @@ case "${STUB_MODE:-ok}" in
 esac
 # Work-item lookup's description query — see the note on the gh stub above.
 # CRLF here too: the body path must strip \r exactly like the branch path does.
-# The PR's work-item LINK relation. Default is NO links, so every pre-existing
-# route-precedence test is unaffected: a stub that linked something by default
-# would make pr-link win everywhere and quietly retire the routes below it.
-case "$*" in
-    *"work-item list"*)
-        if [ -n "${STUB_WI_LINKS_FAIL:-}" ]; then
-            echo "ERROR: TF400813: The user is not authorized to access this resource." >&2
-            exit 1
-        fi
-        [ -n "${STUB_WI_LINKS:-}" ] || exit 0
-        printf '%b\r\n' "$STUB_WI_LINKS"; exit 0 ;;
-esac
 case "$*" in
     *"--query description"*)
         if [ -n "${STUB_BODY_FAIL:-}" ]; then
@@ -247,6 +276,54 @@ run_in() {
     local dir="$1"; shift
     ( cd "$dir" && bash "$SCRIPT" "$@" 2>&1 )
 }
+
+# A NEGATIVE ASSERTION MUST NOT PASS ON OUTPUT THAT NEVER RAN.
+#
+# assert_not_contains and assert_no_line are satisfied by ANY text lacking the
+# needle — including `bash: .../resolve-pr.sh: No such file or directory`. When
+# an interrupted run deleted the fixtures mid-suite, every negative check in the
+# file scored green against that error, turning the most safety-critical
+# assertions in the suite ("this key must NOT be emitted") into unconditional
+# passes. The trap above stops that specific cause; this stops the class.
+#
+# Every negative assertion below should run its output through this first. HOST
+# is emitted by every successful invocation on every host, so its presence is a
+# cheap proof that the script actually produced a KEY=value block.
+# Split into a silent predicate and a reporting wrapper, so the self-test below
+# can exercise the negative case without printing a FAIL it then has to undo.
+_ran_ok() {
+    case "
+$1
+" in
+        *"
+HOST="*) return 0 ;;
+    esac
+    return 1
+}
+
+assert_ran() {
+    local out="$1" label="$2"
+    if _ran_ok "$out"; then
+        return 0
+    fi
+    fail=$((fail + 1))
+    echo "  FAIL $label: script produced no KEY=value output — a negative assertion here would pass vacuously"
+    echo "    got: $out"
+    return 1
+}
+
+# Self-test, same reasoning as the matcher self-tests above: a guard that always
+# returned success would silently restore every vacuous pass it exists to catch.
+if _ran_ok "$(printf 'HOST=github\nKIND=none')"; then
+    pass=$((pass + 1)); echo "  PASS assert_ran accepts real output"
+else
+    fail=$((fail + 1)); echo "  FAIL assert_ran rejected real output"
+fi
+if _ran_ok "bash: line 1: resolve-pr.sh: No such file or directory"; then
+    fail=$((fail + 1)); echo "  FAIL assert_ran accepted crash output"
+else
+    pass=$((pass + 1)); echo "  PASS assert_ran rejects crash output"
+fi
 
 # stdout only — proves errors do not pollute the KEY=value stream.
 run_in_stdout() {
@@ -614,13 +691,9 @@ assert_not_contains "WORKITEM_ID=99" "$out" "cross-host issue URL is refused"
 out=$(run_in "$ADO_REPO" --args "https://dev.azure.com/OTHERORG/P/_workitems/edit/555")
 assert_not_contains "WORKITEM_ID=555" "$out" "cross-org ADO work-item URL is refused"
 
-# --- Route 2: the PR's own description -------------------------------
-
-out=$(STUB_PR_BODY="Rework the thing.\n\nFixes #318" run_in "$GH_REPO" --args "pr 170")
-assert_line "WORKITEM_ID=318" "$out" "pr-body: 'Fixes #318' on its own line is discovered"
-assert_line "WORKITEM_SOURCE=pr-body" "$out" "pr-body: route reported as pr-body"
-
-# ── Route 2: the PR's own work-item link (ADO) ───────────────────────
+# ── Route 2: the PR's own work-item link (ADO) ───────────────────
+# Precedence order is the file's layout order: route 1 (argument) above,
+# this block, then route 3 (pr-body) and route 4 (branch-prefix) below.
 # The link ADO's UI shows and the REST API returns as a relation. It needs no
 # convention from the author — no AB# in the body, no numeric branch prefix —
 # which is exactly why it was worth adding: a PR linked the way ADO itself
@@ -630,7 +703,18 @@ out=$(STUB_WI_LINKS="8421" run_in "$ADO_REPO" --args "pr 4506")
 assert_line "WORKITEM_KIND=workitem" "$out" "pr-link: a linked work item is a workitem"
 assert_line "WORKITEM_ID=8421" "$out" "pr-link: the linked id is discovered with no AB# and no branch prefix"
 assert_line "WORKITEM_SOURCE=pr-link" "$out" "pr-link: route reported as pr-link"
-assert_not_contains "WORKITEM_OTHER_IDS" "$out" "pr-link: a single link reports no alternatives"
+assert_ran "$out" "pr-link: single-link run produced output" \
+    && assert_not_contains "WORKITEM_OTHER_IDS" "$out" "pr-link: a single link reports no alternatives"
+
+# WORKITEM_OTHER_IDS IS ABSENT WHENEVER THE ROUTE DID NOT RUN, not only when the
+# choice was forced — so its absence proves nothing on its own, and the caller
+# is told to read only its PRESENCE. A multi-link PR pre-empted by an explicit
+# argument is the case most likely to mislead: five links, no alternatives
+# reported, because route 2 never executed.
+out=$(STUB_WI_LINKS="90\\n8421\\n7" run_in "$ADO_REPO" --args "pr 4506 #777")
+assert_line "WORKITEM_ID=777" "$out" "pr-link: an explicit argument pre-empts a multi-link PR"
+assert_ran "$out" "pr-link: pre-empted run produced output" \
+    && assert_not_contains "WORKITEM_OTHER_IDS" "$out" "pr-link: a pre-empted route reports no alternatives despite several links"
 
 # Precedence. The link is structural; the two text routes are conventions, so
 # the link outranks both. The branch here carries 7493- and the body carries an
@@ -645,29 +729,56 @@ out=$(STUB_WI_LINKS="8421" run_in "$ADO_REPO" --args "pr 4506 #777")
 assert_line "WORKITEM_ID=777" "$out" "pr-link: an explicit argument still outranks the link"
 assert_line "WORKITEM_SOURCE=argument" "$out" "pr-link: argument route still reported as argument"
 
-# MULTIPLE LINKS. ADO permits many; grading against an arbitrary one would be a
-# wrong story wearing the confidence of a resolved one. Lowest id wins so the
-# pick is deterministic across re-runs, and the rest are reported so the caller
-# can put the ambiguity in front of the user — the OTHER_REFS contract.
-# MIXED WIDTHS, deliberately. The previous fixture was 8421/7100/9002 — all
-# four digits, so lexicographic and numeric ordering agree and the assertion
-# could not tell them apart (mutation-proved: `sort -n` -> `sort` passed
-# everything). These widths make the ordering observable.
+# MULTIPLE LINKS. ADO permits many; grading against an arbitrary one silently
+# would be a wrong story wearing the confidence of a resolved one, so the first
+# returned is selected and the REST ARE REPORTED — the OTHER_REFS contract.
 #
-# ADO's own relation order is what the route keeps: the item the PR was opened
-# from is typically first, and that is the one worth grading against. Sorting
-# numerically would pick `7` here — reliably the OLDEST linked item, which for
-# a story linked beside its parent feature is the epic.
+# The order is taken as given and NOT sorted, but that is not the same as
+# "ADO's relation order is preserved": `az repos pr work-item list` discards
+# the relation refs and re-queries the WIT batch endpoint, whose ordering is
+# undocumented. Sorting would layer a second unverified order on an unknown
+# one. What makes the pick safe is WORKITEM_OTHER_IDS, not the ordering.
+#
+# MIXED WIDTHS, deliberately: with 8421/7100/9002 every candidate rule agrees,
+# so the assertion cannot tell first-returned from numeric-min from
+# lexicographic-min. 90/8421/7/9002 separates all three — first-returned is 90,
+# numeric-min is 7, lexicographic-min is 7 as well.
 out=$(STUB_WI_LINKS="90\\n8421\\n7\\n9002" run_in "$ADO_REPO" --args "pr 4506")
-assert_line "WORKITEM_ID=90" "$out" "pr-link: ADO's own order is kept — first listed wins, not lowest id"
+assert_line "WORKITEM_ID=90" "$out" "pr-link: the first id returned wins — not the lowest, not sorted"
 assert_line "WORKITEM_OTHER_IDS=8421,7,9002" "$out" "pr-link: the unselected links are reported in order of appearance"
 
-# Duplicates must not appear as their own alternative. `sort -n` had no -u, so
-# a repeated link produced WORKITEM_ID=8421 AND WORKITEM_OTHER_IDS=8421 — the
-# caller then reports "graded against 8421, not against 8421".
+# Duplicates must not appear as their own alternative, or the caller reports
+# "graded against 8421, not against 8421".
 out=$(STUB_WI_LINKS="8421\\n8421" run_in "$ADO_REPO" --args "pr 4506")
 assert_line "WORKITEM_ID=8421" "$out" "pr-link: duplicate links de-duplicate"
-assert_not_contains "WORKITEM_OTHER_IDS" "$out" "pr-link: a duplicate is not reported as an alternative"
+assert_ran "$out" "pr-link: duplicate-link run produced output" \
+    && assert_not_contains "WORKITEM_OTHER_IDS" "$out" "pr-link: a duplicate is not reported as an alternative"
+
+# PARTIAL NOISE FAILS CLOSED. This is the case the route got wrong: honouring
+# noise only when NOTHING parsed meant a BOM — which attaches to the FIRST
+# line — dropped the leading id and published the SECOND as the PR's sole,
+# structurally-confirmed story with WORKITEM_LOOKUP=ok. A wrong story wearing
+# the highest-confidence label the resolver has.
+out=$(STUB_WI_LINKS="\\xef\\xbb\\xbf7493\\n7500" run_in "$ADO_REPO" --args "pr 4506")
+assert_line "WORKITEM_LOOKUP=pr-link-unreadable" "$out" "pr-link: a BOM on the first id fails closed"
+assert_ran "$out" "pr-link: BOM run produced output" \
+    && assert_no_line "WORKITEM_ID=7500" "$out" "pr-link: the second id is not promoted when the first is corrupt"
+
+# The milder variant: a stray notice on stdout alongside perfectly good ids.
+# The selection would have been correct here, but reporting `ok` asserts the
+# route was fully read when part of its answer was not.
+out=$(STUB_WI_LINKS="WARNING: preview\\n7493\\n7500" run_in "$ADO_REPO" --args "pr 4506")
+assert_line "WORKITEM_LOOKUP=pr-link-unreadable" "$out" "pr-link: noise alongside valid ids still fails closed"
+
+# The az INVOCATION SHAPE. `--query "[].id"` is the most contract-critical
+# string in this route and a typo in it would pass every assertion above, since
+# the stub answers on "work-item list" alone. The gh arm asserts its own shape
+# the same way further down.
+WI_ARGS_LOG="$TEST_TMPDIR/wi-args.txt"
+STUB_ARGS_FILE="$WI_ARGS_LOG" STUB_WI_LINKS="8421" run_in "$ADO_REPO" --args "pr 4506" >/dev/null 2>&1
+assert_contains "work-item list" "$(cat "$WI_ARGS_LOG")" "pr-link: the work-item list subcommand is invoked"
+assert_contains "--query [].id" "$(cat "$WI_ARGS_LOG")" "pr-link: the id-only query is passed verbatim"
+assert_contains "--id 4506" "$(cat "$WI_ARGS_LOG")" "pr-link: the PR id is passed"
 
 # A FAILED LOOKUP IS NOT AN EMPTY ONE. An auth or network failure must not let
 # the branch-prefix guess below masquerade as proof the strongest route was
@@ -692,10 +803,23 @@ assert_line "WORKITEM_LOOKUP=pr-body-unreadable" "$out" "pr-link: a body-only fa
 # The route must not fire without a PR. Unasserted before, and mutation-proved:
 # dropping `KIND == "pr"` from the guard passed every test, while in production
 # every bare /deep-review in an ADO repo would call the API with --id "".
-out=$(STUB_WI_LINKS="8421" run_in "$ADO_REPO" --args "focus on error handling")
-assert_line "WORKITEM_KIND=none" "$out" "pr-link: the route does not fire without a resolved PR"
-assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "pr-link: a failed lookup still falls through to a weaker route"
-assert_line "WORKITEM_ID=7493" "$out" "pr-link: the fallback route still resolves"
+#
+# Its own fixture, on a branch that CARRIES a numeric prefix, so the run proves
+# two things at once: the link route stayed silent, and the weaker route below
+# it still resolved. $ADO_REPO cannot be used here — it sits on `main`, so
+# branch-prefix finds nothing and WORKITEM_ID/WORKITEM_SOURCE are not emitted at
+# all. Asserting them beside `WORKITEM_KIND=none` is self-contradictory, which
+# is exactly how this block shipped red.
+ADO_WI_REPO="$TEST_TMPDIR/ado-branchprefix-repo"
+setup_repo "$ADO_WI_REPO" "https://dev.azure.com/bgvone/BGV%20Development/_git/BgvCore" || exit 1
+git -C "$ADO_WI_REPO" checkout -q -b "branches/7493-apm-errors-noticeerror-poc" || exit 1
+out=$(STUB_WI_LINKS="8421" run_in "$ADO_WI_REPO" --args "focus on error handling")
+assert_line "KIND=none" "$out" "pr-link: no PR reference is still no PR"
+assert_ran "$out" "pr-link: no-PR run produced output" \
+    && assert_no_line "WORKITEM_ID=8421" "$out" "pr-link: the route does not fire without a resolved PR"
+assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "pr-link: the weaker route below it still resolves"
+assert_line "WORKITEM_ID=7493" "$out" "pr-link: and resolves the branch's own id"
+assert_line "WORKITEM_LOOKUP=ok" "$out" "pr-link: a route that never ran is not a failure"
 
 # Non-numeric output cannot become a work item. The stub's other modes return
 # branch refs from this same call shape, and `refs/heads/...` must not parse as
@@ -717,8 +841,15 @@ assert_line "WORKITEM_ID=318" "$out" "pr-link: GitHub resolves its own way"
 # the assertion that catches a stub default flipping and silently retiring them.
 out=$(run_in "$ADO_REPO" --args "pr 4506")
 assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "pr-link: absent links leave the existing precedence untouched"
-assert_not_contains "WORKITEM_OTHER_IDS" "$out" "pr-link: no alternatives are reported on a weaker route"
+assert_ran "$out" "pr-link: absent-links run produced output" \
+    && assert_not_contains "WORKITEM_OTHER_IDS" "$out" "pr-link: no alternatives are reported on a weaker route"
 assert_line "WORKITEM_LOOKUP=ok" "$out" "pr-link: absent links are a clean result, not a failure"
+
+# --- Route 3: the PR's own description -------------------------------
+
+out=$(STUB_PR_BODY="Rework the thing.\n\nFixes #318" run_in "$GH_REPO" --args "pr 170")
+assert_line "WORKITEM_ID=318" "$out" "pr-body: 'Fixes #318' on its own line is discovered"
+assert_line "WORKITEM_SOURCE=pr-body" "$out" "pr-body: route reported as pr-body"
 
 out=$(STUB_PR_BODY="closed #77 as part of this" run_in "$GH_REPO" --args "pr 170")
 assert_line "WORKITEM_ID=77" "$out" "pr-body: lowercase past-tense 'closed' matches"
@@ -770,12 +901,12 @@ assert_exit 0 "$rc" "body-fetch failure is non-fatal"
 out=$(STUB_PR_BODY="Fixes #318" run_in "$GH_REPO" --args "pr 170")
 assert_line "WORKITEM_LOOKUP=ok" "$out" "a successful body fetch reports ok"
 
-# Route 1 outranks route 2: an explicit argument is never overridden by a link
+# Route 1 outranks route 3: an explicit argument is never overridden by a link
 # the author happened to write in the description.
 out=$(STUB_PR_BODY="Fixes #318" run_in "$GH_REPO" --args "pr 170 https://github.com/TimZander/claude/issues/42")
 assert_line "WORKITEM_ID=42" "$out" "precedence: an explicit argument outranks the PR body"
 
-# --- Route 3: the branches/<id>-<slug> convention ---------------------
+# --- Route 4: the branches/<id>-<slug> convention ---------------------
 # The gh stub's PR resolves to branches/142-..., and the default body carries no
 # link, so the fall-through to the branch name is what supplies the id.
 
