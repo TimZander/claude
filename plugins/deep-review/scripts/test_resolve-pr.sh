@@ -8,7 +8,7 @@
 # work-item carve-out, ref normalization, CRLF handling, stderr contamination,
 # empty/short lookup output, PR-state mapping, BRANCH_MATCH both ways,
 # IN_WORKTREE both ways, fork and cross-repo rejection, the PR-vs-issue
-# fallback for an ambiguous #<N>, and work-item resolution — all three routes,
+# fallback for an ambiguous #<N>, and work-item resolution — all four routes,
 # their precedence, the word-boundary and branch-anchoring negatives, the
 # cross-repo/cross-host/cross-org guards, ORG emission, and the difference
 # between "no story" and "the PR body could not be read".
@@ -191,9 +191,7 @@ case "$*" in
             exit 1
         fi
         [ -n "${STUB_WI_LINKS:-}" ] || exit 0
-        printf '%b
-
-' "$STUB_WI_LINKS"; exit 0 ;;
+        printf '%b\r\n' "$STUB_WI_LINKS"; exit 0 ;;
 esac
 case "$*" in
     *"--query description"*)
@@ -632,7 +630,7 @@ out=$(STUB_WI_LINKS="8421" run_in "$ADO_REPO" --args "pr 4506")
 assert_line "WORKITEM_KIND=workitem" "$out" "pr-link: a linked work item is a workitem"
 assert_line "WORKITEM_ID=8421" "$out" "pr-link: the linked id is discovered with no AB# and no branch prefix"
 assert_line "WORKITEM_SOURCE=pr-link" "$out" "pr-link: route reported as pr-link"
-assert_no_line "WORKITEM_OTHER_IDS=" "$out" "pr-link: a single link reports no alternatives"
+assert_not_contains "WORKITEM_OTHER_IDS" "$out" "pr-link: a single link reports no alternatives"
 
 # Precedence. The link is structural; the two text routes are conventions, so
 # the link outranks both. The branch here carries 7493- and the body carries an
@@ -651,15 +649,51 @@ assert_line "WORKITEM_SOURCE=argument" "$out" "pr-link: argument route still rep
 # wrong story wearing the confidence of a resolved one. Lowest id wins so the
 # pick is deterministic across re-runs, and the rest are reported so the caller
 # can put the ambiguity in front of the user — the OTHER_REFS contract.
-out=$(STUB_WI_LINKS="8421\\n7100\\n9002" run_in "$ADO_REPO" --args "pr 4506")
-assert_line "WORKITEM_ID=7100" "$out" "pr-link: the lowest linked id is selected, deterministically"
-assert_line "WORKITEM_OTHER_IDS=8421,9002" "$out" "pr-link: the unselected links are reported, in order"
+# MIXED WIDTHS, deliberately. The previous fixture was 8421/7100/9002 — all
+# four digits, so lexicographic and numeric ordering agree and the assertion
+# could not tell them apart (mutation-proved: `sort -n` -> `sort` passed
+# everything). These widths make the ordering observable.
+#
+# ADO's own relation order is what the route keeps: the item the PR was opened
+# from is typically first, and that is the one worth grading against. Sorting
+# numerically would pick `7` here — reliably the OLDEST linked item, which for
+# a story linked beside its parent feature is the epic.
+out=$(STUB_WI_LINKS="90\\n8421\\n7\\n9002" run_in "$ADO_REPO" --args "pr 4506")
+assert_line "WORKITEM_ID=90" "$out" "pr-link: ADO's own order is kept — first listed wins, not lowest id"
+assert_line "WORKITEM_OTHER_IDS=8421,7,9002" "$out" "pr-link: the unselected links are reported in order of appearance"
+
+# Duplicates must not appear as their own alternative. `sort -n` had no -u, so
+# a repeated link produced WORKITEM_ID=8421 AND WORKITEM_OTHER_IDS=8421 — the
+# caller then reports "graded against 8421, not against 8421".
+out=$(STUB_WI_LINKS="8421\\n8421" run_in "$ADO_REPO" --args "pr 4506")
+assert_line "WORKITEM_ID=8421" "$out" "pr-link: duplicate links de-duplicate"
+assert_not_contains "WORKITEM_OTHER_IDS" "$out" "pr-link: a duplicate is not reported as an alternative"
 
 # A FAILED LOOKUP IS NOT AN EMPTY ONE. An auth or network failure must not let
 # the branch-prefix guess below masquerade as proof the strongest route was
 # checked and came back empty.
 out=$(STUB_WI_LINKS_FAIL=1 run_in "$ADO_REPO" --args "pr 4506")
-assert_line "WORKITEM_LOOKUP=pr-links-unreadable" "$out" "pr-link: a failed link lookup is reported, not swallowed"
+assert_line "WORKITEM_LOOKUP=pr-link-unreadable" "$out" "pr-link: a failed link lookup is reported, not swallowed"
+STUB_WI_LINKS_FAIL=1 run_in "$ADO_REPO" --args "pr 4506" >/dev/null 2>&1; rc=$?
+assert_exit 0 "$rc" "pr-link: a failed link lookup is non-fatal"
+
+# BOTH ROUTES FAILING is the case that actually happens — one bad credential,
+# a dead network or a wrong tenant breaks `az repos pr work-item list` and
+# `az repos pr show` alike. The weaker route used to overwrite the stronger
+# one's failure, so the caller heard only "the description could not be read"
+# while presenting a branch-prefix guess.
+out=$(STUB_WI_LINKS_FAIL=1 STUB_BODY_FAIL=1 run_in "$ADO_REPO" --args "pr 4506")
+assert_line "WORKITEM_LOOKUP=pr-link-unreadable" "$out" "pr-link: when both routes fail, the stronger failure survives"
+
+# The inverse must still work: a weaker-only failure is still reported.
+out=$(STUB_BODY_FAIL=1 run_in "$ADO_REPO" --args "pr 4506")
+assert_line "WORKITEM_LOOKUP=pr-body-unreadable" "$out" "pr-link: a body-only failure is still reported as such"
+
+# The route must not fire without a PR. Unasserted before, and mutation-proved:
+# dropping `KIND == "pr"` from the guard passed every test, while in production
+# every bare /deep-review in an ADO repo would call the API with --id "".
+out=$(STUB_WI_LINKS="8421" run_in "$ADO_REPO" --args "focus on error handling")
+assert_line "WORKITEM_KIND=none" "$out" "pr-link: the route does not fire without a resolved PR"
 assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "pr-link: a failed lookup still falls through to a weaker route"
 assert_line "WORKITEM_ID=7493" "$out" "pr-link: the fallback route still resolves"
 
@@ -668,6 +702,10 @@ assert_line "WORKITEM_ID=7493" "$out" "pr-link: the fallback route still resolve
 # an id.
 out=$(STUB_WI_LINKS="refs/heads/main" run_in "$ADO_REPO" --args "pr 4506")
 assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "pr-link: non-numeric output is ignored, not parsed as an id"
+# …and is reported as UNREADABLE, not as "checked and came back empty". Output
+# we did not understand is not proof the PR links nothing, and the header
+# requires those two states stay distinguishable.
+assert_line "WORKITEM_LOOKUP=pr-link-unreadable" "$out" "pr-link: unintelligible output fails closed"
 
 # GitHub has no such relation — its linkage lives in the description, which the
 # pr-body route already reads. The route must not fire there at all.
@@ -679,6 +717,7 @@ assert_line "WORKITEM_ID=318" "$out" "pr-link: GitHub resolves its own way"
 # the assertion that catches a stub default flipping and silently retiring them.
 out=$(run_in "$ADO_REPO" --args "pr 4506")
 assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "pr-link: absent links leave the existing precedence untouched"
+assert_not_contains "WORKITEM_OTHER_IDS" "$out" "pr-link: no alternatives are reported on a weaker route"
 assert_line "WORKITEM_LOOKUP=ok" "$out" "pr-link: absent links are a clean result, not a failure"
 
 out=$(STUB_PR_BODY="closed #77 as part of this" run_in "$GH_REPO" --args "pr 170")
@@ -744,7 +783,7 @@ out=$(run_in "$GH_REPO" --args "pr 170")
 assert_line "WORKITEM_ID=142" "$out" "branch-prefix: id read from the PR's source branch"
 assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "branch-prefix: route reported as branch-prefix"
 
-# Route 2 outranks route 3: the author's assertion beats a naming convention.
+# Route 3 outranks route 4: the author's assertion beats a naming convention.
 out=$(STUB_PR_BODY="Fixes #318" run_in "$GH_REPO" --args "pr 170")
 assert_line "WORKITEM_ID=318" "$out" "precedence: the PR body outranks the branch name"
 
@@ -912,7 +951,7 @@ assert_line "WORKITEM_ID=7493" "$out" "ADO: falls through to the branch name ins
 # branch-name story below it.
 out=$(STUB_PR_BODY="Tracked as AB#9912 upstream" run_in "$GH_REPO" --args "pr 170")
 assert_line "WORKITEM_ID=142" "$out" "GitHub: an unfetchable AB#<id> does not displace the branch story"
-assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "GitHub: route 3 still runs after an AB#-only body"
+assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "GitHub: route 4 still runs after an AB#-only body"
 
 # --- The unreadable-body path, on both hosts --------------------------
 # Previously only the gh arm was exercised, though az auth failures are the
@@ -995,7 +1034,7 @@ assert_no_line "ORG=https://dev.azure.com/ATTACKER" "$out" "an exported ORG cann
 
 out=$(STUB_PR_BODY="Tracked upstream as AB#9912" run_in "$GH_REPO" --args "pr 170")
 assert_line "WORKITEM_ID=142" "$out" "GitHub: AB#<id> does not displace the branch story"
-assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "GitHub: route 3 still runs"
+assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "GitHub: route 4 still runs"
 assert_no_line "WORKITEM_KIND=workitem" "$out" "GitHub: no unfetchable workitem kind is published"
 
 echo

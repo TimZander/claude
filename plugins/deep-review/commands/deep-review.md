@@ -89,7 +89,9 @@ It prints `KEY=value` lines on stdout. `HOST`, `KIND`, `WORKITEM_KIND`, `WORKITE
 
 **Tier 1 — the review cannot proceed without these.** `HOST`, `KIND`, `CURRENT_BRANCH` and `IN_WORKTREE`. Every version of the script has emitted all four. If any is missing — including the case where the script printed nothing at all and still exited 0 — stop and tell the user the plugin install looks broken. Do **not** fall back to reviewing `HEAD`; that is the exact failure this step exists to prevent, and a zero-byte or `exit 0` stub script is a real install state, not a hypothetical.
 
-**Tier 2 — story resolution only.** `WORKITEM_KIND` and `WORKITEM_LOOKUP` were added together, so an older script is missing **both**. If tier 1 is intact but either of these is absent, the install is fine and merely predates this feature: continue the review normally, skip Step 1c, and say "story resolution unavailable — the installed `resolve-pr.sh` predates this feature; update the plugin to grade against acceptance criteria." That is a different statement from "no linked story found", and reporting one as the other would be a confident false claim — the exact failure the acceptance-criteria block exists to prevent.
+**Tier 2 — story resolution only.** `WORKITEM_KIND` and `WORKITEM_LOOKUP` were added together, so an older script is missing **both**. If tier 1 is intact but either of these is absent, the install is fine and merely predates this feature: continue the review normally, skip Step 1c, and say "story resolution unavailable — the installed `resolve-pr.sh` predates this feature; update the plugin to grade against acceptance criteria."
+
+**A third generation exists, and it is silent.** An install that emits `WORKITEM_KIND` and `WORKITEM_LOOKUP` but predates the `pr-link` route resolves an ADO pull request whose ONLY linkage is the ADO relation to `branch-prefix` or `none`, with `WORKITEM_LOOKUP=ok` — indistinguishable from a genuine miss. You cannot detect this from the output. So on an ADO PR that resolved no story, or resolved one only by branch prefix, add one clause to the 🎯 Context line: the work-item link relation is only read by newer installs, and if the pull request has linked work items in its **Work items** tab, update the plugin and re-run. That is a different statement from "no linked story found", and reporting one as the other would be a confident false claim — the exact failure the acceptance-criteria block exists to prevent.
 
 If it exits non-zero, surface its stderr verbatim and stop — **do not fall back to reviewing `HEAD`**, which is the exact failure this step exists to prevent. The script only **reports**; it never checks anything out, so the decision below is yours to make and the user's to see.
 
@@ -136,19 +138,19 @@ When you do need to read files or grep for references (Steps 7-9), **make parall
 
 `KIND` answers "which branch do I review". `WORKITEM_KIND` (from Step 1a) answers "what was asked for" — a different question, resolved independently, so both survive one invocation. Act on it **in addition to** `KIND`, never instead of it.
 
-- **`WORKITEM_KIND=issue`** — `gh issue view <WORKITEM_ID> --json title,body,labels,comments`. Acceptance criteria often live in a label or a follow-up comment, not only the body. **Pass `--repo <owner>/<repo>` for the origin remote.** Locality is guaranteed only for `WORKITEM_SOURCE=argument`, where the script checked the URL, and for `pr-link`, where the id came from the pull request's own relation rather than from text; a `pr-body` or `branch-prefix` id is a number nobody validated against any repository, and a bare `gh issue view` resolves against gh's *default* remote, which need not be `origin`.
-- **`WORKITEM_KIND=workitem`** — `az boards work-item show --id <WORKITEM_ID> --org <ORG> -o json`, using the `ORG` key from Step 1a. Do **not** invent an org URL. If `ORG` is absent — an ADO remote the script could not derive an organization from — say the work item cannot be fetched from here and treat it as `none`.
+- **`WORKITEM_KIND=issue`** — `gh issue view <WORKITEM_ID> --json title,body,labels,comments`. Acceptance criteria often live in a label or a follow-up comment, not only the body. **Pass `--repo <owner>/<repo>` for the origin remote.** Locality is guaranteed only for `WORKITEM_SOURCE=argument`, where the script checked the URL; a `pr-body` or `branch-prefix` id is a number nobody validated against any repository, and a bare `gh issue view` resolves against gh's *default* remote, which need not be `origin`.
+- **`WORKITEM_KIND=workitem`** — `az boards work-item show --id <WORKITEM_ID> --org <ORG> -o json`, using the `ORG` key from Step 1a. A `pr-link` id needs no locality check: it came from the pull request's own relation rather than from text, so it belongs to this repository by construction. Do **not** invent an org URL. If `ORG` is absent — an ADO remote the script could not derive an organization from — say the work item cannot be fetched from here and treat it as `none`.
 - **`WORKITEM_KIND=none`** — no story was discoverable. Say so explicitly in the 🎯 Context line and in Step 4. **A review that skipped fitness-checking must not look identical to one that passed it.**
 
 **`WORKITEM_LOOKUP` tells you whether a stronger route was skipped rather than checked.** Whatever a weaker route produced is then a *fallback*, not a checked-and-empty signal, and must be reported as one:
 
-- **`pr-links-unreadable`** — the pull request's work-item relations could not be listed, so a story linked the way ADO's own UI links one was never seen. This is the STRONGEST route, so a weaker result after it is a fallback twice over.
+- **`pr-link-unreadable`** — the pull request's work-item relations could not be listed, so a story linked the way ADO's own UI links one was never seen. This is the strongest **automatic** route (only an explicit argument outranks it), so a weaker result after it is a fallback twice over. It also wins over `pr-body-unreadable` when both fail: one bad credential breaks both `az` calls, and this field names the strongest route that went unchecked.
 - **`pr-body-unreadable`** — the PR description could not be fetched, so a `Closes #N` sitting in it was never seen. Do not present a `branch-prefix` result as though the body had been read and found bare.
 - **`ok`** — every route that ran completed.
 
 **`REFERENCE_REFUSED=true` is a separate, orthogonal fact:** the user supplied a reference URL naming another repository or ADO organization, and it was declined because its number would otherwise have been fetched against *this* repo and resolved to a different, real story. **Say so explicitly whenever it is true** — never report "no story was referenced", because one was.
 
-It is orthogonal in both directions, so check it independently of everything else. It can be `true` alongside `WORKITEM_LOOKUP=pr-body-unreadable` (both happened), and — because a refused URL and an accepted `#<N>` can sit in the same arguments — it can be `true` alongside a perfectly good `WORKITEM_SOURCE=argument`. In that case do **not** disown the story you found; report that one reference was declined *and* which story you are grading against.
+It is orthogonal in both directions, so check it independently of everything else. It can be `true` alongside `WORKITEM_LOOKUP=pr-link-unreadable` or `pr-body-unreadable` (both happened), and — because a refused URL and an accepted `#<N>` can sit in the same arguments — it can be `true` alongside a perfectly good `WORKITEM_SOURCE=argument`. In that case do **not** disown the story you found; report that one reference was declined *and* which story you are grading against.
 
 If the fetch itself fails (deleted item, wrong host, no auth, no `ORG`), treat it like `none`: report that a reference was found but could not be read, and continue. A failed story fetch never blocks the review.
 
@@ -159,11 +161,11 @@ If the fetch itself fails (deleted item, wrong host, no auth, no `ORG`), treat i
 | `WORKITEM_SOURCE` | How it was found | How much to trust it |
 |---|---|---|
 | `argument` | the user named it | authoritative |
-| `pr-link` | Azure DevOps' own PR/work-item relation — the link its "Work items" tab shows | authoritative — structural, not a string match, and it needs no convention from the author |
+| `pr-link` | Azure DevOps' own PR/work-item relation — the link its "Work items" tab shows | strong — structural, not a string match, and it needs no convention from the author. But only when `WORKITEM_OTHER_IDS` is absent: when it is present the id is the first of several, i.e. a pick |
 | `pr-body` | `Closes/Fixes/Resolves #N` or `AB#<id>` in the PR description | strong — the author asserted the link |
 | `branch-prefix` | the id in a `branches/<id>-<slug>` branch name | good, but a convention, not a guarantee |
 
-**If `WORKITEM_OTHER_IDS` is present, name those work items too** — the pull request links several and only the lowest id was graded against. Say which one you used and which you did not, exactly as `OTHER_REFS` requires for multiple PR references: a silent pick is a question the user never gets asked, and grading a whole review against an arbitrary story looks identical to grading against the right one.
+**If `WORKITEM_OTHER_IDS` is present, name those work items too** — the pull request links several and only the first, in ADO's own relation order, was graded against. Say which one you used and which you did not, exactly as `OTHER_REFS` requires for multiple PR references: a silent pick is a question the user never gets asked, and grading a whole review against an arbitrary story looks identical to grading against the right one.
 
 On `branch-prefix`, phrase it as an inference: "no explicit story reference — grading against #220, inferred from the branch name." If the fetched item is plainly unrelated to the diff (a different feature area, a closed item from months ago), say that and grade against nothing rather than against the wrong story.
 
@@ -313,7 +315,7 @@ When no story was resolved, replace the whole block with a single **Acceptance c
 
 - *no linked story found* — nothing was referenced and nothing was discoverable; fitness graded against the branch name and commit messages only.
 - *a reference was declined* — `REFERENCE_REFUSED=true`; the user named a story in another repository or organization. Never report this as "no linked story found".
-- *the PR's work-item links could not be read* — `WORKITEM_LOOKUP=pr-links-unreadable`; a linked story may exist and was never seen.
+- *the PR's work-item links could not be read* — `WORKITEM_LOOKUP=pr-link-unreadable`; a linked story may exist and was never seen.
 - *the PR description could not be read* — `WORKITEM_LOOKUP=pr-body-unreadable`; a link may exist there and was never seen.
 - *found but not fetchable* — a story resolved but the fetch failed, or `WORKITEM_KIND=workitem` arrived with no `ORG`. Name the id you could not read.
 - *story resolution unavailable* — the tier-2 version skew from Step 1a; the plugin needs updating.
