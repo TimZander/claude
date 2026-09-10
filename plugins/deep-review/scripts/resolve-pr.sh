@@ -43,24 +43,45 @@ set -euo pipefail
 #                               match, and it needs no convention from the author.
 #   WORKITEM_OTHER_IDS=<N>[,<N>...]
 #                               Work items the PR ALSO links but that were not
-#                               selected (pr-link route only; omitted when the
-#                               choice was forced). ADO's own relation order
-#                               is kept and the FIRST is selected — that order
-#                               is stable per PR and meaningful, whereas sorting
-#                               numerically reliably picks the oldest linked
-#                               item, which for a story linked beside its parent
-#                               feature is the epic. The caller must name the
-#                               others rather than let one be chosen silently.
+#                               selected. Emitted ONLY by the pr-link route, and
+#                               only when it returned more than one id — so it
+#                               is absent both when the choice was forced AND
+#                               whenever that route did not run (an explicit
+#                               argument pre-empted it, the host is not ADO, or
+#                               the lookup failed). Its PRESENCE means "this was
+#                               a pick"; its absence means nothing on its own.
+#                               The first id returned is selected — see ORDER IS
+#                               TAKEN AS GIVEN at the route itself; the order is
+#                               not known to be meaningful, which is exactly why
+#                               the alternatives are reported rather than
+#                               silently dropped.
 #   WORKITEM_LOOKUP=ok|pr-link-unreadable|pr-body-unreadable
-#                               Whether every route that was TRIED completed.
+#                               The STRONGEST route that could not be checked,
+#                               or `ok` when every route that ran completed. A
+#                               later failure never overwrites an earlier one:
+#                               one bad credential breaks both `az` calls, and
+#                               the actionable fact is that a stronger route
+#                               went unchecked. So `pr-link-unreadable` does not
+#                               imply the description WAS read — only that the
+#                               link lookup is the strongest thing that failed.
 #                               `pr-link-unreadable` means the PR's work-item
-#                               relations could not be listed;
-#                               `pr-body-unreadable` means the PR description
-#                               could not be fetched, so a link that may exist
-#                               there was never seen — the caller must not
-#                               report whatever a weaker route produced as if
-#                               the stronger one had been checked and come back
-#                               empty.
+#                               relations could not be listed, or came back
+#                               unintelligible; `pr-body-unreadable` means the
+#                               PR description could not be fetched, so a link
+#                               that may exist there was never seen — the caller
+#                               must not report whatever a weaker route produced
+#                               as if the stronger one had been checked and come
+#                               back empty.
+#   RESOLVER_ROUTES=<name>[,<name>...]
+#                               The work-item routes THIS version implements, in
+#                               precedence order. Always present. Added because
+#                               the caller could not otherwise tell a version
+#                               that checked a route and found nothing from one
+#                               that never had the route at all — the two emit
+#                               byte-identical output, so a prompt had to warn
+#                               about the possibility unconditionally, forever,
+#                               even on the newest install. Test for a route by
+#                               name (`pr-link`), never by list length.
 #   REFERENCE_REFUSED=true|false
 #                               Always present. `true` means a reference URL was
 #                               supplied but named another repository or ADO
@@ -117,12 +138,19 @@ set -euo pipefail
 #   2. pr-link        — ADO's own PR/work-item relation, the link its UI shows.
 #                       Structural rather than a string match, so it needs no
 #                       convention from the author: no AB# in the body, no
-#                       numeric branch prefix. GitHub has no equivalent — its
-#                       linkage lives in the description, which route 3 reads
-#                       as the next route down.
+#                       numeric branch prefix. ADO only for now; GitHub's
+#                       equivalent (closingIssuesReferences) is not read yet.
 #   3. pr-body        — Closes/Fixes/Resolves #N on GitHub; AB#<id> on ADO, where
 #                       a bare `#N` in a description is not a work-item link
 #   4. branch-prefix  — the id in our branches/<id>-<slug> naming convention
+#
+# KNOWN GAP, deliberately not fixed here: because first-hit-wins, a successful
+# pr-link means route 3 never runs, so an author's explicit `AB#999` in the
+# description is neither read nor reported in WORKITEM_OTHER_IDS. Folding it in
+# would cost an unconditional description fetch on every ADO PR — a second `az`
+# process to catch a case where the author contradicts the PR's own link — so
+# the cost was judged the larger harm. Revisit if the two ever disagree in
+# practice; the fix is to fetch the body anyway and append a differing id.
 #
 # A WRONG story is worse than no story: it grades the diff against someone
 # else's acceptance criteria while looking like a successful resolution. So the
@@ -841,20 +869,29 @@ fi
 # one here would drift from it, and the fields arrive as HTML with embedded
 # newlines that a `-o tsv` parse would silently corrupt. This stays a resolver.
 #
-# ADO only. GitHub has no equivalent relation: its PR/issue linkage lives in
-# the description text, which route 3 already reads.
+# ADO only. On GitHub the equivalent relation is `closingIssuesReferences`
+# (`gh pr view --json closingIssuesReferences`), which the Development sidebar
+# creates and which likewise survives a rewritten body. It is NOT read yet — a
+# GitHub PR linked that way with no `Closes #N` still resolves to no story, and
+# closing that gap is a separate change. Route 3 reads the description text,
+# which is the only GitHub linkage this script sees today.
 if [[ "$WORKITEM_KIND" == "none" && "$KIND" == "pr" && "$HOST" == "azdo" ]]; then
     WI_LINK_OK=true
     # `--query` rather than parsing the whole payload: the fields block carries
     # HTML descriptions with embedded newlines, and a line-wise read of that is
     # the same hazard the PR-body lookup below documents. Ids are integers, so
     # one per line is safe.
-    WI_LINK_IDS=$(az repos pr work-item list --id "$REF_ID" --org "$ORG" \
+    #
+    # `${ORG:-}` for symmetry with the route-3 call below, not because it can be
+    # empty: KIND=pr on azdo means the derivation above already succeeded or the
+    # script exited.
+    WI_LINK_IDS=$(az repos pr work-item list --id "$REF_ID" --org "${ORG:-}" \
         --query "[].id" -o tsv 2>"$ERR_FILE") || WI_LINK_OK=false
     # Before the numeric filter below, never after: `$` would not match past a
-    # trailing CR, so on Windows — where az emits CRLF, and where this file is
-    # itself stored CRLF — every id would be silently dropped and the strongest
-    # route would degrade to branch-prefix with WORKITEM_LOOKUP still `ok`.
+    # trailing CR, and az on Windows really does emit one per line (verified:
+    # `8421\r\n`). After the fail-closed change below, an unstripped payload
+    # would classify every id as noise and report the route unreadable — not
+    # silently wrong, but a working lookup reported as broken.
     WI_LINK_IDS=${WI_LINK_IDS//$'\r'/}
 
     if [[ "$WI_LINK_OK" != true ]]; then
@@ -862,37 +899,42 @@ if [[ "$WORKITEM_KIND" == "none" && "$KIND" == "pr" && "$HOST" == "azdo" ]]; the
         # NOT "the PR had no linked work item". Reporting them alike would let
         # a branch-prefix guess masquerade as proof the strongest route came
         # back empty.
-        WORKITEM_LOOKUP="pr-link-unreadable"
-    else
-        # PURE BASH, no forks. An earlier version spent five subprocesses
-        # (grep, sort, head, tail, paste) sorting a handful of integers, in a
-        # file that records at the top of collect_pr_refs why that is not free:
-        # fork cost on Git Bash "added minutes to the test suite". The sibling
-        # OTHER_REFS loop does the identical job with none, and this now
-        # matches it — including its de-duplication, which the previous
-        # `sort -n` lacked while claiming to follow the same contract.
         #
-        # ADO'S OWN ORDER IS KEPT, not sorted. The previous version sorted
-        # numerically and called that determinism, but ADO's relation order is
-        # already stable per PR and it is *meaningful*: the item the pull
-        # request was opened from is typically first. Sorting replaced that
-        # signal with "whichever work item was created earliest", which for a
-        # story linked alongside its parent feature reliably picks the EPIC —
-        # a wrong story wearing the confidence of a resolved one, which this
-        # file's own axiom rates worse than no story at all.
-        WI_LINK_FIRST=""
-        WI_LINK_REST=""
+        # The likeliest cause in practice is an azure-devops CLI extension too
+        # old to expose this subcommand, which would otherwise report every ADO
+        # review unreadable forever with no hint. Nothing consumes ERR_FILE
+        # after the PR-resolution block, so surface the first line here or it
+        # is lost when route 3 truncates the file.
+        WORKITEM_LOOKUP="pr-link-unreadable"
+        if [[ -s "$ERR_FILE" ]]; then
+            echo "Note: could not list work-item links for PR #$REF_ID:" >&2
+            head -n 1 "$ERR_FILE" | sed 's/^/  /' >&2
+            echo "  If this persists, try: az extension update --name azure-devops" >&2
+        fi
+    else
+        # PURE BASH, no forks — matching the sibling OTHER_REFS loop, which does
+        # the identical job with none. (The fork cost this avoids is small
+        # beside the `az` process above; the reason to match is consistency with
+        # the sibling, not speed.)
+        #
+        # ORDER IS TAKEN AS GIVEN, and deliberately NOT sorted — but do not read
+        # that as "ADO's relation order is preserved". It is not: `az repos pr
+        # work-item list` fetches the relation refs, DISCARDS them, and
+        # re-queries `wit_client.get_work_items(ids=[...])`, so what comes back
+        # is the WIT batch endpoint's order, which is undocumented. Sorting here
+        # would add a second unverified ordering on top of an unknown one, so we
+        # take the first returned and REPORT the rest rather than pretending
+        # either order is meaningful. WORKITEM_OTHER_IDS is what makes that
+        # honest: the caller names the alternatives instead of the script
+        # silently electing one.
         WI_LINK_SEEN=""
         WI_LINK_NOISE=false
         while IFS= read -r wi_line; do
             [[ -n "$wi_line" ]] || continue
             if [[ ! "$wi_line" =~ ^[0-9]+$ ]]; then
-                # Output we did not understand is NOT "no links". Falling
-                # through with WORKITEM_LOOKUP=ok would assert the strongest
-                # route was checked and came back empty, when in truth its
-                # answer was unreadable — the distinction the header requires
-                # be preserved. A stray az notice on stdout, a BOM, or a
-                # future --query shape all land here.
+                # Output we did not understand is NOT "no links". A stray az
+                # notice on stdout, a BOM, or a future --query shape all land
+                # here.
                 WI_LINK_NOISE=true
                 continue
             fi
@@ -900,24 +942,36 @@ if [[ "$WORKITEM_KIND" == "none" && "$KIND" == "pr" && "$HOST" == "azdo" ]]; the
                 *",$wi_line,"*) continue ;;
             esac
             WI_LINK_SEEN+="${WI_LINK_SEEN:+,}$wi_line"
-            if [[ -z "$WI_LINK_FIRST" ]]; then
-                WI_LINK_FIRST="$wi_line"
-            else
-                WI_LINK_REST+="${WI_LINK_REST:+,}$wi_line"
-            fi
         done <<< "$WI_LINK_IDS"
 
-        if [[ -n "$WI_LINK_FIRST" ]]; then
-            WORKITEM_ID="$WI_LINK_FIRST"
-            WORKITEM_KIND="workitem"
+        # FAIL CLOSED ON ANY NOISE, even when some ids parsed — checked BEFORE
+        # the success arm, which is the whole point. Honouring noise only when
+        # NOTHING parsed looked equivalent and was not: a BOM attaches to the
+        # FIRST line, so `<BOM>7493\n7500` dropped 7493 and published 7500 as
+        # the PR's sole, structurally-confirmed story with WORKITEM_LOOKUP=ok —
+        # a wrong story wearing this file's highest-confidence label, which its
+        # own axiom rates worse than no story at all.
+        #
+        # Partial output cannot be told apart from corrupted output from in
+        # here, so the safe reading is "this list is not trustworthy". Noise on
+        # stdout is anomalous anyway: az notices go to stderr, which is
+        # redirected above, and `--query "[].id" -o tsv` emits nothing else.
+        if [[ "$WI_LINK_NOISE" == true ]]; then
+            WORKITEM_LOOKUP="pr-link-unreadable"
+        elif [[ -n "$WI_LINK_SEEN" ]]; then
+            WORKITEM_ID="${WI_LINK_SEEN%%,*}"
+            # workitem_kind_for_host rather than a literal `workitem`: correct
+            # either way under the azdo guard, but a second copy of an invariant
+            # this file already keeps in one place is how they drift.
+            WORKITEM_KIND=$(workitem_kind_for_host)
             WORKITEM_SOURCE="pr-link"
             # A PR may link several. Picking one silently would grade the whole
             # review against an arbitrary story, so the others are REPORTED —
             # the same contract OTHER_REFS uses for multiple PR references, and
-            # now genuinely the same: de-duplicated, in order of appearance.
-            WORKITEM_OTHER_IDS="$WI_LINK_REST"
-        elif [[ "$WI_LINK_NOISE" == true ]]; then
-            WORKITEM_LOOKUP="pr-link-unreadable"
+            # genuinely the same: de-duplicated, in order of appearance.
+            if [[ "$WI_LINK_SEEN" == *,* ]]; then
+                WORKITEM_OTHER_IDS="${WI_LINK_SEEN#*,}"
+            fi
         fi
     fi
 fi
@@ -964,6 +1018,11 @@ if [[ "$WORKITEM_KIND" == "none" && "$KIND" == "pr" ]]; then
         # an enum and every consumer comparing it by value would break; the
         # actionable fact — a stronger route went unchecked, treat what follows
         # as a fallback — survives intact by keeping the first failure.
+        #
+        # NOTE this encodes "first failure wins", which equals "strongest
+        # failure wins" only because the routes run in precedence order. A route
+        # inserted out of order would silently break the documented invariant.
+        # Keep new routes in strength order, or make this compare rank.
         if [[ "$WORKITEM_LOOKUP" == "ok" ]]; then
             WORKITEM_LOOKUP="pr-body-unreadable"
         fi
@@ -1054,15 +1113,21 @@ if [[ "$KIND" == "pr" ]]; then
         echo "OTHER_REFS=$OTHER_REFS"
     fi
 fi
+# A literal, not a list built from the code above: this must say what this
+# VERSION implements, and a value derived from which routes happened to run
+# would report `pr-link` missing on every GitHub repo. Update it in the same
+# commit that adds or removes a route.
+echo "RESOLVER_ROUTES=argument,pr-link,pr-body,branch-prefix"
 echo "WORKITEM_KIND=$WORKITEM_KIND"
 # Keyed on KIND, not on a non-empty id, so the code states the invariant the
 # header advertises rather than one that merely coincides with it today.
 if [[ "$WORKITEM_KIND" != "none" ]]; then
     echo "WORKITEM_ID=$WORKITEM_ID"
     echo "WORKITEM_SOURCE=$WORKITEM_SOURCE"
-    # Only ever set by the pr-link route, and only when the PR links more than
-    # one. Omitted otherwise, so its presence alone means "the choice was not
-    # forced" and the caller must say so.
+    # Only ever set by the pr-link route, and only when it returned more than
+    # one id. Its PRESENCE means the choice was a pick and the caller must say
+    # so; its absence means nothing on its own, because the route may not have
+    # run at all.
     if [[ -n "$WORKITEM_OTHER_IDS" ]]; then
         echo "WORKITEM_OTHER_IDS=$WORKITEM_OTHER_IDS"
     fi

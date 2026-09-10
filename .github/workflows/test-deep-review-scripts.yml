@@ -1,0 +1,54 @@
+name: test-deep-review-scripts
+
+# The deep-review plugin's resolver decides which branch a review targets and
+# which story it is graded against. Nothing ran its suite before: it was
+# verified only by hand, on Windows, where Git Bash fork cost makes a full run
+# take about an hour — so in practice it was not run at all, and a block of
+# assertions shipped that could never pass.
+#
+# On Linux and macOS runners the forks are cheap and the suite finishes in
+# minutes. macOS is in the matrix deliberately: it ships bash 3.2, which is the
+# floor resolve-pr.sh targets and the reason the file avoids `${var,,}`,
+# `mapfile` and associative arrays. Nothing else in CI proves that claim.
+on:
+  pull_request:
+    paths:
+      - "plugins/deep-review/scripts/**"
+      - ".github/workflows/test-deep-review-scripts.yml"
+  push:
+    branches: [main]
+
+jobs:
+  resolver-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    # A hang must fail the job rather than burn the runner's full allowance.
+    # The suite is expected to finish well inside this; if it starts brushing
+    # the limit, split the exhaustive route matrix into a separate slow job
+    # rather than raising it.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash version (recorded, not asserted)
+        run: bash --version | head -n 1
+      - name: resolve-pr.sh syntax check
+        run: bash -n plugins/deep-review/scripts/resolve-pr.sh
+      - name: workitem-read.sh syntax check
+        run: |
+          if [ -f plugins/deep-review/scripts/workitem-read.sh ]; then
+            bash -n plugins/deep-review/scripts/workitem-read.sh
+          else
+            echo "workitem-read.sh not on this branch yet - skipping"
+          fi
+      - name: resolve-pr smoke test
+        run: bash plugins/deep-review/scripts/test_resolve-pr.sh
+      - name: workitem-read smoke test
+        run: |
+          if [ -f plugins/deep-review/scripts/test_workitem-read.sh ]; then
+            bash plugins/deep-review/scripts/test_workitem-read.sh
+          else
+            echo "test_workitem-read.sh not on this branch yet - skipping"
+          fi
