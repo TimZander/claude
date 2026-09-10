@@ -139,7 +139,15 @@ When you do need to read files or grep for references (Steps 7-9), **make parall
 `KIND` answers "which branch do I review". `WORKITEM_KIND` (from Step 1a) answers "what was asked for" — a different question, resolved independently, so both survive one invocation. Act on it **in addition to** `KIND`, never instead of it.
 
 - **`WORKITEM_KIND=issue`** — `gh issue view <WORKITEM_ID> --json title,body,labels,comments`. Acceptance criteria often live in a label or a follow-up comment, not only the body. **Pass `--repo <owner>/<repo>` for the origin remote.** Locality is guaranteed only for `WORKITEM_SOURCE=argument`, where the script checked the URL; a `pr-body` or `branch-prefix` id is a number nobody validated against any repository, and a bare `gh issue view` resolves against gh's *default* remote, which need not be `origin`.
-- **`WORKITEM_KIND=workitem`** — `az boards work-item show --id <WORKITEM_ID> --org <ORG> -o json`, using the `ORG` key from Step 1a. A `pr-link` id needs no locality check: it came from the pull request's own relation rather than from text, so it belongs to this repository by construction. Do **not** invent an org URL. If `ORG` is absent — an ADO remote the script could not derive an organization from — say the work item cannot be fetched from here and treat it as `none`.
+- **`WORKITEM_KIND=workitem`** — run the plugin's own reader, beside `resolve-pr.sh`:
+
+  ```bash
+  DEEP_REVIEW_ADO_ORG="<ORG from Step 1a>" bash <plugin>/scripts/workitem-read.sh <WORKITEM_ID>
+  ```
+
+  It prints the id, type, state, title, description and acceptance criteria as plain text, with the HTML that ADO stores those fields in already stripped. **Prefer it to a bare `az boards work-item show`.** A constrained runner can allow one named script but cannot safely allow `az`: `az` honours the *last* repeated option, so `--org <pinned> --org https://attacker/x` satisfies any prefix rule and ships the credential off-org. Taking the organization from the environment is what makes the script allowable, and it is why the org is not an argument. If the script is absent — an older install — fall back to `az boards work-item show --id <WORKITEM_ID> --org <ORG> -o json` and say in the 🎯 Context line that you did.
+
+  Do **not** invent an org URL. If `ORG` is absent — an ADO remote the script could not derive an organization from — say the work item cannot be fetched from here and treat it as `none`. A `pr-link` id needs no locality check: it came from the pull request's own relation rather than from text, so it belongs to this repository by construction.
 - **`WORKITEM_KIND=none`** — no story was discoverable. Say so explicitly in the 🎯 Context line and in Step 4. **A review that skipped fitness-checking must not look identical to one that passed it.**
 
 **`WORKITEM_LOOKUP` tells you whether a stronger route was skipped rather than checked.** Whatever a weaker route produced is then a *fallback*, not a checked-and-empty signal, and must be reported as one:
