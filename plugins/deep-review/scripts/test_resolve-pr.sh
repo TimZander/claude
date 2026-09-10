@@ -361,6 +361,38 @@ assert_contains "$STUB_DIR" "$(command -v az)" "az stub is on PATH (not the live
 bash -n "$SCRIPT" 2>/dev/null
 assert_exit 0 $? "script parses"
 
+# `bash -n` does NOT follow `.`, so this check stopped covering the parsing
+# helpers the moment they moved into lib-remote.sh. Without this line a syntax
+# error in the lib passes "script parses" and surfaces as mass runtime failure.
+bash -n "$SCRIPT_DIR/lib-remote.sh" 2>/dev/null
+assert_exit 0 $? "lib-remote.sh parses"
+
+# ── The lib must be present and complete ─────────────────────────────
+# resolve-pr.sh sources a sibling, so a partial install is now a real failure
+# mode. Both shapes must produce the remediation message rather than a raw bash
+# error, and must NOT emit a partial KEY=value stream — a caller parsing stdout
+# would otherwise read an install failure as a resolution result.
+LONE_DIR="$TEST_TMPDIR/lone-script"
+mkdir -p "$LONE_DIR"
+cp "$SCRIPT" "$LONE_DIR/resolve-pr.sh"
+
+out=$(bash "$LONE_DIR/resolve-pr.sh" --args "focus" 2>&1); rc=$?
+assert_exit 1 "$rc" "missing lib-remote.sh exits 1"
+assert_contains "lib-remote.sh not readable" "$out" "missing lib names the file"
+assert_contains "plugin install is incomplete" "$out" "missing lib gives the remediation"
+
+out=$(bash "$LONE_DIR/resolve-pr.sh" --args "focus" 2>/dev/null)
+assert_not_contains "HOST=" "$out" "missing lib emits no KEY=value line on stdout"
+
+# Readable and parseable, but missing a function: the interrupted-copy case.
+# `-f`/`-r` alone cannot see this, which is why the surface is checked too.
+printf '%s\n' 'remote_host() { printf ""; }' > "$LONE_DIR/lib-remote.sh"
+out=$(bash "$LONE_DIR/resolve-pr.sh" --args "focus" 2>&1); rc=$?
+assert_exit 1 "$rc" "incomplete lib-remote.sh exits 1"
+assert_contains "does not define" "$out" "incomplete lib names the missing function"
+assert_contains "plugin install is incomplete" "$out" "incomplete lib gives the same remediation"
+rm -rf "$LONE_DIR"
+
 # ── Usage / pre-flight errors ────────────────────────────────────────
 out=$(run_in "$GH_REPO" --bogus); rc=$?
 assert_exit 1 "$rc" "unknown argument exits 1"
