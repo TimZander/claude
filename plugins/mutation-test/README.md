@@ -79,9 +79,11 @@ bash mutation-test.sh finish --session "$SESSION"     # report + byte-identical 
 
 `begin` also accepts `--file <path>` (repeatable), `--files-from <listfile>`, `--session-dir <dir>` (must be outside the repo), and `--allow-test-artifacts`. `finish` accepts `--allow-test-artifacts` (so discovering artifact drift does not mean re-running the campaign) and `--no-final-check`.
 
-`finish` reports `TREE_VERIFIED=yes|partial|no`. `partial` means every target file is byte-identical and no **tracked** file drifted, with untracked artifacts forgiven by `--allow-test-artifacts`; tracked drift always fails. `status` never emits `TREE_VERIFIED` at all — it verifies nothing, and reports `VERIFICATION=not-run`.
+`finish` reports `TREE_VERIFIED=yes|partial|no` and `FINAL_SUITE=green|red|skipped-by-request|skipped-tree-unverified` **independently**. `partial` means every target file is byte-identical and no **tracked** file drifted, with untracked artifacts forgiven by `--allow-test-artifacts`; tracked drift always fails. A red closing suite on a verified tree exits 6 and is explicitly *not* reported as a restore problem — telling you to restore a tree that is provably restored would send you chasing nothing. `status` never emits `TREE_VERIFIED` at all — it verifies nothing, and reports `VERIFICATION=not-run`.
 
-Exit codes: `0` success, `1` general error, `2` usage, `3` red baseline or no mutation applied, `4` dirty tree without `--allow-dirty`, `5` tree verification failed.
+Exit codes: `0` success, `1` general error, `2` usage, `3` no green baseline (or no mutation applied), `4` dirty tree without `--allow-dirty`, `5` tree verification failed, `6` tree verified but the suite is not green.
+
+A session whose baseline never went green is refused by every later verb: `begin` writes the backup before running the baseline, so an aborted session looks complete and would otherwise produce verdicts from a suite that was already failing.
 
 ### Sessions
 
@@ -93,5 +95,5 @@ Run the smoke test with `bash scripts/test_mutation-test.sh`. It drives real git
 
 ## Requirements
 
-- `bash` 4+, `git`, and the usual POSIX toolchain: `cmp`, `diff`, `mktemp`, `sed`, `grep`, `cut`, `tr`, `wc`, `tail`, `find`, `cp -p`, `date +%s`, `dirname`, `basename`
+- `bash` 3.2+ (stock macOS is fine), `git`, and the usual POSIX toolchain: `cmp`, `diff`, `mktemp`, `sed`, `grep`, `awk`, `cut`, `tr`, `wc`, `tail`, `find`, `cp -p`, `touch`, `date +%s`, `dirname`, `basename`
 - GNU `timeout` if available; a portable polling fallback (with process-group kill) is used when it is not. Set `MUTATION_TEST_FORCE_POLL=1` to exercise the fallback deliberately.

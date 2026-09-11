@@ -27,10 +27,12 @@ A bundled script owns the destructive and verification steps — backup, restore
 - `--verify-green` — re-run the suite after each restore, proving the tree is green again before the next mutation so failures cannot cascade. Doubles the campaign's cost; `finish` does this once regardless.
 - `--allow-dirty` — proceed with uncommitted changes (see Step 2).
 
-If `--test-cmd` is not supplied, infer a candidate from the repository (`package.json` scripts, `pytest.ini`/`pyproject.toml`, `*.csproj`, `Cargo.toml`, `Makefile`, a `scripts/test.sh`) and **confirm it with the user via AskUserQuestion before running anything**. You are about to run their suite dozens of times; guessing wrong wastes a long campaign. In the same question, ask two things that change the outcome:
+If `--test-cmd` is not supplied, infer a candidate from the repository (`package.json` scripts, `pytest.ini`/`pyproject.toml`, `*.csproj`, `Cargo.toml`, `Makefile`, a `scripts/test.sh`) and **confirm it with the user via AskUserQuestion before running anything**. You are about to run their suite dozens of times; guessing wrong wastes a long campaign.
+
+**Ask these two questions whether or not `--test-cmd` was supplied** — they change whether the campaign is meaningful at all:
 
 - Is the suite known to be flaky? If so, recommend `--rerun-caught`.
-- Does the suite modify tracked files (snapshot updating, a formatter with `--fix`, codegen)? If so, say plainly that mutation testing is unreliable against it — the suite can overwrite a mutation mid-run — and stop rather than produce results you cannot trust.
+- Does the suite modify tracked files (snapshot updating, a formatter with `--fix`, codegen)? If so, say plainly that mutation testing is unreliable against it — a `jest -u`-style suite rewrites the snapshot to match the *mutated* output, so every mutation survives and the report is a page of false findings — and stop rather than produce results you cannot trust.
 
 ## Step 1: Locate the bundled script
 
@@ -51,7 +53,9 @@ bash <SCRIPT> begin --test-cmd "<command>" --base "<branch>" [--file <path>]... 
 Capture from stdout:
 - `SESSION=<dir>` — pass this to every later call. Refer to it as `<SESSION>`. It is printed **before** the baseline runs, so it is available even on a failed start.
 - `TARGETS=<n>` — how many files are in play.
-- `BASELINE=green` — the suite passed before anything was broken. `BASELINE=red` means it did not.
+- `BASELINE=green` — the suite passed before anything was broken. Three distinct failures are reported separately, because they need different remedies: `BASELINE=red` (fix the suite), `BASELINE=timeout` (raise `--timeout`), `BASELINE=harness` (the command could not be run — fix `--test-cmd`).
+
+A session whose baseline never went green is **refused** by `run`, `finish` and `status` with exit 3. Start a fresh one; do not try to reuse it.
 
 Diagnostics and `note:` lines go to **stderr**; the `KEY=value` lines go to stdout. Read both — the remediation text for every failure is on stderr.
 
@@ -104,11 +108,15 @@ For each mutation, in order:
 
 **Never restore a mutation yourself with `git checkout --`, `git restore`, or `git stash`.** They also discard the user's uncommitted work in the same file, and the campaign then keeps running against a tree you did not intend, looking green the whole way. Restoring is the script's job, and it does it by copying from a backup held outside the repository.
 
-**On any non-zero exit from `run`, check the tree before continuing.** The script restores on every path it controls, but you applied the mutation before `run` was invoked, so a failure in your own edit step is outside its reach. Specifically:
+**Edit only files listed in `<SESSION>/targets`.** Anything else is not backed up and will not be restored. `run` checks for this after restoring and exits 5 naming the file, because a verdict measured against a tree nobody intended is not a verdict.
 
-- **exit 3** — no mutation was actually applied; your Edit did not land. Re-apply and try again.
-- **exit 2** — a usage error, including a duplicate or invalid `--name`. The script restores before exiting; fix the argument and re-apply the mutation.
-- **exit 5** — the restore failed, or `--verify-green` found the suite red after restoring. **Stop the campaign** and surface the manual `cp` command the script printed on stderr.
+**On any non-zero exit from `run`, check the tree before continuing.** The script arms its restore before any validation it controls, but you applied the mutation before `run` was invoked, so a failure in your own edit step is outside its reach. Specifically:
+
+- **exit 3** — no mutation was actually applied (your Edit did not land — re-apply and try again), or the session has no green baseline.
+- **exit 2** — a usage error, including a duplicate, invalid or value-less `--name`, and unknown flags. The script restores before exiting; fix the argument and re-apply the mutation.
+- **exit 1** — a session or repository problem (missing session, corrupt metadata, the recorded repo gone, or a session belonging to a different repository). The restore runs if the session was resolvable; verify the tree.
+- **exit 5** — the restore failed, or a file outside the target set changed. **Stop the campaign** and follow the diagnostic on stderr.
+- **exit 6** — the tree was restored byte-identically but `--verify-green` found the suite red afterwards. **Do not restore anything**; this points at the environment, and later results would cascade from it.
 
 ## Step 5: Finish and report
 
@@ -121,13 +129,13 @@ This prints the full report, verifies the tree, and re-runs the suite once to pr
 1. **The table** — mutation, result, seconds, failure signal, and what it broke.
 2. **The survivors**, each with the reproduction command the script emitted. These are the deliverable. Say plainly that `repro.sh` re-applies the mutation and leaves the tree broken, and that its header carries the `cp` line that restores it.
 3. **The inconclusive results** — flaky, timed out, or errored — reported as such, never folded into the caught count.
-4. **The verification lines**:
-   - `TREE_VERIFIED=yes` — every target file is byte-identical to the backup and `git status --porcelain` is unchanged.
+4. **The verification lines**, which are independent of each other:
+   - `TREE_VERIFIED=yes` — every target file is byte-identical to the backup and the rest of the tree is unchanged.
    - `TREE_VERIFIED=partial` — target files are byte-identical and no *tracked* file drifted; untracked artifacts were forgiven by `--allow-test-artifacts`.
-   - `TREE_VERIFIED=no` — the tree could not be proven clean. `finish` exits 5. Surface the manual restore command.
-   - `FINAL_SUITE=green|red|skipped` — whether the restored tree still passes.
+   - `TREE_VERIFIED=no` — the tree could not be proven to match the reference. `finish` exits 5, and the report body is bannered UNVERIFIED. Surface the manual restore command and treat every verdict in the table as inconclusive.
+   - `FINAL_SUITE=green` / `red` / `skipped-by-request` / `skipped-tree-unverified` — whether the restored tree still passes. **A red final suite is not a restore problem.** If `TREE_VERIFIED=yes` and `FINAL_SUITE=red`, `finish` exits 6 and the tree is fine — say so, and point at the environment rather than telling the user to restore anything.
 
-If the suite leaves untracked artifacts (caches, coverage) that trip the porcelain check, add `--allow-test-artifacts` **to `finish`** and re-run it — the campaign is not lost, and the flag never forgives a modified tracked file.
+If the suite leaves untracked artifacts (caches, coverage) that trip the drift check, add `--allow-test-artifacts` **to `finish`** and re-run it — the campaign is not lost, and the flag never forgives a modified tracked file.
 
 For each survivor, say which of these it is rather than asserting a defect:
 

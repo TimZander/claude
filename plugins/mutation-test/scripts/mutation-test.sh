@@ -9,21 +9,22 @@
 # record, and restore.
 #
 # Usage:
-#   mutation-test.sh begin  --test-cmd <cmd> (--base <branch> | --file <path> ...) [options]
+#   mutation-test.sh begin  --test-cmd <cmd> (--base <branch> | --file <path> | --files-from <list>) [options]
 #   mutation-test.sh run    --session <dir> --name <name> [--description <text>]
 #   mutation-test.sh finish --session <dir> [--allow-test-artifacts] [--no-final-check]
 #   mutation-test.sh status --session <dir>
 #
 # Lifecycle:
 #   begin   Refuse a dirty tree, resolve target files, copy them to a backup OUTSIDE the
-#           repo, prove the suite is green, then snapshot `git status --porcelain` (after
-#           the baseline run, so the suite's own caches are not mistaken for drift).
+#           repo, prove the suite is green, then record the reference tree state (after the
+#           baseline run, so the suite's own caches are not mistaken for drift).
 #   run     (caller has already edited the source) Save the mutated files for reproduction,
 #           run the suite under a timeout, classify the result, then ALWAYS restore by
 #           copying the backup back — never `git checkout`/`restore`/`stash`, which would
-#           silently revert uncommitted work and leave the run looking green.
-#   finish  Prove the tree is byte-identical to the backup, re-run the suite to prove it is
-#           green again, and print the report. A run that cannot prove this is a failed run.
+#           silently revert uncommitted work and leave the run looking green. Also proves
+#           nothing outside the target set was touched.
+#   finish  Prove the tree matches the reference, re-run the suite to prove it is green
+#           again, and print the report. A run that cannot prove this is a failed run.
 #
 # Results are one of: caught, survived, flaky, timeout, error. Only `caught` and `survived`
 # are verdicts; the rest mean nothing was proven and are reported as inconclusive. A harness
@@ -34,14 +35,16 @@
 #   0  success
 #   1  general error (not a repo, missing session, bad target, ...)
 #   2  usage error
-#   3  baseline suite is not green (begin), or no mutation was applied (run)
+#   3  the session has no green baseline (begin aborted, or run/finish on such a session),
+#      or no mutation was applied
 #   4  dirty working tree without --allow-dirty
-#   5  tree verification failed — the working tree does NOT match the backup
+#   5  tree verification failed — the working tree does NOT match the reference
+#   6  the tree verified, but the suite is not green
 #
 # IMPORTANT: on ANY non-zero exit from `run`, verify the working tree before continuing.
-# `run` restores from the backup on every path it can, but the caller applies the mutation
-# before `run` is ever invoked, so a failure in the caller's own edit step is outside this
-# script's reach.
+# `run` arms its restore before any validation that can fail, but the caller applies the
+# mutation before `run` is ever invoked, so a failure in the caller's own edit step is
+# outside this script's reach.
 
 set -euo pipefail
 
@@ -49,7 +52,7 @@ SCRIPT_NAME="$(basename "$0")"
 
 usage() {
     cat <<USAGE
-usage: $SCRIPT_NAME begin  --test-cmd <cmd> (--base <branch> | --file <path> [--file <path>...]) [options]
+usage: $SCRIPT_NAME begin  --test-cmd <cmd> (--base <branch> | --file <path> | --files-from <list>) [options]
        $SCRIPT_NAME run    --session <dir> --name <name> [--description <text>]
        $SCRIPT_NAME finish --session <dir> [--allow-test-artifacts] [--no-final-check]
        $SCRIPT_NAME status --session <dir>
@@ -60,7 +63,7 @@ begin options:
   --file <path>           Target an explicit file. Repeatable. Combines with --base.
   --files-from <listfile> Target every path listed (one per line) in <listfile>.
   --exclude <glob>        Drop resolved targets matching <glob>. Repeatable. Every exclusion
-                          is reported, never silent.
+                          is reported, and so is an --exclude that matches nothing.
   --timeout <seconds>     Per-run timeout. Default 600. A mutation that hangs is restored, not left.
   --session-dir <dir>     Where to keep the backup and artifacts. Must be OUTSIDE the repo.
                           Default: a fresh mktemp dir. Pass this when the reproduction
@@ -74,8 +77,8 @@ begin options:
   --allow-dirty           Proceed with uncommitted changes. The backup still protects them, but
                           you are acknowledging the baseline is not a known-good commit.
   --allow-test-artifacts  Let the suite leave UNTRACKED files (caches, coverage) without failing
-                          the final verification. Tracked-file drift always fails. Also accepted
-                          by 'finish', so a campaign need not be re-run to set it.
+                          verification. Tracked-file drift always fails. Also accepted by
+                          'finish', so a campaign need not be re-run to set it.
 
 run options:
   --session <dir>         Session directory printed by 'begin'.
@@ -98,7 +101,12 @@ usage_error() {
     exit 2
 }
 
-die() { echo "error: $*" >&2; exit "${2:-1}"; }
+die() { echo "error: $1" >&2; exit "${2:-1}"; }
+
+# Placeholder for an empty TSV field. `IFS=$'\t' read` collapses runs of tabs (tab is IFS
+# whitespace), so an genuinely empty column would shift every later field left and silently
+# swallow the mutation's description — which is the deliverable.
+TSV_NONE="-"
 
 # --- shared helpers ---------------------------------------------------------
 
@@ -120,10 +128,9 @@ toplevel_of() {
 
 # The nearest existing ancestor of a path (the path itself if it exists).
 nearest_existing_dir() {
-    local p="$1"
+    local p="$1" parent
     while [ -n "$p" ] && [ ! -d "$p" ]; do
-        local parent
-        parent="$(dirname "$p")"
+        parent="$(dirname -- "$p")"
         if [ "$parent" = "$p" ]; then
             break
         fi
@@ -136,13 +143,13 @@ nearest_existing_dir() {
 # relative inputs alike, from any subdirectory, on any platform.
 repo_relative_path() {
     local f="$1" d b
-    d="$(dirname "$f")"
-    b="$(basename "$f")"
+    d="$(dirname -- "$f")"
+    b="$(basename -- "$f")"
     printf '%s%s' "$( cd "$d" && git rev-parse --show-prefix )" "$b"
 }
 
 # Make a possibly-relative path absolute against a given directory. Handles Windows drive
-# letters so a C:/... path from git is not treated as relative.
+# letters so a C:/... path is not treated as relative.
 absolutize() {
     local p="$1" base="$2"
     case "$p" in
@@ -157,6 +164,43 @@ read_meta() {
         die "session at '$session' is missing meta/$key — not a mutation-test session?"
     fi
     cat "$session/meta/$key"
+}
+
+# `git status --porcelain` honours status.showUntrackedFiles, so a repo configured with `no`
+# would report a tree with untracked files as clean — defeating both the dirty-tree refusal
+# and the drift check. Pin the setting rather than inherit it.
+porcelain() {
+    git -c status.showUntrackedFiles=normal status --porcelain
+}
+
+# Validate a session directory and load its metadata. Refuses a session whose baseline was
+# never proven green: `begin` writes the backup and targets before running the baseline, so
+# an aborted session is a complete-looking session that would produce fabricated verdicts.
+require_session() {
+    local session="$1"
+    if [ ! -d "$session" ]; then
+        die "session directory '$session' does not exist"
+    fi
+    if [ ! -f "$session/targets" ]; then
+        die "'$session' is not a mutation-test session (no targets file)"
+    fi
+    if [ "$(cat "$session/meta/baseline" 2>/dev/null || true)" != "green" ]; then
+        echo "error: session '$session' has no green baseline — 'begin' never got past the" >&2
+        echo "       baseline run, so any result from it would be meaningless." >&2
+        echo "       Start a fresh session. Backups from this one are under $session/backup." >&2
+        exit 3
+    fi
+}
+
+# Refuse a session that belongs to a different repository. A stale --session across agent
+# turns is a plausible mistake and would otherwise produce a confident clean bill of health
+# for a repo the script never looked at.
+require_matching_repo() {
+    local recorded="$1" here
+    here="$(toplevel_of "$PWD")"
+    if [ -n "$here" ] && [ "$here" != "$recorded" ]; then
+        die "this session belongs to '$recorded' but you are in '$here'. Re-run from that repository, or use the right session."
+    fi
 }
 
 # --- running the suite ------------------------------------------------------
@@ -220,6 +264,9 @@ run_with_timeout() {
 #              suite ignored SIGTERM and had to be SIGKILLed. Treating 137 as a plain failure
 #              would file a hang as a catch — the exact false catch this tool exists to find.
 #   harness  — the command could not be invoked at all; nothing about the code was tested.
+#              Note: a runner that returns a failure COUNT as its exit code can land here on a
+#              real catch. The downgrade is to "inconclusive", never to a false verdict, and
+#              the report names the exit code so the ambiguity is visible.
 classify_rc() {
     case "$1" in
         0) echo green;;
@@ -229,16 +276,29 @@ classify_rc() {
     esac
 }
 
-# Pull the first line that looks like a failing assertion out of a suite log, so the report can
-# say WHICH assertion fired. A mutation that trips an unrelated assertion is not coverage of
-# the behaviour it targeted, and a pass/fail column cannot show that.
+# Pull the line that names the failing assertion out of a suite log, so the report can say
+# WHICH assertion fired. A mutation that trips an assertion other than the one it targeted is
+# not coverage of the behaviour it broke, and a pass/fail column cannot show that.
+#
+# Two passes: assertion-shaped lines first, then a broader net. The alternations cover pytest,
+# unittest, jest (● / ✕), vitest (×), mocha, bats (^not ok), go test (--- FAIL:), cargo
+# (lowercase `assertion ... failed`, `panicked at`), xUnit/NUnit (Assert.*), MSBuild
+# (error CSxxxx), and JUnit. Anything unmatched yields the placeholder, which the report
+# renders as "none captured" rather than as "no failure".
 failure_signature() {
     local log="$1" sig=""
     if [ -f "$log" ]; then
-        sig="$(grep -m1 -aE '(FAILED|FAIL:|AssertionError|Assertion.?[Ff]ailed|assert |^not ok|Expected .* (but|to)|Traceback|panic:|error:|ERROR:|✗|✘)' "$log" 2>/dev/null || true)"
+        sig="$(grep -m1 -aE '(AssertionError|[Aa]ssert(ion)?[^[:alnum:]]*(failed|Failed)|Assert\.[A-Za-z]+|^not ok|--- FAIL:|panicked at|Expected[^[:alnum:]]|to (be|equal|have)|●[[:space:]]|✕|✗|✘|×)' "$log" 2>/dev/null || true)"
+        if [ -z "$sig" ]; then
+            sig="$(grep -m1 -aE '(FAILED|FAIL[: ]|Traceback|panic:|error [A-Z]+[0-9]+:|error:|ERROR:)' "$log" 2>/dev/null || true)"
+        fi
     fi
-    # Tabs would corrupt the TSV; pipes would add a column to the report's markdown table.
-    printf '%s' "$sig" | tr '\t\n|' '   ' | sed 's/^[[:space:]]*//' | cut -c1-110
+    sig="$(printf '%s' "$sig" | tr -d '\r' | tr '\t\n|' '   ' | sed 's/^[[:space:]]*//' | cut -c1-110)"
+    if [ -z "$sig" ]; then
+        printf '%s' "$TSV_NONE"
+    else
+        printf '%s' "$sig"
+    fi
 }
 
 # --- restore ----------------------------------------------------------------
@@ -252,13 +312,18 @@ TRAP_REPO_ROOT=""
 # `git checkout -- <path>` would also discard uncommitted work in the same file and leave the
 # campaign looking green, which is exactly the failure this script exists to prevent.
 # Each file is attempted independently — one failure must not abandon the rest mutated.
+#
+# The restored file is touched afterwards: `cp -p` puts back the ORIGINAL mtime, which is
+# older than the artifact an incremental build produced from the mutated source, so make /
+# tsc --incremental / cargo / ccache would skip the rebuild and the next suite would execute
+# the previous mutation's compiled code.
 restore_from_backup() {
     local session="$1" repo_root="$2" rel failed=0
     while IFS= read -r rel; do
         if [ -z "$rel" ]; then
             continue
         fi
-        if ! mkdir -p "$repo_root/$(dirname "$rel")" 2>/dev/null; then
+        if ! mkdir -p "$repo_root/$(dirname -- "$rel")" 2>/dev/null; then
             echo "restore: cannot create directory for '$rel'" >&2
             failed=1
             continue
@@ -266,7 +331,9 @@ restore_from_backup() {
         if ! cp -p "$session/backup/$rel" "$repo_root/$rel" 2>/dev/null; then
             echo "restore: FAILED to restore '$rel'" >&2
             failed=1
+            continue
         fi
+        touch "$repo_root/$rel" 2>/dev/null || true
     done < "$session/targets"
     return "$failed"
 }
@@ -313,6 +380,85 @@ verify_targets_match_backup() {
     return "$drift"
 }
 
+# --- tree drift -------------------------------------------------------------
+
+# Content hashes for tracked files that were already dirty when the reference was taken.
+# `git status --porcelain` reports name+status only, so without this a file already showing
+# ` M` could be rewritten arbitrarily by the campaign and its status line would not change.
+write_dirty_hashes() {
+    local repo_root="$1" out="$2" p
+    : > "$out"
+    while IFS= read -r p; do
+        if [ -n "$p" ] && [ -f "$repo_root/$p" ]; then
+            printf '%s\t%s\n' "$(git -C "$repo_root" hash-object -- "$p")" "$p" >> "$out"
+        fi
+    done < <(git -C "$repo_root" diff --name-only HEAD)
+}
+
+# Compare the working tree against the session reference.
+# Sets DRIFT_TEXT (human-readable) and returns:
+#   0  no drift
+#   1  untracked-only drift (forgivable with --allow-test-artifacts)
+#   2  tracked drift, or the reference itself is missing/unreadable
+DRIFT_TEXT=""
+compare_to_reference() {
+    local session="$1" repo_root="$2" now_file="$3"
+    DRIFT_TEXT=""
+
+    # A missing reference is not "no drift". Swallowing it would let a verification step claim
+    # a fact it never checked.
+    if [ ! -f "$session/porcelain.baseline" ]; then
+        DRIFT_TEXT="reference snapshot $session/porcelain.baseline is missing — nothing can be verified against it"
+        return 2
+    fi
+
+    ( cd "$repo_root" && porcelain ) > "$now_file"
+
+    local delta tracked=0 any=0 line entry
+    delta="$(diff "$session/porcelain.baseline" "$now_file" || true)"
+    if [ -n "$delta" ]; then
+        while IFS= read -r line; do
+            case "$line" in
+                '< '*|'> '*)
+                    entry="${line:2}"
+                    any=1
+                    DRIFT_TEXT="${DRIFT_TEXT}${entry}"$'\n'
+                    case "$entry" in
+                        '?? '*) ;;
+                        *) tracked=1;;
+                    esac;;
+            esac
+        done <<< "$delta"
+    fi
+
+    # Content check for files that were already dirty at reference time.
+    if [ -f "$session/dirty-hashes" ]; then
+        local want have p
+        while IFS=$'\t' read -r want p; do
+            if [ -z "$want" ] || [ -z "$p" ]; then
+                continue
+            fi
+            have=""
+            if [ -f "$repo_root/$p" ]; then
+                have="$(git -C "$repo_root" hash-object -- "$p" 2>/dev/null || true)"
+            fi
+            if [ "$have" != "$want" ]; then
+                any=1
+                tracked=1
+                DRIFT_TEXT="${DRIFT_TEXT}content changed in already-modified tracked file: $p"$'\n'
+            fi
+        done < "$session/dirty-hashes"
+    fi
+
+    if [ "$any" -eq 0 ]; then
+        return 0
+    fi
+    if [ "$tracked" -eq 1 ]; then
+        return 2
+    fi
+    return 1
+}
+
 # --- begin ------------------------------------------------------------------
 
 cmd_begin() {
@@ -332,8 +478,10 @@ cmd_begin() {
                 if [ ! -f "$listfile" ]; then
                     usage_error "--files-from '$listfile' does not exist"
                 fi
-                # `|| [ -n "$line" ]` keeps a final entry that has no trailing newline.
+                # `|| [ -n "$line" ]` keeps a final entry with no trailing newline; the CR strip
+                # makes a CRLF list file (the norm on Windows) work.
                 while IFS= read -r line || [ -n "$line" ]; do
+                    line="$(printf '%s' "$line" | tr -d '\r')"
                     if [ -n "$line" ]; then
                         explicit_files+=("$line")
                     fi
@@ -378,7 +526,7 @@ cmd_begin() {
 
     # A dirty tree means the baseline is not a known-good state: a survivor could be an
     # artifact of uncommitted work rather than of the mutation.
-    if [ -n "$(git status --porcelain)" ]; then
+    if [ -n "$(porcelain)" ]; then
         if [ "$allow_dirty" -eq 0 ]; then
             echo "error: working tree is dirty. Mutation testing assumes a known-good baseline." >&2
             echo "       Commit or discard the changes, or pass --allow-dirty to acknowledge." >&2
@@ -395,13 +543,23 @@ cmd_begin() {
         if ! git rev-parse --verify --quiet "$base" >/dev/null; then
             die "--base '$base' is not a known ref. Fetch it first (git fetch origin $base)."
         fi
-        # -z with core.quotePath=false: otherwise git returns a quoted, octal-escaped path for
-        # any non-ASCII name and the file is silently dropped from the campaign.
+        # Capture to a file rather than a process substitution: `set -e` cannot see a failure
+        # inside <(...), so a real git error (no merge base, shallow clone) would surface as
+        # the misleading "no mutable target files resolved".
+        local diff_out
+        diff_out="$(mktemp)"
+        if ! git -c core.quotePath=false diff --name-only -z "$base...HEAD" > "$diff_out" 2>"$diff_out.err"; then
+            echo "error: 'git diff --name-only $base...HEAD' failed:" >&2
+            cat "$diff_out.err" >&2
+            rm -f "$diff_out" "$diff_out.err"
+            exit 1
+        fi
         while IFS= read -r -d '' f; do
             if [ -n "$f" ]; then
                 candidates+=("$f")
             fi
-        done < <(git -c core.quotePath=false diff --name-only -z "$base...HEAD")
+        done < "$diff_out"
+        rm -f "$diff_out" "$diff_out.err"
     fi
     for f in ${explicit_files[@]+"${explicit_files[@]}"}; do
         local abs
@@ -409,7 +567,7 @@ cmd_begin() {
         if [ ! -e "$abs" ]; then
             die "target '$f' does not exist"
         fi
-        if [ "$(toplevel_of "$(dirname "$abs")")" != "$repo_root" ]; then
+        if [ "$(toplevel_of "$(dirname -- "$abs")")" != "$repo_root" ]; then
             die "target '$f' is outside the repository at $repo_root"
         fi
         candidates+=("$(repo_relative_path "$abs")")
@@ -420,6 +578,7 @@ cmd_begin() {
     # Drop duplicates, non-files, symlinks, and --exclude matches. Every drop is announced:
     # a silent cap reads as "covered everything" when it did not.
     local targets=() c seen dup ex
+    local matched_excludes=""
     for c in ${candidates[@]+"${candidates[@]}"}; do
         dup=0
         for seen in ${targets[@]+"${targets[@]}"}; do
@@ -429,18 +588,26 @@ cmd_begin() {
             fi
         done
         if [ "$dup" -eq 1 ]; then
+            echo "note: '$c' listed more than once — using it once" >&2
             continue
         fi
         dup=0
         for ex in ${excludes[@]+"${excludes[@]}"}; do
             # shellcheck disable=SC2254
             case "$c" in
-                $ex) echo "note: excluding '$c' (matches --exclude '$ex')" >&2; dup=1; break;;
+                $ex)
+                    echo "note: excluding '$c' (matches --exclude '$ex')" >&2
+                    matched_excludes="$matched_excludes|$ex|"
+                    dup=1
+                    break;;
             esac
         done
         if [ "$dup" -eq 1 ]; then
             continue
         fi
+        case "$c" in
+            *$'\n'*) echo "note: skipping a path containing a newline (unsupported)" >&2; continue;;
+        esac
         if [ -L "$repo_root/$c" ]; then
             # cp/cmp both follow links, so a "restore" would write through the link into a file
             # that may live outside the repo and outside the verified set.
@@ -451,11 +618,19 @@ cmd_begin() {
             echo "note: skipping '$c' (not a regular file in the working tree)" >&2
             continue
         fi
-        case "$c" in
+        case "$(basename -- "$c")" in
             *[Tt]est*|*[Ss]pec*|*.md|*.json|*.lock|*.txt|*.snap)
                 echo "note: '$c' looks like a test, doc, or data file — mutating it proves nothing about the change. Use --exclude to drop it." >&2;;
         esac
         targets+=("$c")
+    done
+    # An --exclude that matched nothing is usually a typo, and silently leaving the file in the
+    # campaign is exactly the silent cap this script refuses elsewhere.
+    for ex in ${excludes[@]+"${excludes[@]}"}; do
+        case "$matched_excludes" in
+            *"|$ex|"*) ;;
+            *) echo "note: --exclude '$ex' matched no target" >&2;;
+        esac
     done
     if [ "${#targets[@]}" -eq 0 ]; then
         die "no mutable target files resolved"
@@ -464,24 +639,32 @@ cmd_begin() {
     # The session lives OUTSIDE the repo on purpose: a backup inside the working tree would
     # show up in `git status --porcelain` and corrupt the very check that proves the tree was
     # restored. Check BEFORE creating, so a rejected path leaves nothing behind.
+    local created_session=0
     if [ -n "$session_dir" ]; then
-        local probe
-        probe="$(nearest_existing_dir "$(absolutize "$session_dir" "$invocation_cwd")")"
-        if [ "$(toplevel_of "$probe")" = "$repo_root" ]; then
+        session_dir="$(absolutize "$session_dir" "$invocation_cwd")"
+        if [ "$(toplevel_of "$(nearest_existing_dir "$session_dir")")" = "$repo_root" ]; then
             die "--session-dir must be outside the repository (it would perturb git status)"
         fi
-        session_dir="$(absolutize "$session_dir" "$invocation_cwd")"
         if [ -e "$session_dir/targets" ]; then
             die "'$session_dir' already holds a mutation-test session. Pick a fresh directory — reusing one would re-baseline against whatever is currently on disk."
         fi
-        mkdir -p "$session_dir"
-        chmod 700 "$session_dir" 2>/dev/null || true
+        if [ ! -d "$session_dir" ]; then
+            mkdir -p "$session_dir"
+            created_session=1
+        fi
         session_dir="$(cd "$session_dir" && pwd)"
     else
-        session_dir="$(mktemp -d "${TMPDIR:-/tmp}/mutation-test-XXXXXX")"
-        if [ "$(toplevel_of "$session_dir")" = "$repo_root" ]; then
+        local tmp_parent="${TMPDIR:-/tmp}"
+        if [ "$(toplevel_of "$(nearest_existing_dir "$tmp_parent")")" = "$repo_root" ]; then
             die "TMPDIR resolves inside the repository; pass --session-dir pointing outside it"
         fi
+        session_dir="$(mktemp -d "$tmp_parent/mutation-test-XXXXXX")"
+        created_session=1
+    fi
+    # Only tighten permissions on a directory we made — silently re-moding one the user chose
+    # would be a surprise, and the backup may hold uncommitted source.
+    if [ "$created_session" -eq 1 ]; then
+        chmod 700 "$session_dir" 2>/dev/null || true
     fi
 
     mkdir -p "$session_dir/meta" "$session_dir/backup" "$session_dir/mutations"
@@ -492,13 +675,16 @@ cmd_begin() {
     printf '%s' "$verify_green"    > "$session_dir/meta/verify_green"
     printf '%s' "$allow_artifacts" > "$session_dir/meta/allow_test_artifacts"
     printf '%s' "$base"            > "$session_dir/meta/base"
+    printf '%s' "pending"          > "$session_dir/meta/baseline"
     : > "$session_dir/results.tsv"
 
     local t
     printf '%s\n' "${targets[@]}" > "$session_dir/targets"
     for t in "${targets[@]}"; do
-        mkdir -p "$session_dir/backup/$(dirname "$t")"
-        cp -p "$repo_root/$t" "$session_dir/backup/$t"
+        mkdir -p "$session_dir/backup/$(dirname -- "$t")"
+        if ! cp -p "$repo_root/$t" "$session_dir/backup/$t"; then
+            die "could not back up '$t' — refusing to mutate a file that cannot be restored"
+        fi
     done
 
     # Print the session before the baseline runs: on a red baseline the backup already exists,
@@ -512,27 +698,53 @@ cmd_begin() {
     local rc=0
     run_with_timeout "$timeout_secs" "$test_cmd" "$session_dir/baseline.log" || rc=$?
     if [ "$rc" -ne 0 ]; then
-        case "$(classify_rc "$rc")" in
-            timedout) echo "error: baseline suite did not finish within ${timeout_secs}s. Raise --timeout or speed up the suite." >&2;;
-            harness)  echo "error: baseline test command could not be run (exit $rc). Check --test-cmd." >&2;;
-            *)        echo "error: baseline suite is not green (exit $rc). Fix the suite before mutating." >&2;;
+        local kind
+        kind="$(classify_rc "$rc")"
+        case "$kind" in
+            timedout)
+                echo "error: baseline suite did not finish within ${timeout_secs}s. Raise --timeout or speed up the suite." >&2
+                echo "BASELINE=timeout";;
+            harness)
+                echo "error: baseline test command could not be run (exit $rc). Check --test-cmd." >&2
+                echo "BASELINE=harness";;
+            *)
+                echo "error: baseline suite is not green (exit $rc). Fix the suite before mutating." >&2
+                echo "BASELINE=red";;
         esac
         echo "       Output: $session_dir/baseline.log" >&2
         tail -20 "$session_dir/baseline.log" >&2 || true
-        echo "BASELINE=red"
         exit 3
     fi
 
-    # Snapshot porcelain AFTER the baseline run, so caches and coverage files the suite itself
-    # creates are part of the reference state rather than drift attributed to the campaign.
-    git status --porcelain > "$session_dir/porcelain.baseline"
+    # Record the reference tree state AFTER the baseline run, so caches and coverage files the
+    # suite itself creates are part of the reference rather than drift attributed to the
+    # campaign. The hash list covers tracked files that are already dirty, whose porcelain
+    # status line would not change even if their content did.
+    ( cd "$repo_root" && porcelain ) > "$session_dir/porcelain.baseline"
+    write_dirty_hashes "$repo_root" "$session_dir/dirty-hashes"
 
+    printf '%s' "green" > "$session_dir/meta/baseline"
     echo "BASELINE=green"
 }
 
 # --- run --------------------------------------------------------------------
 
 cmd_run() {
+    # Pre-scan for --session so the restore trap is armed before ANY validation that can exit.
+    # The caller mutated the tree before calling us; an unknown flag or a missing value must
+    # not be the reason a mutation ships.
+    local pre_session="" i argc=$#
+    local argv=("$@")
+    for (( i=0; i<argc; i++ )); do
+        if [ "${argv[$i]}" = "--session" ] && [ $((i+1)) -lt "$argc" ]; then
+            pre_session="$(absolutize "${argv[$((i+1))]}" "$PWD")"
+            break
+        fi
+    done
+    if [ -n "$pre_session" ] && [ -f "$pre_session/targets" ] && [ -f "$pre_session/meta/repo_root" ]; then
+        arm_restore_trap "$pre_session" "$(cat "$pre_session/meta/repo_root")"
+    fi
+
     local session="" name="" description=""
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -547,30 +759,27 @@ cmd_run() {
     if [ -z "$session" ]; then
         usage_error "--session is required"
     fi
-    if [ ! -d "$session" ]; then
-        die "session directory '$session' does not exist"
-    fi
-    if [ ! -f "$session/targets" ]; then
-        die "'$session' is not a mutation-test session (no targets file)"
-    fi
+    # Absolutize BEFORE any cd: a relative session path would otherwise resolve against the
+    # repo root once we move there, and could even name a different directory.
+    session="$(absolutize "$session" "$PWD")"
+    require_session "$session"
 
-    local repo_root test_cmd timeout_secs rerun_caught verify_green
+    local repo_root test_cmd timeout_secs rerun_caught verify_green allow_artifacts
     repo_root="$(read_meta "$session" repo_root)"
     test_cmd="$(read_meta "$session" test_cmd)"
     timeout_secs="$(read_meta "$session" timeout)"
     rerun_caught="$(read_meta "$session" rerun_caught)"
     verify_green="$(read_meta "$session" verify_green)"
+    allow_artifacts="$(read_meta "$session" allow_test_artifacts)"
     if [ ! -d "$repo_root" ]; then
         die "recorded repo root '$repo_root' no longer exists"
     fi
     if [ "$(toplevel_of "$repo_root")" != "$repo_root" ]; then
         die "recorded repo root '$repo_root' is no longer a git repository"
     fi
-    cd "$repo_root"
-
-    # The caller mutated the tree BEFORE calling us, so arm the restore now — every validation
-    # below this line can fail, and none of them may leave a mutation behind.
+    require_matching_repo "$repo_root"
     arm_restore_trap "$session" "$repo_root"
+    cd "$repo_root"
 
     if [ -z "$name" ]; then
         usage_error "--name is required"
@@ -584,10 +793,10 @@ cmd_run() {
     fi
     # results.tsv is tab-delimited and the report is a markdown table: a tab, newline, or pipe
     # in the description would corrupt one or the other.
-    description="$(printf '%s' "$description" | tr '\t\n|' '   ')"
+    description="$(printf '%s' "$description" | tr -d '\r' | tr '\t\n|' '   ')"
 
     if [ -d "$session/mutations/$name" ] \
-        || { [ -f "$session/results.tsv" ] && cut -f1 "$session/results.tsv" | grep -Fxq -- "$name"; }; then
+        || awk -F'\t' -v n="$name" '$1 == n { found = 1 } END { exit !found }' "$session/results.tsv"; then
         die "a mutation named '$name' already exists in this session" 2
     fi
 
@@ -614,14 +823,13 @@ cmd_run() {
     # Preserve the mutated sources and a readable diff before running anything, so the
     # reproduction survives even a crash mid-suite.
     for rel in "${mutated[@]}"; do
-        mkdir -p "$mut_dir/files/$(dirname "$rel")"
+        mkdir -p "$mut_dir/files/$(dirname -- "$rel")"
         cp -p "$repo_root/$rel" "$mut_dir/files/$rel"
     done
     : > "$mut_dir/mutation.patch"
     for rel in "${mutated[@]}"; do
         diff -u "$session/backup/$rel" "$repo_root/$rel" >> "$mut_dir/mutation.patch" || true
     done
-    printf '%s' "$description" > "$mut_dir/description"
 
     {
         echo "#!/usr/bin/env bash"
@@ -646,7 +854,7 @@ cmd_run() {
     ended="$(date +%s)"
     elapsed=$((ended - started))
 
-    local first result rc2=0 second=""
+    local first result rc2=0 second="" deciding_log="$mut_dir/test.log"
     first="$(classify_rc "$rc")"
     case "$first" in
         green)
@@ -659,10 +867,11 @@ cmd_run() {
             echo "note: mutation '$name' timed out after ${timeout_secs}s — re-running once." >&2
             run_with_timeout "$timeout_secs" "$test_cmd" "$mut_dir/test.rerun.log" || rc2=$?
             second="$(classify_rc "$rc2")"
+            deciding_log="$mut_dir/test.rerun.log"
             if [ "$second" = "timedout" ]; then
                 result="timeout"
             else
-                # First run never finished, so neither outcome is proven either way.
+                # The first run never finished, so neither outcome is proven either way.
                 result="flaky"
             fi;;
         red)
@@ -678,14 +887,20 @@ cmd_run() {
             fi;;
     esac
 
-    local signature=""
+    local signature="$TSV_NONE"
     if [ "$result" = "caught" ] || [ "$result" = "flaky" ] || [ "$result" = "error" ]; then
-        signature="$(failure_signature "$mut_dir/test.log")"
+        signature="$(failure_signature "$deciding_log")"
     fi
 
-    # Restore, then prove it worked, and only then record. The trap stays armed throughout;
-    # trap_restore disarms itself once the copy-back has happened.
+    # Restore, then prove it worked. The trap stays armed throughout; trap_restore disarms
+    # itself once the copy-back has happened.
     trap_restore
+
+    # Record the observed result BEFORE any further check can abort: the suite ran and was
+    # classified, and discarding that would be exactly the silent omission this tool exists
+    # to prevent.
+    printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$result" "$elapsed" "$signature" "$description" \
+        >> "$session/results.tsv"
 
     local drift
     if ! drift="$(verify_targets_match_backup "$session" "$repo_root")"; then
@@ -699,11 +914,25 @@ cmd_run() {
         exit 5
     fi
 
-    printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$result" "$elapsed" "$signature" "$description" \
-        >> "$session/results.tsv"
     echo "RESULT=$result"
     echo "SECONDS=$elapsed"
     echo "RESTORED=yes"
+
+    # Nothing outside the target set may have changed. Those files are not backed up and will
+    # not be restored, so a verdict computed against them describes a tree nobody intended.
+    # Checked AFTER the restore, so the mutation's own edits are back to the reference and any
+    # remaining drift is either the caller editing a non-target or the suite writing one.
+    local state=0
+    compare_to_reference "$session" "$repo_root" "$session/porcelain.run" || state=$?
+    if [ "$state" -eq 2 ] || { [ "$state" -eq 1 ] && [ "$allow_artifacts" -eq 0 ]; }; then
+        echo "error: the working tree changed outside the target set during '$name':" >&2
+        printf '%s' "$DRIFT_TEXT" | sed 's/^/  /' >&2
+        echo "       Only files listed in $session/targets are backed up and restored, so the" >&2
+        echo "       result above was measured against a tree that is not the reference." >&2
+        echo "       Revert the change (or re-run 'begin' with --allow-test-artifacts if these" >&2
+        echo "       are test artifacts) before continuing the campaign." >&2
+        exit 5
+    fi
 
     # "Green again before the next mutation, so failures cannot cascade."
     if [ "$verify_green" -eq 1 ]; then
@@ -713,9 +942,10 @@ cmd_run() {
             echo "GREEN_AGAIN=yes"
         else
             echo "GREEN_AGAIN=no"
-            echo "error: the suite is not green after restoring '$name' (exit $grc)." >&2
-            echo "       Later results would cascade from this. Output: $mut_dir/green.log" >&2
-            exit 5
+            echo "error: the tree was restored byte-identically, but the suite is not green" >&2
+            echo "       after '$name' (exit $grc). Later results would cascade from this." >&2
+            echo "       Output: $mut_dir/green.log" >&2
+            exit 6
         fi
     fi
 }
@@ -723,17 +953,25 @@ cmd_run() {
 # --- report -----------------------------------------------------------------
 
 render_report() {
-    local session="$1"
-    local repo_root test_cmd rerun_caught base
+    local session="$1" banner="$2"
+    local repo_root test_cmd rerun_caught verify_green base
     repo_root="$(read_meta "$session" repo_root)"
     test_cmd="$(read_meta "$session" test_cmd)"
     rerun_caught="$(read_meta "$session" rerun_caught)"
+    verify_green="$(read_meta "$session" verify_green)"
     base="$(read_meta "$session" base)"
 
     local total=0 caught=0 survived=0 flaky=0 timedout=0 errored=0
-    local name result elapsed signature description
+    local name result elapsed signature description shown
     echo "# Mutation test report"
     echo
+    if [ -n "$banner" ]; then
+        echo "> **$banner**"
+        echo ">"
+        echo "> Every verdict below came from a campaign whose final state could not be proven."
+        echo "> Treat the whole table as inconclusive until the tree is reconciled."
+        echo
+    fi
     echo "- Repository: \`$repo_root\`"
     if [ -n "$base" ]; then
         echo "- Base: \`$base\`"
@@ -756,7 +994,15 @@ render_report() {
             timeout) timedout=$((timedout + 1));;
             error) errored=$((errored + 1));;
         esac
-        echo "| \`$name\` | $result | $elapsed | ${signature:-—} | $description |"
+        if [ "$signature" = "$TSV_NONE" ]; then
+            case "$result" in
+                caught|flaky|error) shown="_none captured_";;
+                *) shown="—";;
+            esac
+        else
+            shown="$signature"
+        fi
+        echo "| \`$name\` | $result | $elapsed | $shown | $description |"
     done < "$session/results.tsv"
     if [ "$total" -eq 0 ]; then
         echo "| _(none yet)_ | | | | |"
@@ -772,18 +1018,23 @@ render_report() {
             if [ -z "$name" ]; then
                 continue
             fi
+            if [ "$signature" = "$TSV_NONE" ]; then
+                signature="none captured"
+            fi
             case "$result" in
                 survived)
                     echo "- **\`$name\` survived** — $description"
                     echo "  The suite passed against this break. Either a test is missing, or the"
                     echo "  behaviour is genuinely untestable at this layer and the honest outcome is a"
                     echo "  documented gap rather than a new test."
-                    echo "  Reproduce: \`bash $(printf '%q' "$session/mutations/$name/repro.sh")\` (re-applies the mutation and leaves the tree broken; restore with the \`cp\` line in its header)";;
+                    echo "  Reproduce: \`bash $(printf '%q' "$session/mutations/$name/repro.sh")\` (re-applies the mutation and leaves the tree broken; restore with the \`cp\` line in its header)"
+                    echo "  Diff: \`$session/mutations/$name/mutation.patch\`";;
                 flaky)
                     echo "- **\`$name\` was flaky — inconclusive** — $description"
                     echo "  The two runs disagreed, so the outcome is not attributable to the break."
-                    echo "  Treat as unproven, not as a catch. Signal: ${signature:-none captured}"
-                    echo "  Reproduce: \`bash $(printf '%q' "$session/mutations/$name/repro.sh")\`";;
+                    echo "  Treat as unproven, not as a catch. Signal: $signature"
+                    echo "  Reproduce: \`bash $(printf '%q' "$session/mutations/$name/repro.sh")\`"
+                    echo "  Logs: \`$session/mutations/$name/test.log\`, \`$session/mutations/$name/test.rerun.log\`";;
                 timeout)
                     echo "- **\`$name\` timed out — inconclusive** — $description"
                     echo "  The suite never finished on either attempt, so nothing was proven."
@@ -791,15 +1042,16 @@ render_report() {
                 error)
                     echo "- **\`$name\` could not be run — inconclusive** — $description"
                     echo "  The test command itself failed to execute, so the code was never tested."
-                    echo "  Signal: ${signature:-none captured}. Log: \`$session/mutations/$name/test.log\`";;
+                    echo "  Signal: $signature. Log: \`$session/mutations/$name/test.log\`";;
             esac
         done < "$session/results.tsv"
         echo
     fi
 
     if [ "$caught" -gt 0 ]; then
-        echo "> Check the failure signal on each caught row. A mutation that trips an assertion"
-        echo "> *other* than the one it targeted is not coverage of the behaviour it broke."
+        echo "> Check the failure signal on each caught row against the behaviour the mutation"
+        echo "> targeted — a mutation that trips a *different* assertion is not coverage of what"
+        echo "> it broke. Full output is in \`$session/mutations/<name>/test.log\`."
         echo
     fi
     if [ "$total" -gt 0 ] && [ "$caught" -eq 0 ] && [ "$survived" -gt 0 ]; then
@@ -812,6 +1064,12 @@ render_report() {
     if [ "$rerun_caught" -eq 0 ] && [ "$caught" -gt 0 ]; then
         echo "> Caught results were not re-confirmed (\`--rerun-caught\` was off). On a suite with"
         echo "> known intermittency a flaky failure reads as a catch and hides a survivor."
+        echo
+    fi
+    if [ "$verify_green" -eq 0 ] && [ "$total" -gt 1 ]; then
+        echo "> The suite was not re-run between mutations (\`--verify-green\` was off), so a"
+        echo "> failure introduced by one mutation could in principle cascade into later rows."
+        echo "> The closing check below covers the campaign as a whole, not each step."
         echo
     fi
 }
@@ -832,14 +1090,8 @@ cmd_finish() {
     if [ -z "$session" ]; then
         usage_error "--session is required"
     fi
-    if [ ! -d "$session" ]; then
-        die "session directory '$session' does not exist"
-    fi
-    if [ ! -f "$session/targets" ]; then
-        die "'$session' is not a mutation-test session (no targets file)"
-    fi
-
-    render_report "$session"
+    session="$(absolutize "$session" "$PWD")"
+    require_session "$session"
 
     local repo_root test_cmd timeout_secs allow_artifacts
     repo_root="$(read_meta "$session" repo_root)"
@@ -849,15 +1101,38 @@ cmd_finish() {
     if [ -n "$allow_override" ]; then
         allow_artifacts=1
     fi
+    require_matching_repo "$repo_root"
 
-    # Final verification. This is the step people drop, and dropping it is how a mutation ships.
+    # Verify FIRST, so the report can be banner-marked if its verdicts came from a campaign
+    # whose end state cannot be proven. "Any step unverified => inconclusive" has to reach the
+    # table, not just a line underneath it.
+    local files_ok=1 drift rel
+    if ! drift="$(verify_targets_match_backup "$session" "$repo_root")"; then
+        files_ok=0
+    fi
+    local state=0
+    compare_to_reference "$session" "$repo_root" "$session/porcelain.final" || state=$?
+
+    local verified=""
+    if [ "$files_ok" -eq 1 ] && [ "$state" -eq 0 ]; then
+        verified="yes"
+    elif [ "$files_ok" -eq 1 ] && [ "$state" -eq 1 ] && [ "$allow_artifacts" -eq 1 ]; then
+        verified="partial"
+    else
+        verified="no"
+    fi
+
+    local banner=""
+    if [ "$verified" = "no" ]; then
+        banner="UNVERIFIED — the working tree could not be proven to match the reference"
+    fi
+    render_report "$session" "$banner"
+
     echo "## Tree verification"
     echo
-    local files_ok=1 porcelain_ok=1 tracked_drift=0 drift rel
-    if drift="$(verify_targets_match_backup "$session" "$repo_root")"; then
+    if [ "$files_ok" -eq 1 ]; then
         echo "- Target files byte-identical to backup: **yes** (\`cmp\` per file)"
     else
-        files_ok=0
         echo "- Target files byte-identical to backup: **NO**"
         while IFS= read -r rel; do
             if [ -n "$rel" ]; then
@@ -865,74 +1140,58 @@ cmd_finish() {
             fi
         done <<< "$drift"
     fi
-
-    ( cd "$repo_root" && git status --porcelain ) > "$session/porcelain.final"
-    local delta
-    delta="$(diff "$session/porcelain.baseline" "$session/porcelain.final" || true)"
-    if [ -z "$delta" ]; then
-        echo "- \`git status --porcelain\` unchanged: **yes**"
-    else
-        porcelain_ok=0
-        echo "- \`git status --porcelain\` unchanged: **NO**"
-        # Only untracked ('??') entries can be forgiven as test artifacts. Anything else is a
-        # tracked file the campaign altered, which is exactly what must never be waved through.
-        local entry
-        while IFS= read -r rel; do
-            case "$rel" in
-                '< '*|'> '*)
-                    entry="${rel:2}"
-                    echo "  - \`$entry\`"
-                    case "$entry" in
-                        '?? '*) ;;
-                        *) tracked_drift=1;;
-                    esac;;
-            esac
-        done <<< "$delta"
+    case "$state" in
+        0) echo "- Rest of the working tree unchanged: **yes**";;
+        1) echo "- Rest of the working tree unchanged: **untracked-only drift**";;
+        *) echo "- Rest of the working tree unchanged: **NO**";;
+    esac
+    if [ -n "$DRIFT_TEXT" ]; then
+        printf '%s' "$DRIFT_TEXT" | sed 's/^/  - `/; s/$/`/'
     fi
     echo
-
-    local verified=""
-    if [ "$files_ok" -eq 1 ] && [ "$porcelain_ok" -eq 1 ]; then
-        verified="yes"
-    elif [ "$files_ok" -eq 1 ] && [ "$allow_artifacts" -eq 1 ] && [ "$tracked_drift" -eq 0 ]; then
-        verified="partial"
-    else
-        verified="no"
-    fi
+    echo "TREE_VERIFIED=$verified"
 
     # A closing suite run: byte-identical files prove the restore, this proves the tree the
-    # user is left with is actually green, so nothing cascades out of the campaign.
+    # user is left with is actually green, so nothing cascades out of the campaign. It is
+    # reported INDEPENDENTLY of TREE_VERIFIED — a red suite on a provably restored tree is an
+    # environment problem, not a restore problem, and telling the user to restore would send
+    # them chasing something that is not broken.
+    local suite_ok=1
     if [ "$final_check" -eq 1 ] && [ "$verified" != "no" ]; then
         local frc=0
         run_with_timeout "$timeout_secs" "$test_cmd" "$session/final.log" || frc=$?
         if [ "$frc" -eq 0 ]; then
-            echo "- Suite green again after the campaign: **yes**"
             echo "FINAL_SUITE=green"
         else
-            echo "- Suite green again after the campaign: **NO** (exit $frc, \`$session/final.log\`)"
+            suite_ok=0
             echo "FINAL_SUITE=red"
-            verified="no"
         fi
+    elif [ "$final_check" -eq 0 ]; then
+        echo "FINAL_SUITE=skipped-by-request"
     else
-        echo "FINAL_SUITE=skipped"
+        echo "FINAL_SUITE=skipped-tree-unverified"
     fi
     echo
 
-    echo "TREE_VERIFIED=$verified"
     case "$verified" in
-        yes)
-            echo
+        yes|partial)
+            if [ "$verified" = "partial" ]; then
+                echo "Target files are byte-identical and no TRACKED file drifted; untracked test"
+                echo "artifacts were forgiven by --allow-test-artifacts."
+            fi
+            if [ "$suite_ok" -eq 0 ]; then
+                echo "The tree IS restored — do not restore anything. The suite is nonetheless red"
+                echo "(\`$session/final.log\`), which points at the environment rather than at this"
+                echo "campaign. Investigate before trusting the results above."
+            fi
             echo "Session artifacts (backups, mutated sources, repro scripts) live in \`$session\`."
-            echo "They are needed by every \`Reproduce:\` command above. Delete with: rm -rf \"$session\""
-            return 0;;
-        partial)
-            echo
-            echo "Target files are byte-identical and no TRACKED file drifted; untracked test"
-            echo "artifacts were forgiven by --allow-test-artifacts."
-            echo "Session artifacts live in \`$session\`. Delete with: rm -rf \"$session\""
+            echo "They are needed by every \`Reproduce:\` command above; the default location is"
+            echo "temporary. Delete with: rm -rf \"$session\""
+            if [ "$suite_ok" -eq 0 ]; then
+                return 6
+            fi
             return 0;;
         *)
-            echo
             echo "Restore manually by copying from the backup — never \`git checkout --\`:"
             echo "  cp \"$session/backup/<path>\" \"$repo_root/<path>\""
             return 5;;
@@ -951,15 +1210,11 @@ cmd_status() {
     if [ -z "$session" ]; then
         usage_error "--session is required"
     fi
-    if [ ! -d "$session" ]; then
-        die "session directory '$session' does not exist"
-    fi
-    if [ ! -f "$session/targets" ]; then
-        die "'$session' is not a mutation-test session (no targets file)"
-    fi
-    render_report "$session"
+    session="$(absolutize "$session" "$PWD")"
+    require_session "$session"
+    render_report "$session" ""
     # Deliberately not TREE_VERIFIED=... — `status` verifies nothing, and emitting that key
-    # with a fourth value invites a consumer to treat an unverified campaign as a verified one.
+    # with an extra value invites a consumer to treat an unverified campaign as a verified one.
     echo "VERIFICATION=not-run"
 }
 
@@ -972,7 +1227,10 @@ SUBCOMMAND="$1"; shift
 case "$SUBCOMMAND" in
     begin) cmd_begin "$@";;
     run) cmd_run "$@";;
-    finish) rc=0; cmd_finish "$@" || rc=$?; exit "$rc";;
+    # Called plainly so `set -e` stays in force inside the function: putting it on the left of
+    # `||` would silence every unchecked failure in the one verb whose job is proving things.
+    # errexit propagates its `return 5` / `return 6` as the script's exit code.
+    finish) cmd_finish "$@";;
     status) cmd_status "$@";;
     -h|--help) usage; exit 0;;
     *) usage_error "unknown subcommand: $SUBCOMMAND";;
