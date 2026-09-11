@@ -10,6 +10,10 @@ name: test-deep-review-scripts
 # minutes. macOS is in the matrix deliberately: it ships bash 3.2, which is the
 # floor resolve-pr.sh targets and the reason the file avoids `${var,,}`,
 # `mapfile` and associative arrays. Nothing else in CI proves that claim.
+#
+# The second job below puts the (much faster) workitem-read suite on Windows,
+# where that script's encoding and interpreter-resolution logic actually has to
+# hold. See its comment for why the resolver suite is not there with it.
 on:
   pull_request:
     paths:
@@ -36,19 +40,38 @@ jobs:
         run: bash --version | head -n 1
       - name: resolve-pr.sh syntax check
         run: bash -n plugins/deep-review/scripts/resolve-pr.sh
+      # No `if [ -f ... ]` guard on these two. The guards existed only while the
+      # files were landing on another branch; kept past that they would turn a
+      # rename or an accidental deletion of the suite into a silently green job.
       - name: workitem-read.sh syntax check
-        run: |
-          if [ -f plugins/deep-review/scripts/workitem-read.sh ]; then
-            bash -n plugins/deep-review/scripts/workitem-read.sh
-          else
-            echo "workitem-read.sh not on this branch yet - skipping"
-          fi
+        run: bash -n plugins/deep-review/scripts/workitem-read.sh
       - name: resolve-pr smoke test
         run: bash plugins/deep-review/scripts/test_resolve-pr.sh
       - name: workitem-read smoke test
-        run: |
-          if [ -f plugins/deep-review/scripts/test_workitem-read.sh ]; then
-            bash plugins/deep-review/scripts/test_workitem-read.sh
-          else
-            echo "test_workitem-read.sh not on this branch yet - skipping"
-          fi
+        run: bash plugins/deep-review/scripts/test_workitem-read.sh
+
+  # Windows gets its own job running ONLY the workitem-read suite. Every
+  # Windows-specific rationale in that script — `az` writing cp1252 on its
+  # stdout, `python3` resolving to a Store alias that exists on PATH but does
+  # not run — was unreachable while CI was Linux and macOS only, and those are
+  # exactly the branches a stub cannot fully stand in for.
+  #
+  # Deliberately NOT the resolve-pr suite: the header above records that it
+  # takes about an hour under Git Bash, where fork cost dominates. Putting it on
+  # a Windows runner would trade a real signal for a guaranteed timeout.
+  workitem-read-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash   # Git Bash, which is what a developer here actually uses
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash version (recorded, not asserted)
+        run: bash --version | head -n 1
+      - name: interpreter resolution (recorded, not asserted)
+        run: command -v python3 python py || true
+      - name: workitem-read.sh syntax check
+        run: bash -n plugins/deep-review/scripts/workitem-read.sh
+      - name: workitem-read smoke test
+        run: bash plugins/deep-review/scripts/test_workitem-read.sh
