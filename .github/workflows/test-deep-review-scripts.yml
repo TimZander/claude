@@ -18,6 +18,11 @@ on:
   pull_request:
     paths:
       - "plugins/deep-review/scripts/**"
+      # The command file describes the reader's output contract — the fence
+      # markers, the empty-field sentinel, the section labels. A doc-side edit
+      # that drifts from the script is exactly the failure the suite can catch,
+      # so it has to be able to run.
+      - "plugins/deep-review/commands/**"
       - ".github/workflows/test-deep-review-scripts.yml"
   push:
     branches: [main]
@@ -50,11 +55,12 @@ jobs:
       - name: workitem-read smoke test
         run: bash plugins/deep-review/scripts/test_workitem-read.sh
 
-  # Windows gets its own job running ONLY the workitem-read suite. Every
-  # Windows-specific rationale in that script — `az` writing cp1252 on its
-  # stdout, `python3` resolving to a Store alias that exists on PATH but does
-  # not run — was unreachable while CI was Linux and macOS only, and those are
-  # exactly the branches a stub cannot fully stand in for.
+  # Windows gets its own job running ONLY the workitem-read suite. What it
+  # genuinely proves is real interpreter resolution — `python3` on PATH as a
+  # Store alias that exists but does not run, and the `py -3` fallback — plus
+  # Git Bash path and mktemp behaviour. The cp1252 decode path stays
+  # stub-simulated here as it is everywhere else; a stub cannot make the real
+  # `az` write a legacy code page.
   #
   # Deliberately NOT the resolve-pr suite: the header above records that it
   # takes about an hour under Git Bash, where fork cost dominates. Putting it on
