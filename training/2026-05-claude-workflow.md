@@ -308,6 +308,7 @@ If you're new to Claude Code and want to try this style:
 ## About this document
 
 **Written:** May 2026
+**Published:** October 2026 (content is a May 2026 snapshot; not updated for later changes)
 **Author:** Tim Zander
 **Status:** Public blog post adapted from a team training session
 
