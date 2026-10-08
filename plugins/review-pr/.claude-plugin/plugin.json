@@ -1,0 +1,7 @@
+{
+  "name": "review-pr",
+  "description": "End-to-end Azure DevOps pull request review: summarize, delegate the critical review to deep-review, then post selected findings as inline comments and cast a vote — only after you confirm",
+  "author": {
+    "name": "Tim Zander"
+  }
+}

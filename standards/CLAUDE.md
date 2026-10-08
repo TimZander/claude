@@ -31,6 +31,10 @@ standards, then have each developer re-run the sync script.
 - Always use explicit types instead of `var` unless the type is immediately obvious from the right side of the assignment
 - Use `string.Empty` instead of `""`
 - Prefix private fields with `_` and use camelCase (e.g., `_connectionString`, `_logger`)
+- **Use the most restrictive accessibility that satisfies the requirement** — don't reach for `public` by habit; widen a member's visibility only when a caller actually needs it
+- **Prefer immutable properties:** use `{ get; }` or `{ get; init; }` for values set at construction and not changed afterward; use `private set` when the type mutates the value internally; reserve `public set` for properties external callers must genuinely reassign
+- **Prefer `record` types for immutable data** — DTOs, value objects, and result/config models — for init-only properties and value equality. Keep `class` for types with identity or mutable state — e.g. persistence/ORM entities, where value-equality semantics break change tracking
+- **Exception — serialization/binding types:** types materialized by a serializer, ORM, or model binder (System.Text.Json, ASP.NET model binding) may expose whatever setters those frameworks require — don't fight the framework to satisfy these rules
 
 ## Unit Test Standards
 
@@ -172,7 +176,20 @@ These standards and skills (`plugins/`) are configured for the Claude Code toolc
   ```
   The single-quoted `'ENDOFBODY'` delimiter prevents shell expansion. Use a unique delimiter (`ENDOFBODY`, not `EOF`) to avoid early termination if the content itself contains shell examples with `EOF`. When a tool genuinely requires a file path (e.g., `--body-file`, `@file`), combine the file write and the consuming command in a single Bash call to avoid a separate permission prompt for the write.
 - If a particular external tool or workflow pattern is used repeatedly across multiple sessions, suggest creating a skill to wrap the common usage
+- **Don't capture command output with shell redirection (`>`, `>>`).** The team allowlist auto-approves read-only commands (`git log`, `git diff`, `gh pr view`, …), but redirection defeats that two ways: it forces a permission prompt (Claude Code's compound-command splitting recognizes `&&`/`||`/`;`/`|`/`|&`/`&`/newlines but **not** redirection, and its handling of a redirect under a prefix allow rule is undocumented), and a stray `cmd > path` can silently overwrite a real file. Use a redirect-free alternative instead:
+  - **Prefer the core `Read`/`Grep`/`Glob` tools** over shelling out and redirecting output to a file to search later — this is the primary alternative. The allowlist intentionally does *not* auto-approve bare read utilities (`grep`, `head`, `tail`, `cat`), because as `Bash` prefixes they can read any file on the system; the core tools cover the same need and are the sanctioned path.
+  - **Pipe directly to the consumer** (`git log --oneline | grep fix`) rather than redirecting to a file. The consumer segment may still prompt, but piping never overwrites a file the way `>` can — the overwrite is the risk redirection uniquely adds.
+  - **Use the `Write` tool** (intentionally permission-gated) for scratch files you need to keep, not `cmd > file`. See **Pasted Log Handling** below.
 - **ADO MCP: always resolve repository GUIDs before creating PRs.** `repo_create_pull_request` requires a repository GUID for `repositoryId` — passing a name or `Project/Name` produces misleading errors. Call `repo_get_repo_by_name_or_id` first to resolve the name to a GUID.
+- **ADO MCP: always pass `project` to `wit_*` and `repo_*` tools.** The `project` parameter is optional on most ADO MCP tools, but omitting it triggers an interactive project-picker prompt that interrupts the flow. Parse the project name from `git remote -v` and pass it explicitly. The project is the first path segment after the org in both URL formats: `https://dev.azure.com/<org>/<project>/_git/<repo>` → `<project>`, and `https://<org>.visualstudio.com/<project>/_git/<repo>` → `<project>` (URL-decode `%20` and similar). If the current working directory is not an ADO-hosted repo, ask the user once and reuse the answer for the rest of the session.
+
+## Working Safely Within the Allowlist
+
+The team allowlist (`standards/settings.json`) auto-approves only read-only, non-mutating commands, so most routine work runs without interruption. That guarantee only holds if the agent constructs commands in good faith — the allowlist controls *what* auto-runs, not *how* a command is shaped. Three rules keep the workflow both smooth and safe:
+
+- **Never engineer around a permission prompt.** A prompt is a safety checkpoint the user relies on, not an obstacle to route around. Do not split, reorder, obfuscate, base64/hex-encode, alias, or otherwise reshape a command to dodge the matcher or suppress a prompt. If an action needs approval, run it plainly and let it prompt — the user decides. Wanting to avoid an interruption is never a reason to disguise what a command does. (This is also why command chaining matters: Claude Code splits compound commands and prompts if *any* segment is unapproved — do not treat that as friction to be avoided.)
+- **Read with least privilege.** Prefer the core `Read`/`Grep`/`Glob` tools (the sanctioned, workspace-oriented path) over shelling out to `grep`/`cat`/`head`/`tail`. When you must shell out, scope to the repository or working tree — do not `grep -r /`, and do not use `git grep --no-index` or `git diff --no-index` to reach files outside the repo. Read only what the task actually needs; breadth of access is a liability, not a convenience.
+- **Never move sensitive data across the read→network boundary.** Reading a file into context is safe; sending its contents outward is the risk the allowlist cannot police for you. Do not pipe or pass output that may contain secrets, tokens, connection strings, or PII into a network or publish command (`curl`, `gh api`, `az rest`, `az devops invoke`, webhooks, or any MCP write tool). Discovering a credential raises your caution level — it is never an input to your next command. (See **Secret Handling** below.)
 
 ## Pasted Log Handling
 
@@ -214,6 +231,18 @@ When a deployment, infrastructure operation, or third-party integration fails wi
 - **Search for known issues first.** Before diagnosing further, search GitHub issues, Stack Overflow, and vendor docs for the exact error message or platform/version combination. This takes seconds and often surfaces known bugs or unsupported configurations.
 - **State your confidence level.** If speculating about a root cause, say so explicitly rather than presenting it as a conclusion. "I suspect X but haven't confirmed" is better than "X is the issue."
 - **Ask: could this be a known limitation?** Especially with preview/new runtime versions, unsupported plan types, or region availability — these are commonly documented in vendor issue trackers.
+
+### Separate the failure from whatever escalated it
+
+A build or test command often fails on a condition that is only fatal because a project setting made it fatal. Read the whole error line rather than just the message: `error NU1900: Warning As Error: ...` is a **warning** that something promoted.
+
+This is the usual reason the "don't retry with variations" rule gets violated — each new flag targets the underlying condition, while the escalation that actually stopped the build goes untouched.
+
+- **Check whether the code is natively an error.** Grep the build config for the promotion: `TreatWarningsAsErrors`, `WarningsAsErrors`, `-Werror`, `-D warnings`, `--strict`, `set -e`, or an explicit code list — in `Directory.Build.props`, `.csproj`, `pyproject.toml`, `Makefile`, or the CI yaml.
+- **Suppress the specific code, not the policy.** `-p:NoWarn=NU1900` beats `-p:TreatWarningsAsErrors=false`: the first unblocks one known-benign condition, the second masks every real defect for the rest of the run.
+- **Note that a suppression is a local workaround.** It belongs in the command you run and in the PR description as a reproduction recipe — not committed into the build config, unless the team has agreed the code is benign everywhere.
+
+**Worked example.** `dotnet test` failed with `NU1900` because a private package feed was unreachable. The feed genuinely was unreachable, but that is normally a warning; `TreatWarningsAsErrors=true` in `Directory.Build.props` is what stopped the build. `-p:NoWarn=NU1900` ran the full suite offline against already-restored packages. `--no-restore` and disabling the audit both failed, because neither addressed the promotion — and chasing feed credentials would have been the wrong fix entirely.
 
 ## GitHub Issue Relationships
 
@@ -320,6 +349,15 @@ query {
 - `addBlockedBy` is **not idempotent** — calling it twice for the same pair will error
 - Node IDs are opaque strings (e.g., `I_kwDOQOqPc871pGVo`) — always fetch them fresh
 
+## Secret Handling
+
+Secrets observed during code exploration (passwords, API keys, connection strings with embedded credentials, tokens) are **read-only context** — never inputs to tool calls.
+
+- Do **not** extract a credential from a grep/read result and feed it into a `Bash`, `PowerShell`, or MCP call (sqlcmd, curl, gh auth, etc.). Even if the credential is sitting in plaintext on disk, treating it as a free input for your own commands is the same class of mistake as logging it.
+- Do **not** echo, summarize, or restate observed credentials in responses to the user beyond what is strictly needed to flag them (e.g., "Program.cs has a hardcoded password — that should be moved to Key Vault").
+- When you need to query a system that requires authentication, ask the user to run the command themselves (using the `! <command>` pattern) or to provide the credential via an env var / managed identity that you reference symbolically — never paste the literal.
+- Discovering a credential should raise your caution level for that file, not lower it.
+
 ## No Attribution
 
 - Never add `Co-Authored-By` trailers, "generated by" footers, or any other attribution metadata to commit messages, PR titles, PR descriptions, issue comments, or any other generated output
@@ -329,6 +367,19 @@ query {
 - **Never push to `main` or `master`** — all changes must go through pull requests
 - **Never force push** (`--force`, `-f`, `--force-with-lease`) to any branch
 - **Always create new commits instead of amending** — amending requires force pushing to sync with the remote. When a pre-commit hook fails, fix the issue and create a new commit; do not `--amend` the previous one. Only amend if the user explicitly requests it and acknowledges the force push consequence.
+
+## Reading Git Config Safely
+
+When **reading** a git config value, always put the read flag *before* the key:
+
+- ✅ `git config --get user.email`
+- ❌ `git config user.email --get` <!-- footgun-allow: intentional counter-example -->
+
+The second form parses `--get` as the **value** and silently *sets* `user.email` to the literal string `--get` (exit 0, no output — so it looks like it worked). In a worktree this writes to the shared common `.git/config`, corrupting the author identity for **every** worktree of the repo. With a `.commit-email-rules` pre-commit hook in play, subsequent commits then fail or get misattributed to `--get`. The same ordering trap applies to `--get-all`, `--get-regexp`, and `--unset` — flag first, key second.
+
+**Recovery** — if `git var GIT_AUTHOR_IDENT` shows a bogus email (e.g. `--get`):
+1. Find where the bad value lives: `git config --show-origin --get user.email`
+2. Remove it: `git config --unset user.email` (repeat per scope if it was set at more than one level), then re-set the correct address: `git config user.email "you@example.com"`.
 
 ## Commit Email
 
@@ -377,6 +428,8 @@ Before starting any new unit of work (picking up an issue, beginning a task that
 5. Create a new branch from the up-to-date `main` (see **Branch Naming and PR Linking** below for the format)
 
 Do not start work on an existing feature branch unless the user explicitly asks to continue work on that branch.
+
+**Context hygiene:** Run `/clear` before starting a new unit of work (e.g., `/clear` then `/start-work`). Starting work almost never needs the prior conversation history, and a clean context keeps the new task focused and cheaper. Type the two prompts in succession — the clear is instant. Note this is a *user* habit, not something a skill can do for you: a skill runs inside the context it would clear, so it cannot reset its own history before executing (the "self-clearing paradox"). The harness has no hook or setting that clears context either.
 
 ## Branch Naming and PR Linking
 
@@ -446,3 +499,19 @@ When reviewing code (PRs, branches, or staged changes), apply rigorous scrutiny.
 - **Trace unintended consequences** — check callers, state mutations, timing, and boundary conditions
 - **Audit assumptions** — list and verify every assumption the code makes; flag those without validation
 - **Demand test coverage** — "hard to test" means the code needs restructuring, not a pass on testing
+- **Calibrate severity against standards** — when CLAUDE.md or documented standards explicitly prohibit a pattern, grade violations as warnings or blockers, not optional suggestions, regardless of whether pre-existing code also violates the rule; existing violations do not grandfather new ones
+
+## PR Review Comment Anchoring
+
+When posting inline review comments on a PR (GitHub or Azure DevOps), anchor each comment to a line in a file the PR **actually modifies**. Both platforms render the "Files Changed" view by walking the PR's diff, so an anchor on an unchanged file is the wrong target — but the two platforms fail differently: GitHub's review-comment API usually **rejects** an off-diff line position outright with an error, while Azure DevOps **accepts** the thread but renders it only in the Overview tab, where the author is likely to miss it.
+
+A natural anchor candidate is "where the symptom manifests" — a caller, downstream consumer, or test file lacking coverage. These are often unchanged by the PR and therefore the wrong anchor. The correct anchor is the **changed line that introduces the symptom**; describe the symptom site in the comment body.
+
+Before posting, verify each target file is in the diff (where `<base>` is the PR's target branch, e.g. `main`; fetch it first so the comparison isn't against a stale ref):
+
+```bash
+git fetch origin <base>
+git diff --name-only origin/<base>...HEAD
+```
+
+If anchoring on a changed line is genuinely impossible (e.g. the whole point is to propose a change to a file the PR doesn't touch), post as a PR-overview comment with no file/line anchor — never anchor on an unchanged file.

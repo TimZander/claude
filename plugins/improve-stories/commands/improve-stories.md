@@ -1,7 +1,7 @@
 ---
 name: improve-stories
 description: Review user stories and GitHub issues for completeness, research the codebase to fill gaps, and update each with structured documentation
-allowed-tools: Bash, Read, Grep, Glob, Agent, AskUserQuestion, mcp__azure-devops__core_list_project_teams, mcp__azure-devops__wit_get_work_items_for_iteration, mcp__azure-devops__wit_get_work_item, mcp__azure-devops__wit_update_work_item, mcp__azure-devops__wit_add_work_item_comment, mcp__azure-devops__wit_my_work_items, mcp__azure-devops__wit_list_backlogs, mcp__azure-devops__wit_list_backlog_work_items, mcp__azure-devops__wit_get_work_items_batch_by_ids, mcp__azure-devops__wit_work_items_link
+allowed-tools: Bash, Read, Grep, Glob, Agent, AskUserQuestion, mcp__azure-devops__core_list_project_teams, mcp__azure-devops__wit_get_work_items_for_iteration, mcp__azure-devops__wit_get_work_item, mcp__azure-devops__wit_update_work_item, mcp__azure-devops__wit_add_work_item_comment, mcp__azure-devops__wit_my_work_items, mcp__azure-devops__wit_list_backlogs, mcp__azure-devops__wit_list_backlog_work_items, mcp__azure-devops__wit_get_work_items_batch_by_ids, mcp__azure-devops__wit_work_items_link, mcp__azure-devops__wit_add_child_work_items
 user-input: optional
 argument-hint: "[iteration-path, work-item-ids, or #issue-number]"
 model: opus
@@ -104,15 +104,48 @@ Using the fields already fetched, skip items without needing their full descript
 - Missing steps to reproduce (for bugs)
 - No mention of affected files or components
 
+**Multi-feature** — flag if the item bundles multiple independently-shippable features. See `standards/CLAUDE.md` → **PR Size and Splitting** → "When to split the work" for the underlying rationale. Use **several signals together**, not any single one alone:
+
+- Title links distinct feature nouns via "and", commas, or a list ("X, Y, and Z"; "Feature A and Feature B")
+- Acceptance criteria cluster into independent groups under separate sub-headings — each group's criteria could pass or fail without the others
+- Scope mentions multiple distinct user-facing deliverables (separate pages, dashboards, workflows, APIs that users would reasonably treat as separate features)
+- Story size is at or above the team's threshold for "one story" (if points/hours are consistently scored)
+
+Use judgment: "update the settings panel and fix the breadcrumb bug" is a bugfix + small polish, not multi-feature. "Add day-use parking, parking restrictions, and parking override" clearly is. When an item is both multi-feature AND needs improvement, classify it as multi-feature — the split comes first, and the children get improved separately.
+
 **Detecting item type:** For ADO, use `System.WorkItemType`. For GitHub, infer from labels — issues labeled `bug` are bugs, others are features. If no labels exist, infer from the title and body content (error reports, "broken", "doesn't work" → bug; otherwise feature).
 
 Present the triage summary to the user:
-- How many items were fetched, how many were filtered as irrelevant, how many are well-documented, how many need improvement
+- How many items were fetched, how many were filtered as irrelevant, how many are well-documented, how many need improvement, how many appear multi-feature
 - List which items you plan to improve and why
+- List each multi-feature item separately with a note: `#<id> "<title>" — appears to bundle <N> features: <A>, <B>, <C>`. Ask the user to confirm, demote to "needs improvement", or demote to "well-documented".
 - List which items you're skipping and why
 - If more than 10 items need improvement, recommend processing in chunks and ask the user how many to tackle now
 - Ask the user to confirm before proceeding
 - If the user declines, asks to skip specific items, or wants to add items that were filtered out, adjust the selection accordingly and re-present the updated plan
+
+### 3d: Execute approved splits
+
+For each item the user confirmed as multi-feature, propose a concrete split **before creating anything**:
+
+1. **Draft each child.** For each feature the parent bundles: a concise title (one of the feature nouns the parent lists), a one-sentence summary, and a note on which parts of the parent's existing content (description, acceptance criteria, reference images) belong to that child. Images and attachments follow the feature they illustrate — if that can't be determined, mention them under the parent's post-split note.
+2. **Present the split plan** to the user with proposed child titles + summaries, how the parent's content is being distributed, and what happens to the parent (left open as a tracking item with pointers to children, or closed with pointers — user's call).
+3. **On approval, create the children and link them.** Do not create anything before approval. If the user rejects or modifies, re-present the revised plan before proceeding.
+
+**Partial-failure handling:** If one or more child creations fail partway through, do **not** roll back the children that were already created. Report which children were created (with IDs/numbers), which failed (with the error), and ask the user how to proceed before continuing — retry the failed child, skip it, or stop and clean up manually. Same convention as Step 4f's "report and continue" pattern.
+
+**GitHub:**
+- Create each child with `gh issue create --title "<title>" --body "<summary + relevant content from parent>" --label <parent-labels>`. Copy only labels that describe the work itself (component, priority, area). Skip umbrella labels like `epic`, `tracking`, or `parent-issue` if present on the parent.
+- Link the parent as **blocked by** each child via the `addBlockedBy` GraphQL mutation (see `standards/CLAUDE.md` → **GitHub Issue Relationships**). This makes the parent a tracking issue surfaced in GitHub's "Linked issues" UI; it does **not** auto-close the parent when children resolve — the user (or a separate workflow) closes the parent manually once all children are complete.
+- Append to the parent description: `Split into #<A>, #<B>, #<C>. Close manually once all children are complete.`
+- Audit trail: `gh issue comment <parent> --body "Split into <N> child issues per multi-feature detection. Children: #<A>, #<B>, #<C>."`
+
+**ADO:**
+- Create all children for one parent in a single call to `mcp__azure-devops__wit_add_child_work_items` — the tool creates and parent-links each child atomically. Pass `parentId`, `workItemType` (default to the parent's `System.WorkItemType`, typically User Story or Product Backlog Item — ask the user if the parent is an Epic or Feature and the children should be a different type), and an `items` array with `{title, description, format, areaPath, iterationPath}` for each child. Default `format` to whatever was detected in Step 4c (HTML vs Markdown); preserve the parent's `areaPath` and `iterationPath` on each child unless the user overrides.
+- Append to the parent description: `Split into <child IDs>. This parent tracks the aggregate effort; implementation happens on the children.`
+- Audit trail: `wit_add_work_item_comment` on the parent explaining the split.
+
+**After split:** Ask the user whether to queue the newly-created children through Step 4 (research + improve descriptions) in the current session. If yes, add them to the items-to-improve queue and proceed — newly-created children will almost always need research and full descriptions, so they pass through Step 4 normally. If no, stop here for those items — the user can re-run `/improve-stories` on the children later.
 
 ## Step 4: Research and Update (chunked)
 

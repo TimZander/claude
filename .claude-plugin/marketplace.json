@@ -10,9 +10,17 @@
   "plugins": [
     {
       "name": "deep-review",
-      "description": "Rigorous code review of all changes on the current branch compared to a base branch (default main), with structured verdict and actionable feedback",
+      "description": "Rigorous code review of a pull request (pr <N>, GitHub or Azure DevOps) or the current branch, compared to a base branch, with structured verdict and actionable feedback",
       "author": { "name": "Tim Zander" },
       "source": "./plugins/deep-review",
+      "category": "productivity",
+      "strict": false
+    },
+    {
+      "name": "review-pr",
+      "description": "End-to-end Azure DevOps pull request review: summarize the PR, delegate the critical review to deep-review, then post selected findings as inline comments and cast a vote — only after you confirm",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/review-pr",
       "category": "productivity",
       "strict": false
     },
@@ -110,6 +118,30 @@
       "author": { "name": "Tim Zander" },
       "source": "./plugins/investigate-appinsights-logs",
       "category": "development",
+      "strict": false
+    },
+    {
+      "name": "start-work",
+      "description": "Start a new unit of work from a GitHub issue or ADO work item — runs Git Hygiene, creates branches/<id>-<slug> in a worktree by default, self-assigns/transitions state, runs codebase research, and hands off a draft plan",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/start-work",
+      "category": "productivity",
+      "strict": false
+    },
+    {
+      "name": "corporate",
+      "description": "Render all assistant prose in corporate jargon (consultant / all-hands register) while preserving code, paths, and command output verbatim — four flavors, per-repo config",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/corporate",
+      "category": "fun",
+      "strict": false
+    },
+    {
+      "name": "cc-census",
+      "description": "Measure Claude Code usage-limit blocking across a team from local transcripts: per-developer outage ledger (blocked, reset, resumed, hours lost) plus an API-equivalent cost model. Reads only local files; shares no prompts, paths, or repo names",
+      "author": { "name": "Tim Zander" },
+      "source": "./plugins/cc-census",
+      "category": "productivity",
       "strict": false
     }
   ]

@@ -8,3 +8,6 @@ __pycache__/
 # names, and budget-ask details that don't belong in a public repo. The
 # committed counterpart (if any) is the sanitized version at the same base name.
 *.local.md
+
+# cc-census collector output — a developer usage profile. Never commit.
+cc-census-*.json
