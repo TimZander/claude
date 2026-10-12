@@ -1,0 +1,7 @@
+{
+  "name": "mutation-test",
+  "description": "Mutation-test a change set — break the changed source in targeted ways, run the suite after each break, and report which mutations survived, because a surviving mutation is a test that passes against broken code",
+  "author": {
+    "name": "Tim Zander"
+  }
+}
