@@ -1,0 +1,24 @@
+name: test-cloud-setup
+
+# cloud/setup.sh runs only inside a cloud environment's setup phase, where a
+# mistake costs a cache rebuild to find. The smoke test runs it against stub
+# binaries so profile typos and logic regressions surface on the PR instead.
+on:
+  pull_request:
+    paths:
+      - "cloud/**"
+      - ".claude-plugin/marketplace.json"
+      - ".github/workflows/test-cloud-setup.yml"
+  push:
+    branches: [main]
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: syntax check
+        run: for f in cloud/*.sh cloud/profiles/*.sh; do bash -n "$f"; done
+      - name: smoke test
+        run: bash cloud/test_setup.sh

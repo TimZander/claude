@@ -40,6 +40,7 @@ The `pre-push` hook blocks pushes to `main`/`master` globally. To opt out for a 
 - `.claude-plugin/marketplace.json` — The marketplace registry. Lists all available plugins.
 - `plugins/` — First-party plugin directories.
 - `external_plugins/` — Community-submitted plugin directories.
+- `cloud/` — Cloud session setup: `bootstrap.sh` (the stub pasted into an environment), `setup.sh`, and one file per profile in `profiles/`. When a plugin is added, renamed, or removed, update the profiles that should carry it and run `bash cloud/test_setup.sh`.
 
 ## Adding a New Plugin
 

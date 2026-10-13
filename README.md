@@ -29,6 +29,7 @@ plugins/                # First-party plugins
 external_plugins/       # Community-submitted plugins
 hooks/                  # Git hook scripts and manifest
 standards/              # Team coding standards source
+cloud/                  # Cloud session setup (bootstrap stub + profiles)
 ```
 
 ## Environment Setup
@@ -66,41 +67,63 @@ Add it to `.gitignore` so it stays local. Team repos should **not** include this
 
 ## Claude Code Cloud Sessions
 
-Cloud sessions ([claude.ai/code](https://claude.ai/code), the Claude app, GitHub Actions) run in a fresh Ubuntu container, not on your machine. Nothing from your local setup carries over: your `~/.claude/CLAUDE.md`, installed plugins, and tools like `gh` are all absent unless the environment installs them. [`scripts/cloud-setup.sh`](scripts/cloud-setup.sh) does that.
+Cloud sessions ([claude.ai/code](https://claude.ai/code), the Claude app, GitHub Actions) run in a fresh Ubuntu container, not on your machine. Nothing from your local setup carries over: your `~/.claude/CLAUDE.md`, installed plugins, and tools like `gh` are all absent unless the environment installs them. The [`cloud/`](cloud) directory does that, with one **profile** per kind of environment.
 
-### Configure the environment
+### Profiles
 
-1. Open a cloud session, then open the cloud environment menu in the session's title bar and choose **Edit** (or create a new environment).
-2. Set **Network access** to **Trusted**. The script needs GitHub (marketplace + standards clone) and the Ubuntu package mirrors (`gh`).
-3. Paste the contents of [`scripts/cloud-setup.sh`](scripts/cloud-setup.sh) into **Setup script** and save.
-4. Start a new session. The setup script runs only on new sessions, and only when no cached environment exists.
+| Profile | For | Installs |
+|---------|-----|----------|
+| `default` | Everyday work | Team standards, `deep-review`, `craft-pr`, `craft-stage-commit-push`, `start-work`, `self-review`, `gh` |
+| `sdd` | Spec-driven development | Everything in `default`, plus [OpenSpec](https://github.com/Fission-AI/OpenSpec) (`openspec` CLI) |
+
+The `sdd` profile still uses `deep-review`; it will switch to the SDD review and workflow plugins once they're added to this marketplace.
+
+### Configure an environment
+
+1. Open a cloud session, then open the cloud environment menu in the session's title bar and choose **Edit** (or create a new environment — one per profile).
+2. Set **Network access** to **Trusted**. Setup needs GitHub, the Ubuntu package mirrors (`gh`), and the npm registry (OpenSpec).
+3. Paste [`cloud/bootstrap.sh`](cloud/bootstrap.sh) into **Setup script**, set `PROFILE` to the profile you want, and save.
+4. Start a new session.
 
 See the [cloud environments docs](https://code.claude.com/docs/en/cloud-environments) for the full settings reference.
 
-### What it does
+### How it works
 
-1. **Plugins** — Adds this marketplace and installs `deep-review`, `craft-pr`, `craft-stage-commit-push`, `start-work`, and `self-review` through the plugin system. Edit `PLUGINS` to change the list.
-2. **Team standards** — Shallow-clones this repo and copies `standards/CLAUDE.md` to `/root/.claude/CLAUDE.md`, the same file `setup-env` syncs locally.
-3. **`gh` CLI** — Installs `gh` via apt, in the background so it overlaps the plugin install.
-4. **Verification** — Logs the plugin list, `gh` version, and whether GitHub auth is present (never the token itself).
+The pasted `bootstrap.sh` is a small stub that stays the same between updates: it shallow-clones this repo at `REF` (default `main`) and runs [`cloud/setup.sh`](cloud/setup.sh) with your `PROFILE`. `setup.sh` then:
+
+1. **Plugins** — adds this marketplace and installs the profile's `PLUGINS` through the plugin system.
+2. **Tools** — installs `APT_PACKAGES` (in the background, overlapping the plugin install) and `NPM_PACKAGES` globally.
+3. **Team standards** — copies `standards/CLAUDE.md` to `/root/.claude/CLAUDE.md`, the same file `setup-env` syncs locally.
+4. **Verification** — checks each of `VERIFY_COMMANDS` is on `PATH`, logs the plugin list, and reports whether GitHub auth is present (never the token itself).
+
+To try a profile change before merging it, set `REF` in the stub to your branch.
+
+### Keeping it updated
+
+Profile and setup changes merged here need no re-paste, but they reach cloud sessions only after a **cache rebuild**: the setup script runs only when no cached environment exists. Editing the pasted stub forces a rebuild, so bump its `REVISION` number after merging a change you need right away.
+
+### Adding a profile
+
+1. Copy [`cloud/profiles/default.sh`](cloud/profiles/default.sh) to `cloud/profiles/<name>.sh` and set `PROFILE_DESCRIPTION`, `PLUGINS`, `APT_PACKAGES`, `NPM_PACKAGES`, and `VERIFY_COMMANDS`.
+2. Add a row to the profiles table above.
+3. Run `bash cloud/test_setup.sh`. It checks that every profile's plugins exist in the marketplace. CI runs it on any change under `cloud/`.
 
 ### Gotchas
 
 - **Install plugins with the setup script, not account-level enablement.** Enabling a plugin at the account level exposes its definition, but its slash commands (e.g. `/deep-review`) are not invocable because these plugins ship commands rather than bundled skills.
-- **The script must exit zero.** A non-zero exit fails the session, so every fallible step ends in `|| true` and problems are logged as `WARNING:` lines instead.
-- **Keep it under ~5 minutes** so the environment cache can build.
+- **The setup script must exit zero.** A non-zero exit fails the session, so every fallible step is best-effort and problems are logged as `WARNING:` lines instead.
+- **Keep setup under ~5 minutes** so the environment cache can build.
 - **Base-image PPAs are removed.** The `deadsnakes` and `ondrej/php` PPAs redirect to `ppa.launchpadcontent.net`, which isn't on the Trusted allowlist, and their 403s make `apt-get update` fail. Neither is needed.
-- **Standards and plugins are snapshotted into the cache.** The script doesn't re-run while a cached environment exists, so changes merged here can lag in cloud sessions. Editing the setup script forces a cache rebuild — make a trivial edit to pick up new `standards/CLAUDE.md` or plugin versions sooner.
 
 ### Troubleshooting
 
-The script logs to `/root/setup-script.log`. From inside a session, ask Claude to read it, or run:
+Setup logs to `/root/setup-script.log`. From inside a session, ask Claude to read it, or run:
 
 ```
 cat /root/setup-script.log
 ```
 
-Look for `WARNING:` lines — missing `gh`, a failed clone, or `claude` not on `PATH`.
+The first line shows the profile, ref, and revision that ran. Look for `WARNING:` lines — a failed clone, `claude` or `npm` not on `PATH`, or a missing command from `VERIFY_COMMANDS`.
 
 ## Contributing
 
