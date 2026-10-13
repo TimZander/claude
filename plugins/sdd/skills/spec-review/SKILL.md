@@ -4,6 +4,7 @@ description: Read-only semantic review of an OpenSpec change (proposal, design, 
 argument-hint: "<change-name>"
 context: fork
 agent: general-purpose
+background: false
 allowed-tools: Read, Grep, Glob, Bash(bash scripts/sdd/*), Bash(git log:*), Bash(git diff:*), Bash(git show:*)
 ---
 

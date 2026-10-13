@@ -9,6 +9,8 @@
 #   bash sdd-archive.sh active  [-C <dir>]
 #       Active change names (folders in openspec/changes/ other than archive/),
 #       one per line, in ascending byte order: the order they are archived in.
+#       Fails when a name isn't [A-Za-z0-9][A-Za-z0-9._-]*, so no folder name
+#       can reach the CLI as an option.
 #
 #   bash sdd-archive.sh run     [-C <dir>]
 #       Archives every active change in that order. Stops at the first failure.
@@ -18,13 +20,18 @@
 #       adds under openspec/changes/archive/ archives a change active on <base>,
 #       re-running `openspec archive` for those changes on <base> reproduces
 #       <result>'s openspec/ tree exactly, and nothing outside openspec/ changed.
-#       Last line: `archive-mechanical: success|failure|not-an-archive-pr`,
-#       preceded by `- compared base <sha> with result <sha>`.
+#       Last line, on every exit path: `archive-mechanical: success|failure|
+#       not-an-archive-pr`, preceded by `- compared base <sha> with result <sha>`
+#       when a comparison ran. Every other line starts with `- ` or `  | `, so
+#       text from the PR (paths, folder names, CLI output) never starts a line.
+#       The OpenSpec CLI always comes from this checkout's node_modules.
 #
 #   bash sdd-archive.sh verdict <log-file>
-#       Reads a CI log and prints `verdict=<state>` and `base=<sha>` from its
-#       last `archive-mechanical:` and `compared base` lines. Accepts the
-#       `openspec/archive-mechanical:` spelling too.
+#       Reads a CI log and prints `verdict=<state>` and `base=<sha>`. Counts only
+#       whole lines (after GitHub's timestamp prefix, or `gh run view --log`'s
+#       job, step and timestamp), takes the last, and accepts `success` only
+#       when the line right before it is the `- compared base` line. Accepts
+#       the `openspec/archive-mechanical:` spelling too.
 #
 # Exit status: 0 success (or not-an-archive-pr, or no active change), 1 failure,
 # 2 usage error, 3 internal error.
@@ -40,9 +47,35 @@ usage() {
     exit 2
 }
 
+VERIFYING=0
+VERDICT_PRINTED=0
+NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]*$'
+
 internal() {
     echo "sdd-archive: $*" >&2
+    [ $VERIFYING -eq 0 ] || echo "- reason: $*" | neutralise
     exit 3
+}
+
+verdict_line() {
+    VERDICT_PRINTED=1
+    echo "archive-mechanical: $1"
+}
+
+# verify always ends with a verdict line, whatever stops it.
+on_exit() {
+    local code=$?
+    if [ $VERIFYING -eq 1 ] && [ $VERDICT_PRINTED -eq 0 ]; then
+        echo "archive-mechanical: failure"
+        [ $code -ne 0 ] || code=3
+    fi
+    exit $code
+}
+trap on_exit EXIT
+
+# Breaks GitHub's `##[` and `::` workflow-command syntax in text from the repo.
+neutralise() {
+    sed -e 's/##\[/#\\u0023[/g' -e 's/::/:\\u003a/g'
 }
 
 # Folders directly under $2 at revision $1, one per line.
@@ -51,34 +84,41 @@ folders_at() {
 }
 
 active_in() {
-    local root="$1" d
+    local root="$1" d names="" bad=0
     [ -d "$root/openspec/changes" ] || return 0
     for d in "$root"/openspec/changes/*/; do
         [ -d "$d" ] || continue
         d="${d%/}"
         d="${d##*/}"
         [ "$d" = "archive" ] && continue
-        printf '%s\n' "$d"
-    done | LC_ALL=C sort
+        if printf '%s' "$d" | grep -Eq "$NAME_RE"; then
+            names="$names$d"$'\n'
+        else
+            echo "sdd-archive: not a valid change name: $(printf '%q' "$d")" >&2
+            bad=1
+        fi
+    done
+    printf '%s' "$names" | LC_ALL=C sort
+    return $bad
 }
 
 cmd_active() {
     local root
     root="$(git -C "$DIR" rev-parse --show-toplevel)" || internal "$DIR is not a git repository"
-    active_in "$root"
+    active_in "$root" || exit 1
 }
 
 cmd_run() {
     local root names name
     root="$(git -C "$DIR" rev-parse --show-toplevel)" || internal "$DIR is not a git repository"
-    names="$(active_in "$root")"
+    names="$(active_in "$root")" || exit 1
     if [ -z "$names" ]; then
         echo "no active change"
         return 0
     fi
     while IFS= read -r name; do
         echo "archiving $name"
-        if ! bash "$OPENSPEC" -C "$root" archive "$name" --yes; then
+        if ! bash "$OPENSPEC" -C "$root" --cli-root "$root" archive "$name" --yes; then
             echo "sdd-archive: \`openspec archive $name\` failed; later changes were not archived" >&2
             exit 1
         fi
@@ -97,6 +137,7 @@ cmd_verify() {
         esac
     done
     [ -n "$base" ] && [ -n "$result" ] || usage
+    VERIFYING=1
 
     local root
     root="$(git -C "$DIR" rev-parse --show-toplevel)" || internal "$DIR is not a git repository"
@@ -108,12 +149,12 @@ cmd_verify() {
     added="$(LC_ALL=C comm -13 <(folders_at "$base" "$ARCHIVE") <(folders_at "$result" "$ARCHIVE"))"
     if [ -z "$added" ]; then
         echo "- compared base $base with result $result"
-        echo "archive-mechanical: not-an-archive-pr"
+        verdict_line not-an-archive-pr
         return 0
     fi
 
     local problems="" active folder change names="" seen=""
-    active="$(folders_at "$base" openspec/changes | grep -vx archive || true)"
+    active="$(folders_at "$base" openspec/changes | grep -vx archive | grep -E "$NAME_RE" || true)"
     while IFS= read -r folder; do
         # A dated folder, YYYY-MM-DD-<change>. OpenSpec keeps a change name that
         # already starts with a date as the whole folder name, so try that first.
@@ -150,13 +191,13 @@ EOF
         problems="$(reproduce "$root" "$base" "$result" "$names")" || true
     fi
 
-    echo "${problems%$'\n'}" | sed '/^$/d'
+    echo "${problems%$'\n'}" | sed '/^$/d' | neutralise
     echo "- compared base $base with result $result"
     if [ -n "$problems" ]; then
-        echo "archive-mechanical: failure"
+        verdict_line failure
         exit 1
     fi
-    echo "archive-mechanical: success"
+    verdict_line success
 }
 
 # Re-runs the archives on a checkout of $2 and compares its openspec/ tree with
@@ -170,25 +211,31 @@ reproduce() {
     trap "git -C '$root' worktree remove --force '$checkout' >/dev/null 2>&1 || true; rm -rf '$scratch'" RETURN
     git -C "$root" worktree add -q --detach "$checkout" "$base" >/dev/null 2>&1 \
         || { echo "- cannot check out the base"; return 1; }
-    ln -s "$root/node_modules" "$checkout/node_modules"
 
-    local change folder made
+    local change folder made before out
     while IFS=' ' read -r change folder; do
         [ -n "$change" ] || continue
-        if ! out="$(bash "$OPENSPEC" -C "$checkout" archive "$change" --yes 2>&1)"; then
-            echo "- \`openspec archive $change\` fails on the base: $(printf '%s\n' "$out" | sed '/^$/d' | tail -n 1)"
+        before="$(ls -1 "$checkout/$ARCHIVE" 2>/dev/null | LC_ALL=C sort)"
+        if ! out="$(bash "$OPENSPEC" -C "$checkout" --cli-root "$root" archive "$change" --yes 2>&1)"; then
+            echo "- \`openspec archive $change\` fails on the base:"
+            printf '%s\n' "$out" | sed '/^$/d' | tail -n 5 | sed 's/^/  | /'
             return 1
         fi
         # The archive folder carries today's date; give it the result's name.
-        made="$(cd "$checkout/$ARCHIVE" && ls -d -- *-"$change" "$change" 2>/dev/null | head -n 1)"
-        if [ -n "$made" ] && [ "$made" != "$folder" ]; then
+        # The new folder is the one that wasn't there before this archive.
+        made="$(LC_ALL=C comm -13 <(printf '%s\n' "$before" | sed '/^$/d') \
+            <(ls -1 "$checkout/$ARCHIVE" | LC_ALL=C sort))"
+        if [ "$(printf '%s\n' "$made" | sed '/^$/d' | wc -l | tr -d ' ')" != 1 ]; then
+            echo "- \`openspec archive $change\` did not add exactly one archive folder"
+            return 1
+        fi
+        if [ "$made" != "$folder" ]; then
             mv "$checkout/$ARCHIVE/$made" "$checkout/$ARCHIVE/$folder"
         fi
     done <<EOF
 $(printf '%s' "$names" | LC_ALL=C sort)
 EOF
 
-    rm "$checkout/node_modules"
     local want got
     git -C "$checkout" add -A openspec
     got="$(git -C "$checkout" write-tree --prefix=openspec/)"
@@ -204,15 +251,32 @@ EOF
 cmd_verdict() {
     [ $# -eq 1 ] || usage
     [ -f "$1" ] || internal "no such log file: $1"
-    local verdict base
-    verdict="$(grep -Eo '(openspec/)?archive-mechanical: [a-z-]+' "$1" | tail -n 1 | sed 's/.*: //' || true)"
-    base="$(grep -Eo 'compared base [0-9a-f]{7,40}' "$1" | tail -n 1 | sed 's/compared base //' || true)"
-    if [ -z "$verdict" ]; then
-        echo "verdict=none"
-        exit 1
-    fi
-    echo "verdict=$verdict"
-    echo "base=${base:-unknown}"
+    # Strip a log line to the text the step printed: drop `gh run view --log`'s
+    # `<job>\t<step>\t` and GitHub's `<timestamp> ` prefix, nothing else. A line
+    # with any other prefix (such as the `  | ` on quoted output) never matches.
+    awk '
+        BEGIN { ts = "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9:.]+Z " }
+        {
+            sub(/\r$/, "")
+            if ($0 ~ /^checks\t[^\t]*\t/) { sub(/^checks\t[^\t]*\t/, "") }
+            if ($0 ~ ts) { sub(ts, "") }
+            if ($0 ~ /^(openspec\/)?archive-mechanical: (success|failure|not-an-archive-pr)$/) {
+                v = $0; sub(/^.*: /, "", v)
+                b = ""
+                if (prev ~ /^- compared base [0-9a-f]+ with result [0-9a-f]+$/) {
+                    b = prev; sub(/^- compared base /, "", b); sub(/ .*$/, "", b)
+                }
+                verdict = v; base = b
+            }
+            prev = $0
+        }
+        END {
+            if (verdict == "") { print "verdict=none"; exit 1 }
+            if (verdict == "success" && base == "") { print "verdict=none"; exit 1 }
+            print "verdict=" verdict
+            print "base=" (base == "" ? "unknown" : base)
+        }
+    ' "$1"
 }
 
 [ $# -ge 1 ] || usage

@@ -166,6 +166,10 @@ if [ $install -eq 1 ]; then
     note "npm install done"
 fi
 
+if [ $ci -eq 1 ] && [ ! -f package-lock.json ]; then
+    note "warning: no package-lock.json: the sdd-checks workflow runs \`npm ci\`, which needs one; run \`npm install\` and commit it"
+fi
+
 if [ $warnings -gt 0 ]; then
     echo "sdd-init: done, $warnings warnings"
 else

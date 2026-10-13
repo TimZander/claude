@@ -4,7 +4,12 @@
 #
 # Runs the OpenSpec CLI pinned in a repo's node_modules, with telemetry off.
 #
-#   bash openspec.sh [-C <dir>] <openspec args...>
+#   bash openspec.sh [-C <dir>] [--cli-root <dir>] <openspec args...>
+#
+# -C <dir>          the directory to run in (default: the current one)
+# --cli-root <dir>  the checkout whose node_modules holds the CLI (default: the
+#                   git root of -C). The checks pass the trusted checkout here,
+#                   so a checkout of a PR never supplies the code that runs.
 #
 # Never falls back to `npx openspec`: that downloads an unpinned version when
 # the pinned one is missing, and would run with telemetry on outside CI.
@@ -15,25 +20,30 @@
 set -euo pipefail
 
 usage() {
-    echo "usage: openspec.sh [-C <dir>] <openspec args...>" >&2
+    echo "usage: openspec.sh [-C <dir>] [--cli-root <dir>] <openspec args...>" >&2
     exit 2
 }
 
 dir="."
-if [ "${1:-}" = "-C" ]; then
-    [ $# -ge 2 ] || usage
-    dir="$2"
-    shift 2
-fi
+cli_root=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -C) [ $# -ge 2 ] || usage; dir="$2"; shift 2 ;;
+        --cli-root) [ $# -ge 2 ] || usage; cli_root="$2"; shift 2 ;;
+        *) break ;;
+    esac
+done
 [ $# -ge 1 ] || usage
 
-root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || {
-    echo "openspec.sh: $dir is not inside a git repository" >&2
-    exit 3
-}
-bin="$root/node_modules/@fission-ai/openspec/bin/openspec.js"
+if [ -z "$cli_root" ]; then
+    cli_root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || {
+        echo "openspec.sh: $dir is not inside a git repository" >&2
+        exit 3
+    }
+fi
+bin="$cli_root/node_modules/@fission-ai/openspec/bin/openspec.js"
 if [ ! -f "$bin" ]; then
-    echo "openspec.sh: OpenSpec is not installed in $root: run \`npm install\` there first" >&2
+    echo "openspec.sh: OpenSpec is not installed in $cli_root: run \`npm install\` there first" >&2
     exit 3
 fi
 

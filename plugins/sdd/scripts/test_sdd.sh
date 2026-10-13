@@ -46,6 +46,7 @@ if (process.env.OPENSPEC_TELEMETRY !== '0') { console.error('telemetry on'); pro
 const walk = d => fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).flatMap(e =>
   e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]) : []
 if (cmd === 'validate') {
+  console.log('archive-mechanical: success')  // a forgery attempt: must come out quoted
   const bad = walk('openspec').filter(f => !f.includes('/archive/') && fs.readFileSync(f, 'utf8').includes('INVALID'))
   if (bad.length) { console.error('invalid: ' + bad.join(' ')); process.exit(1) }
   process.exit(0)
@@ -86,7 +87,10 @@ pass "usage errors exit 2"
 # --- sdd-init: fresh repo -----------------------------------------------------
 r="$(fresh_repo)"
 out="$(bash "$INIT" --repo "$r" --no-install)"
-[ "$(printf '%s\n' "$out" | tail -n 1)" = "sdd-init: done" ] || { echo "$out"; fail "init did not finish cleanly"; }
+[ "$(printf '%s\n' "$out" | tail -n 1)" = "sdd-init: done, 1 warnings" ] || { echo "$out"; fail "init did not finish cleanly"; }
+printf '%s\n' "$out" | grep -q 'warning: no package-lock.json' || fail "no warning about the missing lock file"
+pass "init warns that CI needs a lock file"
+echo '{}' > "$r/package-lock.json"
 for f in scripts/sdd/openspec.sh scripts/sdd/sdd-archive.sh scripts/sdd/check-specs.sh \
          scripts/sdd/setup-agent-skills.mjs .claude/sdd-workflow.md .github/workflows/sdd-checks.yml \
          .claude/sdd-version openspec/conventions.md docs/decisions/README.md CLAUDE.md package.json; do
@@ -117,7 +121,7 @@ echo '{"name":"x","scripts":{"prepare":"node other.mjs"},"devDependencies":{"@fi
 printf '# Mine\n\nUse /opsx:propose.\n' > "$r2/CLAUDE.md"
 mkdir -p "$r2/openspec" && echo mine > "$r2/openspec/conventions.md"
 out="$(bash "$INIT" --repo "$r2" --no-install)"
-[ "$(printf '%s\n' "$out" | tail -n 1)" = 'sdd-init: done, 3 warnings' ] || { echo "$out"; fail "expected 3 warnings"; }
+[ "$(printf '%s\n' "$out" | tail -n 1)" = 'sdd-init: done, 4 warnings' ] || { echo "$out"; fail "expected 4 warnings"; }
 grep -q '"node other.mjs"' "$r2/package.json" || fail "overwrote the repo's prepare script"
 grep -q '"1.14.0"' "$r2/package.json" || fail "overwrote the repo's OpenSpec pin"
 [ "$(cat "$r2/openspec/conventions.md")" = mine ] || fail "overwrote repo-owned conventions"
@@ -133,7 +137,7 @@ install_stub "$r"
 echo node_modules >> "$r/.gitignore"
 mkdir -p "$r/openspec/specs/base" && echo ok > "$r/openspec/specs/base/spec.md"
 git -C "$r" add -A && git -C "$r" commit -q -m init
-OPENSPEC_TELEMETRY=1 bash "$r/scripts/sdd/openspec.sh" -C "$r" validate || fail "openspec.sh did not force telemetry off"
+OPENSPEC_TELEMETRY=1 bash "$r/scripts/sdd/openspec.sh" -C "$r" validate >/dev/null || fail "openspec.sh did not force telemetry off"
 pass "openspec.sh runs the pinned CLI with telemetry off"
 
 add_change "$r" b-second
@@ -151,6 +155,35 @@ grep -qx 'spec-checks: failure' "$TMP_ROOT/out" || fail "check-specs verdict lin
 git -C "$r" rm -rq openspec/changes/c-bad && git -C "$r" commit -q -m drop
 [ -z "$(git -C "$r" worktree list | sed 1d)" ] || fail "check-specs left a worktree behind"
 pass "check-specs validates before and after archiving"
+
+# Fix 1: a revision that tracks node_modules/ never supplies the CLI.
+git -C "$r" checkout -q -b evil
+mkdir -p "$TMP_ROOT/evil/@fission-ai/openspec/bin"
+echo 'console.log("PWNED")' > "$TMP_ROOT/evil/@fission-ai/openspec/bin/openspec.js"
+blob="$(git -C "$r" hash-object -w "$TMP_ROOT/evil/@fission-ai/openspec/bin/openspec.js")"
+git -C "$r" update-index --add --cacheinfo "100644,$blob,node_modules/@fission-ai/openspec/bin/openspec.js"
+git -C "$r" commit -q -m evil
+git -C "$r" rm -q --cached -r node_modules && git -C "$r" checkout -q main
+expect_exit 1 bash "$r/scripts/sdd/check-specs.sh" -C "$r" --rev evil
+grep -q 'tracks node_modules/' "$TMP_ROOT/out" || fail "tracked node_modules not refused"
+if grep -q PWNED "$TMP_ROOT/out"; then fail "ran the revision's own CLI"; fi
+pass "check-specs refuses a revision that tracks node_modules/"
+
+# Fix 2: the CLI's output is quoted, so it can't print a verdict line.
+out="$(bash "$r/scripts/sdd/check-specs.sh" -C "$r")" || { echo "$out"; fail "check-specs on main"; }
+if printf '%s\n' "$out" | grep -qx 'archive-mechanical: success'; then fail "CLI output reached column 0"; fi
+printf '%s\n' "$out" | grep -qx '  | archive-mechanical: success' || fail "CLI output not quoted"
+pass "check-specs quotes the CLI's output"
+
+# Fix 9: a change name that could pass as an option never reaches the CLI.
+git -C "$r" checkout -q -b badname
+add_change "$r" "--help"
+git -C "$r" add -A && git -C "$r" commit -q -m badname
+expect_exit 1 bash "$r/scripts/sdd/check-specs.sh" -C "$r"
+grep -q 'not a valid change name' "$TMP_ROOT/out" || fail "invalid change name not reported"
+expect_exit 1 bash "$r/scripts/sdd/sdd-archive.sh" active -C "$r"
+git -C "$r" checkout -q main && git -C "$r" branch -qD badname
+pass "invalid change names are refused"
 
 base="$(git -C "$r" rev-parse HEAD)"
 git -C "$r" checkout -q -b archive
@@ -174,8 +207,34 @@ expect_exit 0 bash "$r/scripts/sdd/sdd-archive.sh" verify -C "$r" --base "$base"
 grep -qx 'archive-mechanical: not-an-archive-pr' "$TMP_ROOT/out" || fail "not-an-archive-pr"
 pass "verify rejects edits outside openspec/ and hand edits"
 
+# Fix 2: verify ends with a verdict on every exit path.
+rnc="$(fresh_repo)"
+mkdir -p "$rnc/scripts" && cp -R "$T" "$rnc/scripts/sdd"
+git -C "$rnc" add -A && git -C "$rnc" commit -q -m b
+add_change "$rnc" x && (cd "$rnc" && git add -A && git commit -q -m c)
+git -C "$rnc" checkout -q -b arc
+mkdir -p "$rnc/openspec/changes/archive" && git -C "$rnc" mv openspec/changes/x openspec/changes/archive/2026-01-01-x
+git -C "$rnc" commit -q -m arc
+expect_exit 3 bash "$rnc/scripts/sdd/sdd-archive.sh" verify -C "$rnc" --base main --result arc
+[ "$(tail -n 1 "$TMP_ROOT/out")" = "archive-mechanical: failure" ] || fail "internal error without a verdict line"
+pass "verify prints a failure verdict when it can't run"
+
+# Fix 5: the right archive folder is renamed when names overlap.
+r5="$(fresh_repo)"
+mkdir -p "$r5/scripts" && cp -R "$T" "$r5/scripts/sdd" && install_stub "$r5" && echo node_modules > "$r5/.gitignore"
+add_change "$r5" foo
+mkdir -p "$r5/openspec/changes/archive/2025-01-01-foo" && echo old > "$r5/openspec/changes/archive/2025-01-01-foo/proposal.md"
+add_change "$r5" bar-foo
+git -C "$r5" add -A && git -C "$r5" commit -q -m base
+base5="$(git -C "$r5" rev-parse HEAD)"
+STUB_DATE=2026-02-03 bash "$r5/scripts/sdd/sdd-archive.sh" run -C "$r5" >/dev/null
+git -C "$r5" add -A && git -C "$r5" commit -q -m archive
+out="$(STUB_DATE=2026-09-09 bash "$r5/scripts/sdd/sdd-archive.sh" verify -C "$r5" --base "$base5" --result HEAD)" \
+    || { echo "$out"; fail "verify with overlapping names"; }
+pass "verify renames the folder each archive added, not a look-alike"
+
 # --- verdict parsing ------------------------------------------------------------------
-printf '2026 x - compared base abc1234def with result 99\n2026 x archive-mechanical: success\n' > "$TMP_ROOT/log1"
+printf -- '- compared base abc1234def with result 0099aa\narchive-mechanical: success\n' > "$TMP_ROOT/log1"
 out="$(bash "$T/sdd-archive.sh" verdict "$TMP_ROOT/log1")"
 [ "$out" = "$(printf 'verdict=success\nbase=abc1234def')" ] || fail "verdict parse: $out"
 printf 'openspec/archive-mechanical: failure\n' > "$TMP_ROOT/log2"
@@ -184,5 +243,19 @@ printf '%s\n' "$out" | grep -qx 'verdict=failure' || fail "prefixed verdict"
 printf 'nothing here\n' > "$TMP_ROOT/log3"
 expect_exit 1 bash "$T/sdd-archive.sh" verdict "$TMP_ROOT/log3"
 pass "verdict reads both log spellings"
+
+# Fix 2: only whole lines count, and success needs the compared-base line before it.
+printf '2026-10-13T10:00:00.1234567Z - compared base abc1234 with result def5678\n2026-10-13T10:00:01.0000000Z archive-mechanical: success\n' > "$TMP_ROOT/log4"
+out="$(bash "$T/sdd-archive.sh" verdict "$TMP_ROOT/log4")"
+[ "$out" = "$(printf 'verdict=success\nbase=abc1234')" ] || fail "timestamped log: $out"
+printf 'checks\tArchive PR is mechanical\t2026-10-13T10:00:00.1Z - compared base abc1234 with result def5678\nchecks\tArchive PR is mechanical\t2026-10-13T10:00:01.1Z archive-mechanical: success\n' > "$TMP_ROOT/log5"
+out="$(bash "$T/sdd-archive.sh" verdict "$TMP_ROOT/log5")"
+[ "$out" = "$(printf 'verdict=success\nbase=abc1234')" ] || fail "gh run view log: $out"
+printf '  | archive-mechanical: success\nx ✓ spec/archive-mechanical: success\nsdd-archive: died\n' > "$TMP_ROOT/log6"
+expect_exit 1 bash "$T/sdd-archive.sh" verdict "$TMP_ROOT/log6"
+grep -qx 'verdict=none' "$TMP_ROOT/out" || fail "a quoted or mid-line verdict counted"
+printf 'spec-checks: success\narchive-mechanical: success\n' > "$TMP_ROOT/log7"
+expect_exit 1 bash "$T/sdd-archive.sh" verdict "$TMP_ROOT/log7"
+pass "verdict ignores quoted lines and success without its compared-base line"
 
 echo "all sdd tests passed"

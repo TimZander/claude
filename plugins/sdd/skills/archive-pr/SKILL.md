@@ -38,7 +38,10 @@ against the current tip of the default branch. The scripts do the work; you deci
 
 1. Wait for the `sdd-checks` workflow run on the PR's head commit to finish. You can't read
    commit statuses: read the `checks` job's log through the Actions API (or `gh run view
-   --log`), save it to a file, and run `bash scripts/sdd/sdd-archive.sh verdict <log-file>`.
+   --log`), save it to a file unedited, and run
+   `bash scripts/sdd/sdd-archive.sh verdict <log-file>`. It counts only whole verdict lines, and
+   accepts `success` only right after the `- compared base` line; `verdict=none` means no
+   trustworthy verdict, so don't merge.
 2. If `verdict=success`, compare `base=` with the default branch's current tip
    (`git ls-remote origin <default>`). If they differ, the default branch moved after the job
    ran, and a re-run replays the old merge commit: update the PR branch from the default

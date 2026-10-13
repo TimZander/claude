@@ -4,6 +4,7 @@ description: Review an applied OpenSpec change's code against its spec - does th
 argument-hint: "<change-name> [--base <branch>]"
 context: fork
 agent: general-purpose
+background: false
 allowed-tools: Read, Grep, Glob, Bash
 ---
 
@@ -20,8 +21,8 @@ about the change in conversation.
 
 ## Rules
 
-- **Read-only, except the spot check**, which edits files temporarily and must leave the tree
-  exactly as it found it (step 4).
+- **Read-only.** Never edit the working tree you were started in. The spot check (step 4)
+  breaks code only in a throwaway worktree of its own.
 - Report only findings you can point to with `file:line`.
 - At most **15 findings**. Two severities: **hard fail** (the code or a test is wrong against
   the spec, or real harm) and **soft fail** (a gap that should be fixed before merge). If you
@@ -66,14 +67,21 @@ effect. For each, decide:
 
 Reading a test is not proof it can fail. Pick the **3 scenarios with the most risk**:
 behaviour that loses or corrupts data, gates something, or that review found hardest to test.
-For each:
-1. Make sure `git status --porcelain` is empty before you start; if not, skip the spot check
-   and say so. Never stash or discard the author's work.
-2. Revert or break the smallest piece of code that implements the scenario (a condition, a
-   return value, a line).
-3. Run only that scenario's test (the repo's test command filtered to the test).
-4. Restore the code with `git checkout -- <file>` and confirm `git status --porcelain` is
-   empty again.
+
+Do it in a **throwaway worktree**, never in the checkout you were started in: the session that
+invoked you may be editing those files while you work.
+
+1. Create it at the commit under review: `git worktree add --detach <tmp>/spot HEAD`, with
+   `<tmp>` from `mktemp -d`. Uncommitted work isn't in it: if `git status --porcelain` shows
+   changes to code, say the spot check ran on `HEAD` without them.
+2. Give it the dependencies the tests need without installing anything: symlink each untracked
+   dependency folder the repo uses (`node_modules`, `.venv`, `venv`) from the main checkout
+   into the worktree. If the tests still can't run there, skip the spot check and say why.
+3. For each scenario: in the worktree, break the smallest piece of code that implements it (a
+   condition, a return value, a line); run only that scenario's test (the repo's test command
+   filtered to it); record whether it failed; then `git -C <tmp>/spot checkout -- .` before the
+   next one.
+4. Remove the worktree: `git worktree remove --force <tmp>/spot`, then delete `<tmp>`.
 
 A test that still passes with its code broken is a **hard fail** (vacuous test). Also flag, from
 reading, tests whose values give the same result under the rule and a plausible wrong rule

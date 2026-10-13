@@ -41,5 +41,9 @@ its proposal says so.
   `npm install`, gitignored, and never edited. Don't name your own skills `openspec-…`.
 - **Read check verdicts from the job log.** The `sdd-checks` job prints one line per check,
   `<check>: <state>`; agents can't read commit statuses, so read the log through the Actions API.
+- **CI checks a PR with the default branch's tools.** `sdd-checks` runs the scripts and the
+  pinned OpenSpec CLI from the default branch, and reads the PR only as data. A PR that changes
+  `scripts/sdd/`, `.github/workflows/` or the OpenSpec pin in `package.json` is checked with the
+  old ones until it merges, so run `bash scripts/sdd/check-specs.sh` locally on such a PR.
 - **Scale the process to the risk.** `/deep-review` is for changes that gate merging, handle
   secrets or run untrusted code; everything else gets the conformance review alone.
