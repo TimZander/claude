@@ -1,11 +1,13 @@
 #!/bin/bash
 # Profile-driven setup for Claude Code cloud environments.
 #
-# Usage: setup.sh <profile> [repo-dir]
+# Usage: setup.sh <profile> [repo-dir] [ref]
 #
 #   <profile>   Name of a file in cloud/profiles/ (without .sh).
 #   [repo-dir]  Checkout of this repo, used for profiles and team standards.
 #               Defaults to the checkout this script lives in.
+#   [ref]       Branch or tag to install plugins from. Defaults to the
+#               marketplace's default branch.
 #
 # Normally run by cloud/bootstrap.sh (the script pasted into the environment's
 # Setup script field), which clones this repo and calls this with a profile.
@@ -24,6 +26,7 @@
 PROFILE="${1:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${2:-$(dirname "$SCRIPT_DIR")}"
+REF="${3:-}"
 PROFILES_DIR="${REPO_DIR}/cloud/profiles"
 
 # Overridable so the smoke test can run without root.
@@ -33,6 +36,10 @@ APT_SOURCES_DIR="${CLOUD_SETUP_APT_SOURCES_DIR:-/etc/apt/sources.list.d}"
 MARKETPLACE_REPO="TimZander/claude"
 MARKETPLACE_NAME="tzander-skills"
 STANDARDS_PATH="standards/CLAUDE.md"
+
+# Without a ref, `marketplace add` tracks the default branch, so testing a
+# branch via bootstrap's REF would still install main's plugins.
+MARKETPLACE_SOURCE="${MARKETPLACE_REPO}${REF:+#${REF}}"
 
 list_profiles() {
     local f
@@ -44,7 +51,7 @@ list_profiles() {
 if [ -z "$PROFILE" ] || [ ! -f "${PROFILES_DIR}/${PROFILE}.sh" ]; then
     echo "ERROR: unknown or missing profile '${PROFILE}'. Available profiles:" >&2
     list_profiles >&2
-    echo "Usage: setup.sh <profile> [repo-dir]" >&2
+    echo "Usage: setup.sh <profile> [repo-dir] [ref]" >&2
     exit 2
 fi
 
@@ -88,7 +95,7 @@ fi
 # bundled skills.
 if [ -n "$PLUGINS" ]; then
     if command -v claude >/dev/null 2>&1; then
-        claude plugin marketplace add "$MARKETPLACE_REPO" || true
+        claude plugin marketplace add "$MARKETPLACE_SOURCE" || true
         for p in $PLUGINS; do
             claude plugin install "${p}@${MARKETPLACE_NAME}" || true
         done

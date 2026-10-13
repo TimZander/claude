@@ -91,12 +91,12 @@ See the [cloud environments docs](https://code.claude.com/docs/en/cloud-environm
 
 The pasted `bootstrap.sh` is a small stub that stays the same between updates: it shallow-clones this repo at `REF` (default `main`) and runs [`cloud/setup.sh`](cloud/setup.sh) with your `PROFILE`. `setup.sh` then:
 
-1. **Plugins** — adds this marketplace and installs the profile's `PLUGINS` through the plugin system.
+1. **Plugins** — adds this marketplace at `REF` and installs the profile's `PLUGINS` through the plugin system.
 2. **Tools** — installs `APT_PACKAGES` (in the background, overlapping the plugin install) and `NPM_PACKAGES` globally.
 3. **Team standards** — copies `standards/CLAUDE.md` to `/root/.claude/CLAUDE.md`, the same file `setup-env` syncs locally.
 4. **Verification** — checks each of `VERIFY_COMMANDS` is on `PATH`, logs the plugin list, and reports whether GitHub auth is present (never the token itself).
 
-To try a profile change before merging it, set `REF` in the stub to your branch.
+To try a change before merging it, set `REF` in the stub to your branch. Plugins are installed from that branch too, so new or changed plugins can be tested the same way.
 
 ### Keeping it updated
 

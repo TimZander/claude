@@ -78,6 +78,7 @@ echo "default profile"
 run_setup default "claude apt-get npm gh" default
 assert_equal 0 "$CODE" "exits 0"
 assert_contains "$CALLS_TXT" "claude plugin marketplace add TimZander/claude" "adds marketplace"
+assert_not_contains "$CALLS_TXT" "TimZander/claude#" "no ref pins nothing"
 assert_contains "$CALLS_TXT" "claude plugin install deep-review@tzander-skills" "installs deep-review"
 assert_contains "$CALLS_TXT" "apt-get install -y -qq gh" "installs gh"
 assert_not_contains "$CALLS_TXT" "npm install" "no npm install"
@@ -88,6 +89,10 @@ else
     bad "copies team standards"
 fi
 assert_not_contains "$OUT" "WARNING" "no warnings"
+
+echo "ref"
+run_setup ref "claude apt-get npm gh" default "$REPO_ROOT" my-branch
+assert_contains "$CALLS_TXT" "claude plugin marketplace add TimZander/claude#my-branch" "installs plugins from the ref"
 
 echo "sdd profile"
 run_setup sdd "claude apt-get npm gh openspec" sdd
@@ -123,6 +128,7 @@ if [ -f "$SCRIPT_DIR/profiles/${boot_profile}.sh" ]; then
 else
     bad "bootstrap.sh PROFILE '$boot_profile' exists"
 fi
+assert_contains "$(cat "$SCRIPT_DIR/bootstrap.sh")" 'setup.sh" "$PROFILE" "$SRC" "$REF"' "bootstrap.sh passes REF to setup.sh"
 if bash -n "$SCRIPT_DIR/bootstrap.sh"; then ok "bootstrap.sh syntax"; else bad "bootstrap.sh syntax"; fi
 
 echo

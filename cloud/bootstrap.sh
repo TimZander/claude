@@ -22,7 +22,7 @@ echo "=== setup started $(date -u) (profile=${PROFILE} ref=${REF} rev=${REVISION
 SRC=/tmp/tzander-claude
 rm -rf "$SRC"
 if git clone --depth 1 --branch "$REF" https://github.com/TimZander/claude "$SRC"; then
-    bash "$SRC/cloud/setup.sh" "$PROFILE" "$SRC" || echo "WARNING: setup.sh exited $?"
+    bash "$SRC/cloud/setup.sh" "$PROFILE" "$SRC" "$REF" || echo "WARNING: setup.sh exited $?"
 else
     echo "WARNING: could not clone TimZander/claude@${REF} — nothing installed"
 fi
