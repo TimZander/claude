@@ -1,0 +1,8 @@
+{
+  "name": "sdd",
+  "version": "0.1.0",
+  "description": "Spec-driven development on OpenSpec: spec review, conformance review, fixes through the spec, archive PRs, and an installer that sets a repo up for the flow",
+  "author": {
+    "name": "Tim Zander"
+  }
+}
