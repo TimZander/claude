@@ -60,6 +60,19 @@ if (mode === 'package') {
   ensure(section(data, 'extraKnownMarketplaces'), 'tzander-skills',
     { source: { source: 'github', repo: arg } }, 'extraKnownMarketplaces["tzander-skills"]')
   ensure(section(data, 'enabledPlugins'), 'sdd@tzander-skills', true, 'enabledPlugins["sdd@tzander-skills"]')
+
+  // The SessionStart hook: added once, next to any hooks the repo already has.
+  const hooks = section(data, 'hooks')
+  if (!Array.isArray(hooks.SessionStart)) {
+    hooks.SessionStart = []
+  }
+  const present = JSON.stringify(hooks.SessionStart).includes('scripts/sdd/session-start.sh')
+  if (!present) {
+    hooks.SessionStart.push({
+      hooks: [{ type: 'command', command: 'bash "$CLAUDE_PROJECT_DIR/scripts/sdd/session-start.sh"' }],
+    })
+    console.log('added hooks.SessionStart (scripts/sdd/session-start.sh)')
+  }
 }
 
 const out = JSON.stringify(data, null, 2) + '\n'

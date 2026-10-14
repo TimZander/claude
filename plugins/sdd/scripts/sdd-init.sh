@@ -9,7 +9,8 @@
 # version of the plugin's files. Two kinds of file:
 #
 #   Owned by the plugin, overwritten on every run (each says so at its top):
-#     scripts/sdd/*                     OpenSpec runner, archive and spec checks
+#     scripts/sdd/*                     OpenSpec runner, archive and spec checks, and the
+#                                       SessionStart hook (npm ci when stale, sdd status)
 #     .claude/sdd-workflow.md           the flow agents follow, imported by CLAUDE.md
 #     .github/workflows/sdd-checks.yml  the PR checks (skipped with --no-ci)
 #     .claude/sdd-version               the plugin version installed
@@ -18,7 +19,8 @@
 #     openspec/conventions.md, docs/decisions/ (README and template)
 #
 # And edits that only ever add: package.json (pinned OpenSpec, scripts),
-# .claude/settings.json (telemetry off, the plugin enabled), .gitignore, and
+# .claude/settings.json (telemetry off, the plugin enabled, the SessionStart hook),
+# .gitignore, and
 # the `@.claude/sdd-workflow.md` import line in CLAUDE.md. A value the repo
 # already set differently is kept and reported as a warning.
 #
@@ -102,7 +104,7 @@ seed() {
 }
 
 echo "Plugin files:"
-for f in openspec.sh sdd-archive.sh check-specs.sh; do
+for f in openspec.sh sdd-archive.sh check-specs.sh session-start.sh; do
     owned "scripts/sdd/$f" 755
 done
 owned scripts/sdd/setup-agent-skills.mjs

@@ -92,7 +92,7 @@ printf '%s\n' "$out" | grep -q 'warning: no package-lock.json' || fail "no warni
 pass "init warns that CI needs a lock file"
 echo '{}' > "$r/package-lock.json"
 for f in scripts/sdd/openspec.sh scripts/sdd/sdd-archive.sh scripts/sdd/check-specs.sh \
-         scripts/sdd/setup-agent-skills.mjs .claude/sdd-workflow.md .github/workflows/sdd-checks.yml \
+         scripts/sdd/session-start.sh scripts/sdd/setup-agent-skills.mjs .claude/sdd-workflow.md .github/workflows/sdd-checks.yml \
          .claude/sdd-version openspec/conventions.md docs/decisions/README.md CLAUDE.md package.json; do
     [ -f "$r/$f" ] || fail "init did not create $f"
 done
@@ -106,6 +106,8 @@ node -e '
   if (s.env.OPENSPEC_TELEMETRY !== "0") throw "telemetry"
   if (s.enabledPlugins["sdd@tzander-skills"] !== true) throw "enabled"
   if (s.extraKnownMarketplaces["tzander-skills"].source.repo !== "TimZander/claude") throw "marketplace"
+  const cmds = JSON.stringify(s.hooks.SessionStart)
+  if (!cmds.includes("$CLAUDE_PROJECT_DIR/scripts/sdd/session-start.sh")) throw "session hook"
 ' "$r" || fail "package.json or settings.json content"
 pass "init sets up a fresh repo"
 
@@ -113,6 +115,7 @@ pass "init sets up a fresh repo"
 out="$(bash "$INIT" --repo "$r" --no-install)"
 if printf '%s\n' "$out" | grep -Eq '^  (added|updated|set) '; then echo "$out"; fail "second run changed files"; fi
 [ "$(grep -c 'sdd-workflow.md' "$r/CLAUDE.md")" = 1 ] || fail "import line duplicated"
+[ "$(grep -o 'session-start.sh' "$r/.claude/settings.json" | wc -l | tr -d ' ')" = 1 ] || fail "session hook duplicated"
 pass "init is idempotent"
 
 # --- sdd-init: keeps the repo's own values, restores owned files -------------------
@@ -120,12 +123,15 @@ r2="$(fresh_repo)"
 echo '{"name":"x","scripts":{"prepare":"node other.mjs"},"devDependencies":{"@fission-ai/openspec":"1.14.0"}}' > "$r2/package.json"
 printf '# Mine\n\nUse /opsx:propose.\n' > "$r2/CLAUDE.md"
 mkdir -p "$r2/openspec" && echo mine > "$r2/openspec/conventions.md"
+mkdir -p "$r2/.claude" && echo '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}' > "$r2/.claude/settings.json"
 out="$(bash "$INIT" --repo "$r2" --no-install)"
 [ "$(printf '%s\n' "$out" | tail -n 1)" = 'sdd-init: done, 4 warnings' ] || { echo "$out"; fail "expected 4 warnings"; }
 grep -q '"node other.mjs"' "$r2/package.json" || fail "overwrote the repo's prepare script"
 grep -q '"1.14.0"' "$r2/package.json" || fail "overwrote the repo's OpenSpec pin"
 [ "$(cat "$r2/openspec/conventions.md")" = mine ] || fail "overwrote repo-owned conventions"
 head -n 1 "$r2/CLAUDE.md" | grep -q '# Mine' || fail "rewrote CLAUDE.md"
+grep -q '"echo mine"' "$r2/.claude/settings.json" || fail "dropped the repo's own SessionStart hook"
+grep -q 'session-start.sh' "$r2/.claude/settings.json" || fail "sdd hook not added next to the repo's own"
 echo tampered > "$r2/.claude/sdd-workflow.md"
 out="$(bash "$INIT" --repo "$r2" --no-install)"
 printf '%s\n' "$out" | grep -q 'updated .claude/sdd-workflow.md' || fail "owned file not restored"
@@ -233,6 +239,46 @@ out="$(STUB_DATE=2026-09-09 bash "$r5/scripts/sdd/sdd-archive.sh" verify -C "$r5
     || { echo "$out"; fail "verify with overlapping names"; }
 pass "verify renames the folder each archive added, not a look-alike"
 
+# --- session-start.sh: npm ci only when stale, status lines, never fails ---------------
+r6="$(fresh_repo)"
+bash "$INIT" --repo "$r6" --no-install >/dev/null
+echo '{}' > "$r6/package-lock.json"
+nfake="$TMP_ROOT/npmbin"
+mkdir -p "$nfake"
+cat > "$nfake/npm" <<'EOF2'
+#!/bin/bash
+echo "npm $*" >> "$NPM_LOG"
+[ -z "${NPM_FAILS:-}" ] || exit 1
+mkdir -p node_modules && touch node_modules/.package-lock.json
+EOF2
+chmod +x "$nfake/npm"
+export NPM_LOG="$TMP_ROOT/npm.log"
+ss() { PATH="$nfake:$PATH" bash "$r6/scripts/sdd/session-start.sh" "$r6"; }
+
+: > "$NPM_LOG"
+out="$(NPM_FAILS=1 ss)" || fail "session-start exited non-zero when npm failed"
+printf '%s\n' "$out" | grep -q 'warning: `npm ci` failed' || { echo "$out"; fail "npm failure not reported"; }
+out="$(ss)"
+grep -q '^npm ci' "$NPM_LOG" || fail "session-start did not run npm ci on a fresh repo"
+printf '%s\n' "$out" | grep -q 'installed the pinned OpenSpec CLI' || { echo "$out"; fail "install not reported"; }
+: > "$NPM_LOG"
+out="$(ss)"
+[ ! -s "$NPM_LOG" ] || fail "session-start ran npm ci with node_modules current"
+sleep 1; touch "$r6/package-lock.json"
+out="$(ss)"
+grep -q '^npm ci' "$NPM_LOG" || fail "session-start did not rerun npm ci after the lock file changed"
+pass "session-start runs npm ci only when node_modules is stale, and never fails"
+
+add_change "$r6" pending-one
+printf '\nADR detail: learning\n' >> "$r6/CLAUDE.md"
+out="$(ss)"
+printf '%s\n' "$out" | grep -q 'active change(s) on this branch: pending-one' || { echo "$out"; fail "active change not reported"; }
+printf '%s\n' "$out" | grep -q 'learning mode is on' || { echo "$out"; fail "learning mode not reported"; }
+rm "$r6/.claude/sdd-workflow.md"
+out="$(ss)"
+printf '%s\n' "$out" | grep -q "isn't set up for spec-driven development; ask the owner" || { echo "$out"; fail "unset-up repo not reported"; }
+pass "session-start reports active changes, learning mode, and a repo without sdd"
+
 # --- verdict parsing ------------------------------------------------------------------
 printf -- '- compared base abc1234def with result 0099aa\narchive-mechanical: success\n' > "$TMP_ROOT/log1"
 out="$(bash "$T/sdd-archive.sh" verdict "$TMP_ROOT/log1")"
@@ -287,6 +333,12 @@ grep -qx 'plugin install sdd@tzander-skills' "$FAKE_LOG" || fail "cloud-setup di
 [ "$(grep -c '^plugin install ' "$FAKE_LOG")" = 1 ] || fail "cloud-setup installed more than sdd"
 grep -q '=== sdd setup finished' "$TMP_ROOT/cshome/setup-script.log" || fail "cloud-setup wrote no log"
 pass "cloud-setup installs sdd and nothing else, and logs it"
+md="$TMP_ROOT/cshome/.claude/CLAUDE.md"
+[ -f "$md" ] || fail "cloud-setup wrote no ~/.claude/CLAUDE.md"
+grep -q 'sdd-workflow.md' "$md" || fail "CLAUDE.md does not point at the sdd workflow"
+grep -q 'Never run `/sdd:init` unasked' "$md" || fail "CLAUDE.md does not say to ask before /sdd:init"
+grep -q 'recording decisions as ADRs' "$md" || fail "CLAUDE.md does not point at the ADR rules"
+pass "cloud-setup writes a CLAUDE.md that points at the workflow and asks before /sdd:init"
 
 FAKE_MARKETPLACE_EXISTS=1 cs_run
 grep -qx 'plugin marketplace update tzander-skills' "$FAKE_LOG" || { cat "$FAKE_LOG"; fail "cloud-setup did not update an existing marketplace"; }

@@ -2,8 +2,9 @@
 # Cloud environment setup for spec-driven development with the sdd plugin.
 #
 # Paste this file into the cloud environment's settings (environment menu → Edit → Setup
-# script). It sets up an environment for sdd work only: the sdd plugin and gh, and nothing
-# else, so no shared team standards and no other plugins.
+# script). It sets up an environment for sdd work only: the sdd plugin, gh, and a short
+# ~/.claude/CLAUDE.md that points every session at the repository's sdd workflow. Nothing else:
+# no shared team standards and no other plugins.
 #
 # Runs as root on Ubuntu 24.04 BEFORE Claude Code launches, and only when no cached
 # environment exists. Editing it forces a cache rebuild.
@@ -13,7 +14,7 @@
 # ~5 minutes so the cache can build.
 #
 # Test overrides (leave unset in a real environment):
-#   CLOUD_SETUP_HOME  home directory for the log (default /root)
+#   CLOUD_SETUP_HOME  home directory for the log and ~/.claude/CLAUDE.md (default /root)
 #   SDD_MARKETPLACE   marketplace source: owner/repo, git URL or local path
 #                     (default TimZander/claude)
 
@@ -67,6 +68,29 @@ if [ -n "$CLAUDE_BIN" ]; then
 else
     echo "WARNING: claude CLI not found — the sdd plugin was not installed"
 fi
+
+# ------------------------------------------------------------- instructions
+#
+# ~/.claude/CLAUDE.md is loaded in every session on this environment. It holds only the sdd
+# working agreement, not the shared team standards, and it's written here rather than fetched
+# because this script is pasted into the environment settings and can't read the repo.
+mkdir -p "${SETUP_HOME}/.claude"
+cat > "${SETUP_HOME}/.claude/CLAUDE.md" <<'MD'
+# Spec-driven development environment
+
+This environment is for spec-driven development with OpenSpec and the sdd plugin (`/sdd:*`
+skills).
+
+- **Follow the repository's workflow.** Read `.claude/sdd-workflow.md` (imported by the repo's
+  `CLAUDE.md`) before changing anything, and follow its flow for every change, including its
+  rules for recording decisions as ADRs.
+- **A repository without sdd: ask, don't set it up.** If there's no `.claude/sdd-workflow.md`,
+  tell the owner the repository isn't set up for spec-driven development and ask what they want.
+  Never run `/sdd:init` unasked: setting up a repository is the owner's decision.
+- **Use the sdd reviews.** `/sdd:spec-review` for the spec, `/sdd:conformance-review` for the
+  code, and what the workflow adds for high-risk changes.
+MD
+echo "sdd instructions written: ${SETUP_HOME}/.claude/CLAUDE.md"
 
 # -------------------------------------------------------------- verification
 wait $APT_PID 2>/dev/null
