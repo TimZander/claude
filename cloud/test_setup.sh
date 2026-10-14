@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test for cloud/setup.sh and its profiles.
 #
-# Runs setup.sh against stub claude/apt-get/npm/gh/openspec binaries that only
+# Runs setup.sh against stub claude/apt-get/npm/gh binaries that only
 # record their arguments, so nothing is installed and root is not needed.
 #
 # What's NOT covered: cloud/bootstrap.sh's clone (needs network) and real
@@ -59,6 +59,7 @@ run_setup() {
     OUT="$(PATH="$CASE/bin:/usr/bin:/bin" \
         CLOUD_SETUP_CLAUDE_HOME="$CASE/claude-home" \
         CLOUD_SETUP_APT_SOURCES_DIR="$CASE/apt" \
+        CLOUD_SETUP_CLAUDE_CANDIDATES="${CLAUDE_CANDIDATES:-}" \
         GH_TOKEN="" GITHUB_TOKEN="" \
         bash "$SETUP" "$@" 2>&1)"
     CODE=$?
@@ -95,18 +96,40 @@ run_setup ref "claude apt-get npm gh" default "$REPO_ROOT" my-branch
 assert_contains "$CALLS_TXT" "claude plugin marketplace add TimZander/claude#my-branch" "installs plugins from the ref"
 
 echo "sdd profile"
-run_setup sdd "claude apt-get npm gh openspec" sdd
+run_setup sdd "claude apt-get npm gh" sdd
 assert_equal 0 "$CODE" "exits 0"
-assert_contains "$CALLS_TXT" "npm install -g --no-fund --no-audit @fission-ai/openspec@latest" "installs OpenSpec"
-assert_contains "$OUT" "openspec: " "verifies openspec"
+assert_contains "$CALLS_TXT" "claude plugin install sdd@tzander-skills" "installs sdd"
+assert_not_contains "$CALLS_TXT" "deep-review" "leaves out deep-review"
+assert_not_contains "$CALLS_TXT" "npm install" "no global npm install"
+if cmp -s "$REPO_ROOT/cloud/instructions/sdd.md" "$CASE/claude-home/CLAUDE.md"; then
+    ok "installs the sdd instructions instead of team standards"
+else
+    bad "installs the sdd instructions instead of team standards"
+fi
+assert_not_contains "$OUT" "WARNING" "no warnings"
+# plugins/sdd/cloud-setup.sh (pasted standalone) embeds the same text.
+embedded="$(sed -n "/<<'MD'\$/,/^MD\$/p" "$REPO_ROOT/plugins/sdd/cloud-setup.sh" | sed '1d;$d')"
+assert_equal "$embedded" "$(cat "$REPO_ROOT/cloud/instructions/sdd.md")" "sdd instructions match plugins/sdd/cloud-setup.sh"
+
+echo "claude off PATH is found in the usual locations"
+mkdir -p "$TEST_TMPDIR/alt"
+make_stubs "$TEST_TMPDIR/alt" claude
+CLAUDE_CANDIDATES="$TEST_TMPDIR/nope/claude $TEST_TMPDIR/alt/claude" run_setup alt-claude "apt-get gh" default
+assert_contains "$CALLS_TXT" "claude plugin install deep-review@tzander-skills" "uses the fallback claude"
 assert_not_contains "$OUT" "WARNING" "no warnings"
 
+echo "an existing marketplace is updated"
+run_setup rerun "apt-get gh" default
+printf '#!/bin/sh\necho "claude $*" >> "$CALLS"\n[ "$3" = add ] && exit 1\nexit 0\n' > "$CASE/bin/claude"
+chmod +x "$CASE/bin/claude"
+run_setup rerun "apt-get gh" default
+assert_contains "$CALLS_TXT" "claude plugin marketplace update tzander-skills" "falls back to marketplace update"
+assert_contains "$CALLS_TXT" "claude plugin install deep-review@tzander-skills" "still installs plugins"
+
 echo "missing tools are warnings, not failures"
-run_setup sdd-missing "apt-get" sdd
+run_setup missing "apt-get" default
 assert_equal 0 "$CODE" "exits 0"
 assert_contains "$OUT" "WARNING: claude not on PATH" "warns on missing claude"
-assert_contains "$OUT" "WARNING: npm not on PATH" "warns on missing npm"
-assert_contains "$OUT" "WARNING: openspec missing" "warns on missing openspec"
 
 echo "profiles"
 for profile in "$SCRIPT_DIR"/profiles/*.sh; do

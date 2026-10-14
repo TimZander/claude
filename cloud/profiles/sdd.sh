@@ -1,10 +1,13 @@
 # shellcheck shell=bash disable=SC2034
-# Spec-driven development profile: OpenSpec on top of the core workflow.
+# Spec-driven development profile: the sdd plugin and nothing else.
 #
-# TODO: replace deep-review with the SDD review plugins, and add the SDD
-# workflow plugins, once they exist in this marketplace.
-PROFILE_DESCRIPTION="Spec-driven development: OpenSpec, team standards, workflow plugins, gh"
-PLUGINS="deep-review craft-pr craft-stage-commit-push start-work self-review"
+# Mirrors plugins/sdd/cloud-setup.sh. sdd's conformance-review is the code
+# review in this flow, so deep-review is left out. OpenSpec isn't installed
+# globally: each repo pins its own version, installed by the repo's SessionStart
+# hook. The sdd working agreement replaces the team standards.
+PROFILE_DESCRIPTION="Spec-driven development: the sdd plugin, gh, sdd instructions"
+PLUGINS="sdd"
 APT_PACKAGES="gh"
-NPM_PACKAGES="@fission-ai/openspec@latest"
-VERIFY_COMMANDS="gh openspec"
+NPM_PACKAGES=""
+VERIFY_COMMANDS="gh"
+CLAUDE_MD="cloud/instructions/sdd.md"

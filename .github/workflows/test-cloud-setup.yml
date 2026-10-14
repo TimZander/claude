@@ -8,6 +8,7 @@ on:
     paths:
       - "cloud/**"
       - ".claude-plugin/marketplace.json"
+      - "plugins/sdd/cloud-setup.sh"
       - ".github/workflows/test-cloud-setup.yml"
   push:
     branches: [main]

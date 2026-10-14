@@ -19,6 +19,8 @@
 #   APT_PACKAGES         Space-separated apt packages.
 #   NPM_PACKAGES         Space-separated global npm packages.
 #   VERIFY_COMMANDS      Space-separated commands that must be on PATH afterwards.
+#   CLAUDE_MD            Optional. Repo-relative file installed as ~/.claude/CLAUDE.md
+#                        (default: the shared team standards).
 #
 # Exits non-zero only on a usage error. Every install step is best-effort and
 # ends in `|| true`; failures surface as WARNING lines in the verification step.
@@ -32,10 +34,10 @@ PROFILES_DIR="${REPO_DIR}/cloud/profiles"
 # Overridable so the smoke test can run without root.
 CLAUDE_HOME="${CLOUD_SETUP_CLAUDE_HOME:-/root/.claude}"
 APT_SOURCES_DIR="${CLOUD_SETUP_APT_SOURCES_DIR:-/etc/apt/sources.list.d}"
+CLAUDE_CANDIDATES="${CLOUD_SETUP_CLAUDE_CANDIDATES-/opt/node*/bin/claude /usr/local/bin/claude /usr/bin/claude}"
 
 MARKETPLACE_REPO="TimZander/claude"
 MARKETPLACE_NAME="tzander-skills"
-STANDARDS_PATH="standards/CLAUDE.md"
 
 # Without a ref, `marketplace add` tracks the default branch, so testing a
 # branch via bootstrap's REF would still install main's plugins.
@@ -60,6 +62,7 @@ PLUGINS=""
 APT_PACKAGES=""
 NPM_PACKAGES=""
 VERIFY_COMMANDS=""
+CLAUDE_MD="standards/CLAUDE.md"
 # shellcheck source=/dev/null
 . "${PROFILES_DIR}/${PROFILE}.sh"
 
@@ -93,14 +96,29 @@ fi
 # point: account-level enablement exposed the plugin's definition but left
 # /deep-review un-invocable, because these plugins ship commands rather than
 # bundled skills.
+#
+# `claude` may not be on PATH yet while the setup script runs, so look in the
+# usual install locations as well.
+CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
+if [ -z "$CLAUDE_BIN" ]; then
+    for candidate in $CLAUDE_CANDIDATES; do
+        if [ -x "$candidate" ]; then
+            CLAUDE_BIN="$candidate"
+            break
+        fi
+    done
+fi
 if [ -n "$PLUGINS" ]; then
-    if command -v claude >/dev/null 2>&1; then
-        claude plugin marketplace add "$MARKETPLACE_SOURCE" || true
+    if [ -n "$CLAUDE_BIN" ]; then
+        # On a re-run the marketplace is already there; refresh it instead.
+        "$CLAUDE_BIN" plugin marketplace add "$MARKETPLACE_SOURCE" \
+            || "$CLAUDE_BIN" plugin marketplace update "$MARKETPLACE_NAME" || true
         for p in $PLUGINS; do
-            claude plugin install "${p}@${MARKETPLACE_NAME}" || true
+            "$CLAUDE_BIN" plugin install "${p}@${MARKETPLACE_NAME}" \
+                || echo "WARNING: plugin ${p} did not install"
         done
         echo "--- plugins after install ---"
-        claude plugin list || true
+        "$CLAUDE_BIN" plugin list || true
     else
         echo "WARNING: claude not on PATH — plugin install skipped"
     fi
@@ -116,17 +134,17 @@ if [ -n "$NPM_PACKAGES" ]; then
     fi
 fi
 
-# ----------------------------------------------------------------- standards
+# ------------------------------------------------------------ instructions
 #
 # ~/.claude/CLAUDE.md does not carry over from your machine; cloud sessions only
-# see a repo's own CLAUDE.md. This is the same file your local sync writes, from
-# the same repo, so the repo stays the single source of truth.
+# see a repo's own CLAUDE.md. By default this is the team standards, the same
+# file your local sync writes, so the repo stays the single source of truth.
 mkdir -p "$CLAUDE_HOME"
-if [ -f "${REPO_DIR}/${STANDARDS_PATH}" ]; then
-    cp "${REPO_DIR}/${STANDARDS_PATH}" "${CLAUDE_HOME}/CLAUDE.md"
-    echo "standards installed: $(wc -l < "${CLAUDE_HOME}/CLAUDE.md") lines"
+if [ -f "${REPO_DIR}/${CLAUDE_MD}" ]; then
+    cp "${REPO_DIR}/${CLAUDE_MD}" "${CLAUDE_HOME}/CLAUDE.md"
+    echo "CLAUDE.md installed from ${CLAUDE_MD}: $(wc -l < "${CLAUDE_HOME}/CLAUDE.md") lines"
 else
-    echo "WARNING: ${STANDARDS_PATH} missing from ${REPO_DIR}"
+    echo "WARNING: ${CLAUDE_MD} missing from ${REPO_DIR}"
 fi
 
 # -------------------------------------------------------------- verification

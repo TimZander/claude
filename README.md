@@ -74,14 +74,14 @@ Cloud sessions ([claude.ai/code](https://claude.ai/code), the Claude app, GitHub
 | Profile | For | Installs |
 |---------|-----|----------|
 | `default` | Everyday work | Team standards, `deep-review`, `craft-pr`, `craft-stage-commit-push`, `start-work`, `self-review`, `gh` |
-| `sdd` | Spec-driven development | Everything in `default`, plus [OpenSpec](https://github.com/Fission-AI/OpenSpec) (`openspec` CLI) |
+| `sdd` | Spec-driven development | The [`sdd`](plugins/sdd) plugin, `gh`, and a short `CLAUDE.md` pointing sessions at each repo's sdd workflow — no team standards, no other plugins |
 
-The `sdd` profile still uses `deep-review`; it will switch to the SDD review and workflow plugins once they're added to this marketplace.
+The `sdd` profile builds the same environment as [`plugins/sdd/cloud-setup.sh`](plugins/sdd/cloud-setup.sh), which can be pasted on its own. `/sdd:conformance-review` is the code review in that flow, so `deep-review` is left out. OpenSpec isn't installed here: each repo pins its own version and installs it from its SessionStart hook.
 
 ### Configure an environment
 
 1. Open a cloud session, then open the cloud environment menu in the session's title bar and choose **Edit** (or create a new environment — one per profile).
-2. Set **Network access** to **Trusted**. Setup needs GitHub, the Ubuntu package mirrors (`gh`), and the npm registry (OpenSpec).
+2. Set **Network access** to **Trusted**. Setup needs GitHub, the Ubuntu package mirrors (`gh`), and the npm registry (for any `NPM_PACKAGES`).
 3. Paste [`cloud/bootstrap.sh`](cloud/bootstrap.sh) into **Setup script**, set `PROFILE` to the profile you want, and save.
 4. Start a new session.
 
@@ -93,7 +93,7 @@ The pasted `bootstrap.sh` is a small stub that stays the same between updates: i
 
 1. **Plugins** — adds this marketplace at `REF` and installs the profile's `PLUGINS` through the plugin system.
 2. **Tools** — installs `APT_PACKAGES` (in the background, overlapping the plugin install) and `NPM_PACKAGES` globally.
-3. **Team standards** — copies `standards/CLAUDE.md` to `/root/.claude/CLAUDE.md`, the same file `setup-env` syncs locally.
+3. **Instructions** — copies the profile's `CLAUDE_MD` to `/root/.claude/CLAUDE.md`. By default that's `standards/CLAUDE.md`, the same file `setup-env` syncs locally.
 4. **Verification** — checks each of `VERIFY_COMMANDS` is on `PATH`, logs the plugin list, and reports whether GitHub auth is present (never the token itself).
 
 To try a change before merging it, set `REF` in the stub to your branch. Plugins are installed from that branch too, so new or changed plugins can be tested the same way.
@@ -104,7 +104,7 @@ Profile and setup changes merged here need no re-paste, but they reach cloud ses
 
 ### Adding a profile
 
-1. Copy [`cloud/profiles/default.sh`](cloud/profiles/default.sh) to `cloud/profiles/<name>.sh` and set `PROFILE_DESCRIPTION`, `PLUGINS`, `APT_PACKAGES`, `NPM_PACKAGES`, and `VERIFY_COMMANDS`.
+1. Copy [`cloud/profiles/default.sh`](cloud/profiles/default.sh) to `cloud/profiles/<name>.sh` and set `PROFILE_DESCRIPTION`, `PLUGINS`, `APT_PACKAGES`, `NPM_PACKAGES`, and `VERIFY_COMMANDS`. Set `CLAUDE_MD` to a repo-relative file to install something other than the team standards.
 2. Add a row to the profiles table above.
 3. Run `bash cloud/test_setup.sh`. It checks that every profile's plugins exist in the marketplace. CI runs it on any change under `cloud/`.
 
