@@ -20,6 +20,19 @@ the version each repo pins. This plugin is a layer on top of them, not a fork.
 `/sdd:init` sets up the current repository, or updates one set up earlier. Run it again after
 updating the plugin.
 
+### In cloud sessions
+
+A cloud session doesn't install the plugins a repository enables in its `.claude/settings.json`,
+so a cloud environment needs [`cloud-setup.sh`](cloud-setup.sh) as its setup script. Paste the
+file's contents into the environment's settings (environment menu → Edit → Setup script). It
+adds the `tzander-skills` marketplace (or updates it) and installs `sdd`, so the `/sdd:*` skills
+are in every session on that environment. The default "Trusted" network level allows the
+`github.com` access it needs.
+
+It doesn't install a repository's npm packages, because the setup script's result is cached
+for the whole environment, not per repository. Run `npm ci` in the session when you need
+OpenSpec's CLI and `/opsx:*` skills.
+
 ## Skills
 
 | Skill | When | What it does |

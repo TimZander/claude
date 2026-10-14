@@ -258,4 +258,26 @@ printf 'spec-checks: success\narchive-mechanical: success\n' > "$TMP_ROOT/log7"
 expect_exit 1 bash "$T/sdd-archive.sh" verdict "$TMP_ROOT/log7"
 pass "verdict ignores quoted lines and success without its compared-base line"
 
+# --- cloud-setup.sh: add on a fresh environment, update when the marketplace is there ---
+CS="$SCRIPT_DIR/../cloud-setup.sh"
+fake="$TMP_ROOT/fakebin"
+mkdir -p "$fake"
+cat > "$fake/claude" <<'EOF2'
+#!/bin/bash
+echo "$*" >> "$FAKE_LOG"
+if [ "$*" = "plugin marketplace list" ] && [ -n "${FAKE_HAS_MARKETPLACE:-}" ]; then echo "  > tzander-skills"; fi
+exit 0
+EOF2
+chmod +x "$fake/claude"
+export FAKE_LOG="$TMP_ROOT/fake.log"
+: > "$FAKE_LOG"
+PATH="$fake:$PATH" bash "$CS" >/dev/null
+grep -qx 'plugin marketplace add TimZander/claude' "$FAKE_LOG" || { cat "$FAKE_LOG"; fail "cloud-setup did not add the marketplace"; }
+grep -qx 'plugin install sdd@tzander-skills' "$FAKE_LOG" || fail "cloud-setup did not install the plugin"
+: > "$FAKE_LOG"
+FAKE_HAS_MARKETPLACE=1 PATH="$fake:$PATH" bash "$CS" >/dev/null
+grep -qx 'plugin marketplace update tzander-skills' "$FAKE_LOG" || { cat "$FAKE_LOG"; fail "cloud-setup did not update an existing marketplace"; }
+if grep -q 'marketplace add' "$FAKE_LOG"; then fail "cloud-setup re-added an existing marketplace"; fi
+pass "cloud-setup adds the marketplace once, then updates it"
+
 echo "all sdd tests passed"

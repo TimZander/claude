@@ -26,6 +26,6 @@ jobs:
         with:
           node-version: 22
       - name: Syntax check
-        run: for f in plugins/sdd/scripts/*.sh plugins/sdd/template/scripts/sdd/*.sh; do bash -n "$f"; done
+        run: for f in plugins/sdd/cloud-setup.sh plugins/sdd/scripts/*.sh plugins/sdd/template/scripts/sdd/*.sh; do bash -n "$f"; done
       - name: Smoke test
         run: bash plugins/sdd/scripts/test_sdd.sh
