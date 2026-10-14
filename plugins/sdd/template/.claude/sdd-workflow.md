@@ -46,5 +46,6 @@ its proposal says so.
   pinned OpenSpec CLI from the default branch, and reads the PR only as data. A PR that changes
   `scripts/sdd/`, `.github/workflows/` or the OpenSpec pin in `package.json` is checked with the
   old ones until it merges, so run `bash scripts/sdd/check-specs.sh` locally on such a PR.
-- **Scale the process to the risk.** `/deep-review` is for changes that gate merging, handle
-  secrets or run untrusted code; everything else gets the conformance review alone.
+- **The conformance review is the code review.** Every change gets `/sdd:conformance-review`,
+  not a general code review: the spec was already reviewed for intent, so the code is checked
+  against it.

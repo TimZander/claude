@@ -258,26 +258,43 @@ printf 'spec-checks: success\narchive-mechanical: success\n' > "$TMP_ROOT/log7"
 expect_exit 1 bash "$T/sdd-archive.sh" verdict "$TMP_ROOT/log7"
 pass "verdict ignores quoted lines and success without its compared-base line"
 
-# --- cloud-setup.sh: add on a fresh environment, update when the marketplace is there ---
+# --- cloud-setup.sh: sdd only, always exits 0, updates an existing marketplace ---------
 CS="$SCRIPT_DIR/../cloud-setup.sh"
 fake="$TMP_ROOT/fakebin"
 mkdir -p "$fake"
 cat > "$fake/claude" <<'EOF2'
 #!/bin/bash
 echo "$*" >> "$FAKE_LOG"
-if [ "$*" = "plugin marketplace list" ] && [ -n "${FAKE_HAS_MARKETPLACE:-}" ]; then echo "  > tzander-skills"; fi
+case "$*" in
+    "plugin marketplace add "*) [ -z "${FAKE_MARKETPLACE_EXISTS:-}" ] || exit 1 ;;
+    "plugin install "*) [ -z "${FAKE_INSTALL_FAILS:-}" ] || exit 1 ;;
+esac
 exit 0
 EOF2
-chmod +x "$fake/claude"
+printf '#!/bin/bash\nexit 0\n' > "$fake/apt-get"
+chmod +x "$fake/claude" "$fake/apt-get"
 export FAKE_LOG="$TMP_ROOT/fake.log"
-: > "$FAKE_LOG"
-PATH="$fake:$PATH" bash "$CS" >/dev/null
+cs_run() {
+    : > "$FAKE_LOG"
+    cs_status=0
+    cs_out="$(PATH="$fake:$PATH" CLOUD_SETUP_HOME="$TMP_ROOT/cshome" bash "$CS" 2>&1)" || cs_status=$?
+}
+
+cs_run
+[ "$cs_status" -eq 0 ] || { echo "$cs_out"; fail "cloud-setup exited $cs_status"; }
 grep -qx 'plugin marketplace add TimZander/claude' "$FAKE_LOG" || { cat "$FAKE_LOG"; fail "cloud-setup did not add the marketplace"; }
-grep -qx 'plugin install sdd@tzander-skills' "$FAKE_LOG" || fail "cloud-setup did not install the plugin"
-: > "$FAKE_LOG"
-FAKE_HAS_MARKETPLACE=1 PATH="$fake:$PATH" bash "$CS" >/dev/null
+grep -qx 'plugin install sdd@tzander-skills' "$FAKE_LOG" || fail "cloud-setup did not install sdd"
+[ "$(grep -c '^plugin install ' "$FAKE_LOG")" = 1 ] || fail "cloud-setup installed more than sdd"
+grep -q '=== sdd setup finished' "$TMP_ROOT/cshome/setup-script.log" || fail "cloud-setup wrote no log"
+pass "cloud-setup installs sdd and nothing else, and logs it"
+
+FAKE_MARKETPLACE_EXISTS=1 cs_run
 grep -qx 'plugin marketplace update tzander-skills' "$FAKE_LOG" || { cat "$FAKE_LOG"; fail "cloud-setup did not update an existing marketplace"; }
-if grep -q 'marketplace add' "$FAKE_LOG"; then fail "cloud-setup re-added an existing marketplace"; fi
-pass "cloud-setup adds the marketplace once, then updates it"
+pass "cloud-setup updates a marketplace that is already there"
+
+FAKE_INSTALL_FAILS=1 cs_run
+[ "$cs_status" -eq 0 ] || fail "cloud-setup exited $cs_status when the install failed"
+printf '%s\n' "$cs_out" | grep -q 'WARNING: the sdd plugin did not install' || fail "failed install not reported"
+pass "cloud-setup reports a failed install and still exits 0"
 
 echo "all sdd tests passed"

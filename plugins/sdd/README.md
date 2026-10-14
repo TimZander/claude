@@ -25,9 +25,11 @@ updating the plugin.
 A cloud session doesn't install the plugins a repository enables in its `.claude/settings.json`,
 so a cloud environment needs [`cloud-setup.sh`](cloud-setup.sh) as its setup script. Paste the
 file's contents into the environment's settings (environment menu → Edit → Setup script). It
-adds the `tzander-skills` marketplace (or updates it) and installs `sdd`, so the `/sdd:*` skills
-are in every session on that environment. The default "Trusted" network level allows the
-`github.com` access it needs.
+sets up an environment for sdd work only: it adds the `tzander-skills` marketplace (or updates
+it), installs `sdd` and `gh`, and nothing else, so no shared team standards and no other
+plugins. Every step is non-fatal and it always exits 0, because a failing setup script fails the
+session; problems show as `WARNING` lines in `/root/setup-script.log`. The default "Trusted"
+network level allows the access it needs.
 
 It doesn't install a repository's npm packages, because the setup script's result is cached
 for the whole environment, not per repository. Run `npm ci` in the session when you need
@@ -42,8 +44,9 @@ OpenSpec's CLI and `/opsx:*` skills.
 | `/sdd:spec-fix <change>` | On any finding, UAT remark or bug | Triage, then spec delta → check → commit, then failing test, then code |
 | `/sdd:archive-pr` | Before new work, when a change is still active | Archive-only PR, merged once CI's `archive-mechanical: success` is against the current tip |
 
-`conformance-review` replaces `/deep-review` for ordinary changes. Keep `/deep-review` for the
-heavy tier: changes that gate merging, handle secrets or run untrusted code.
+`conformance-review` is the code review for every change in this flow. It checks the code
+against a spec that was already reviewed for intent, so it doesn't need a general code review
+alongside it.
 
 ## What `/sdd:init` puts in a repo
 
