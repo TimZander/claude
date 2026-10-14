@@ -1,0 +1,90 @@
+# Installed by the sdd plugin (sdd-init). Re-running sdd-init overwrites this file.
+#
+# Spec checks for every PR. These checks gate merging, so they run only code
+# from the base branch: `pull_request_target` checks out the base, and the PR is
+# fetched as data (its merge commit) and never executed. Nothing here uses a
+# secret, and the token is read-only.
+#
+# Each check prints its verdict to this job's log as one line, `<check>: <state>`.
+# Agents read the verdict there, through the Actions API: they cannot read
+# commit statuses.
+name: sdd-checks
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdd-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      OPENSPEC_TELEMETRY: "0"
+    steps:
+      - name: Check out the base branch (the code that runs)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install the pinned OpenSpec CLI (no install scripts)
+        run: npm ci --ignore-scripts
+
+      - name: Fetch the PR's merge commit as data
+        id: pr
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # GitHub recomputes refs/pull/N/merge asynchronously after a push, so
+          # right after one it can still be the merge of the previous head. Use
+          # it only once its second parent is this event's head.
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if git fetch -q --no-tags origin "+refs/pull/$PR/merge:refs/sdd/result" 2>/dev/null \
+              && [ "$(git rev-parse refs/sdd/result^2)" = "$HEAD_SHA" ]; then
+              echo "result=$(git rev-parse refs/sdd/result)" >> "$GITHUB_OUTPUT"
+              echo "base=$(git rev-parse refs/sdd/result^1)" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "- reason: no merge commit for head $HEAD_SHA after 2 minutes (a merge conflict, or GitHub is slow)"
+          echo "spec-checks: failure"
+          echo "archive-mechanical: failure"
+          exit 1
+
+      - name: Specs validate, before and after archiving
+        if: always() && steps.pr.outcome == 'success'
+        run: bash scripts/sdd/check-specs.sh --rev "${{ steps.pr.outputs.result }}"
+
+      - name: Archive PR is mechanical
+        if: always() && steps.pr.outcome == 'success'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          status=0
+          out="$(bash scripts/sdd/sdd-archive.sh verify \
+            --base "${{ steps.pr.outputs.base }}" \
+            --result "${{ steps.pr.outputs.result }}")" || status=$?
+          # An archive into any branch but the default one is never mechanical.
+          if [ "$BASE_REF" != "$DEFAULT_BRANCH" ] && [ "$(printf '%s\n' "$out" | tail -n 1)" = "archive-mechanical: success" ]; then
+            printf '%s\n' "$out" | sed '$d'
+            echo "- the base branch $BASE_REF is not the default branch $DEFAULT_BRANCH"
+            echo "archive-mechanical: failure"
+            exit 1
+          fi
+          printf '%s\n' "$out"
+          exit $status
