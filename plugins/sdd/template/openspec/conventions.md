@@ -7,7 +7,9 @@ How specs are written in this repository. Read this before writing or changing a
 
 - One capability per folder in `openspec/specs/<capability>/spec.md`, named for what it does
   (`checkout`, `export`), not for the code that does it.
-- Each spec starts with `## Purpose`: one or two sentences on what the capability is for.
+- Each spec starts with `## Purpose`: one or two sentences on what the capability is for, at
+  least 50 characters. A change that creates a capability puts it at the top of the delta;
+  otherwise the archive writes a placeholder that strict validation rejects.
 
 ## Requirements
 

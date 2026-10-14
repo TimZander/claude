@@ -13,7 +13,8 @@ correct spec as a bug fix. Read `openspec/conventions.md` before writing or chan
    run `/sdd:archive-pr` first: an archive-only PR, merged once it is shown to be mechanical.
    Then branch the new work from the updated default branch.
 1. **Propose** with `/opsx:propose`: proposal, spec deltas, design (its open questions and the
-   assumptions the change proceeds on), tasks.
+   assumptions the change proceeds on), tasks. A delta that creates a new capability starts with
+   `## Purpose` of at least 50 characters, or its archived spec fails strict validation.
 2. **Check** with `bash scripts/sdd/check-specs.sh` after committing the change: the specs must
    validate both now and once the change is archived.
 3. **Spec review** with `/sdd:spec-review <change>`. It runs as a fresh agent, before any code.
