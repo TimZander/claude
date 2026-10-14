@@ -1,0 +1,31 @@
+name: test-sdd-scripts
+
+# The sdd plugin's installer and the scripts it copies into repos decide whether
+# a spec change validates and whether an archive PR may merge without review.
+# The smoke test runs them against real git repos and a stub OpenSpec CLI.
+# macOS is in the matrix because it ships bash 3.2, the floor these scripts target.
+on:
+  pull_request:
+    paths:
+      - "plugins/sdd/**"
+      - ".github/workflows/test-sdd-scripts.yml"
+  push:
+    branches: [main]
+
+jobs:
+  sdd-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Syntax check
+        run: for f in plugins/sdd/cloud-setup.sh plugins/sdd/scripts/*.sh plugins/sdd/template/scripts/sdd/*.sh; do bash -n "$f"; done
+      - name: Smoke test
+        run: bash plugins/sdd/scripts/test_sdd.sh
