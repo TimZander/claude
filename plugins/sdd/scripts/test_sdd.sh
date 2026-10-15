@@ -318,6 +318,8 @@ pass "verify renames the folder each archive added, not a look-alike"
 r6="$(fresh_repo)"
 bash "$INIT" --repo "$r6" --no-install >/dev/null
 echo '{}' > "$r6/package-lock.json"
+# Older than any install below: bash 3.2 compares -nt in whole seconds on macOS.
+touch -t 202001010000 "$r6/package-lock.json"
 nfake="$TMP_ROOT/npmbin"
 mkdir -p "$nfake"
 cat > "$nfake/npm" <<'EOF2'
