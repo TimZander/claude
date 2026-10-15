@@ -730,14 +730,16 @@ cs_run
 [ "$cs_status" -eq 0 ] || { echo "$cs_out"; fail "cloud-setup exited $cs_status"; }
 grep -qx 'plugin marketplace add TimZander/claude' "$FAKE_LOG" || { cat "$FAKE_LOG"; fail "cloud-setup did not add the marketplace"; }
 grep -qx 'plugin install sdd@tzander-skills' "$FAKE_LOG" || fail "cloud-setup did not install sdd"
-[ "$(grep -c '^plugin install ' "$FAKE_LOG")" = 1 ] || fail "cloud-setup installed more than sdd"
+grep -qx 'plugin install handoff@tzander-skills' "$FAKE_LOG" || fail "cloud-setup did not install handoff"
+[ "$(grep -c '^plugin install ' "$FAKE_LOG")" = 2 ] || fail "cloud-setup installed more than sdd and handoff"
 grep -q '=== sdd setup finished' "$TMP_ROOT/cshome/setup-script.log" || fail "cloud-setup wrote no log"
-pass "cloud-setup installs sdd and nothing else, and logs it"
+pass "cloud-setup installs sdd and handoff and nothing else, and logs it"
 md="$TMP_ROOT/cshome/.claude/CLAUDE.md"
 [ -f "$md" ] || fail "cloud-setup wrote no ~/.claude/CLAUDE.md"
 grep -q 'sdd-workflow.md' "$md" || fail "CLAUDE.md does not point at the sdd workflow"
 grep -q 'Never run `/sdd:init` unasked' "$md" || fail "CLAUDE.md does not say to ask before /sdd:init"
 grep -q 'recording decisions as ADRs' "$md" || fail "CLAUDE.md does not point at the ADR rules"
+grep -q '`/handoff`' "$md" || fail "CLAUDE.md does not mention /handoff"
 pass "cloud-setup writes a CLAUDE.md that points at the workflow and asks before /sdd:init"
 
 FAKE_MARKETPLACE_EXISTS=1 cs_run
@@ -747,6 +749,7 @@ pass "cloud-setup updates a marketplace that is already there"
 FAKE_INSTALL_FAILS=1 cs_run
 [ "$cs_status" -eq 0 ] || fail "cloud-setup exited $cs_status when the install failed"
 printf '%s\n' "$cs_out" | grep -q 'WARNING: the sdd plugin did not install' || fail "failed install not reported"
-pass "cloud-setup reports a failed install and still exits 0"
+grep -qx 'plugin install handoff@tzander-skills' "$FAKE_LOG" || fail "a failed sdd install stopped the handoff install"
+pass "cloud-setup reports a failed install, still installs the rest, and exits 0"
 
 echo "all sdd tests passed"

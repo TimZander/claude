@@ -2,9 +2,9 @@
 # Cloud environment setup for spec-driven development with the sdd plugin.
 #
 # Paste this file into the cloud environment's settings (environment menu → Edit → Setup
-# script). It sets up an environment for sdd work only: the sdd plugin, gh, and a short
-# ~/.claude/CLAUDE.md that points every session at the repository's sdd workflow. Nothing else:
-# no shared team standards and no other plugins.
+# script). It sets up an environment for sdd work only: the sdd and handoff plugins, gh, and a
+# short ~/.claude/CLAUDE.md that points every session at the repository's sdd workflow. Nothing
+# else: no shared team standards and no other plugins.
 #
 # Runs as root on Ubuntu 24.04 BEFORE Claude Code launches, and only when no cached
 # environment exists. Editing it forces a cache rebuild.
@@ -43,10 +43,12 @@ find /etc/apt/sources.list.d \( -name '*deadsnakes*' -o -name '*ondrej*' \) 2>/d
   apt-get install -y -qq gh || true ) &
 APT_PID=$!
 
-# ------------------------------------------------------------------- plugin
+# ------------------------------------------------------------------ plugins
 #
 # A cloud session ignores plugins a repository enables in its own .claude/settings.json,
-# so sdd is installed through the plugin system here. `claude` may not be on PATH yet while
+# so the plugins are installed through the plugin system here: sdd for the flow, and handoff
+# (/handoff, /pickup) for resuming work across a /clear or a new session. Each install is
+# independent: one that fails doesn't stop the others. `claude` may not be on PATH yet while
 # the setup script runs, so look in the usual install locations as well.
 CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
 if [ -z "$CLAUDE_BIN" ]; then
@@ -61,12 +63,14 @@ if [ -n "$CLAUDE_BIN" ]; then
     # On a re-run the marketplace is already there; refresh it instead.
     "$CLAUDE_BIN" plugin marketplace add "$MARKETPLACE_SOURCE" \
         || "$CLAUDE_BIN" plugin marketplace update "$MARKETPLACE_NAME" || true
-    "$CLAUDE_BIN" plugin install "sdd@${MARKETPLACE_NAME}" \
-        || echo "WARNING: the sdd plugin did not install"
+    for plugin in sdd handoff; do
+        "$CLAUDE_BIN" plugin install "${plugin}@${MARKETPLACE_NAME}" \
+            || echo "WARNING: the ${plugin} plugin did not install"
+    done
     echo "--- plugins after install ---"
     "$CLAUDE_BIN" plugin list || true
 else
-    echo "WARNING: claude CLI not found — the sdd plugin was not installed"
+    echo "WARNING: claude CLI not found — the sdd and handoff plugins were not installed"
 fi
 
 # ------------------------------------------------------------- instructions
@@ -89,6 +93,9 @@ skills).
   Never run `/sdd:init` unasked: setting up a repository is the owner's decision.
 - **Use the sdd reviews.** `/sdd:spec-review` for the spec, `/sdd:conformance-review` for the
   code, and what the workflow adds for high-risk changes.
+- **Hand off on purpose.** Before a `/clear`, a pause or the end of a session, run `/handoff`;
+  resume with `/pickup`. This container is reclaimed after a period of inactivity, so commit and
+  push a handoff that has to outlive it (`/handoff` asks).
 MD
 echo "sdd instructions written: ${SETUP_HOME}/.claude/CLAUDE.md"
 
