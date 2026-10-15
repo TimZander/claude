@@ -96,7 +96,8 @@ set -euo pipefail
 #                               from the remote — an ADO remote with no parsable
 #                               org yields HOST=azdo and NO ORG. Emitted at all
 #                               because a work item cannot be fetched without it:
-#                               `az boards work-item show --id <N> --org <ORG>`.
+#                               workitem-read.sh reads it from the environment
+#                               as DEEP_REVIEW_ADO_ORG.
 #   CURRENT_BRANCH=<name>       Checked-out branch (empty when detached)
 #   BRANCH_MATCH=true|false     SOURCE_BRANCH == CURRENT_BRANCH (KIND=pr only).
 #                               Never true on an empty branch name.
@@ -865,7 +866,7 @@ fi
 #
 # `az repos pr work-item list` can return the linked items' fields as well as
 # their ids, and this route deliberately takes only the ids. Not an oversight:
-# the caller already owns one fetch path (`az boards work-item show`), a second
+# the caller already owns one fetch path (`workitem-read.sh`), a second
 # one here would drift from it, and the fields arrive as HTML with embedded
 # newlines that a `-o tsv` parse would silently corrupt. This stays a resolver.
 #
