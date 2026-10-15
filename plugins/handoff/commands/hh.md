@@ -1,7 +1,7 @@
 ---
 description: Shortcut for /handoff. Write a resume note for the current work so /pickup (or /hp) can continue it later.
 argument-hint: "[optional: a note path in docs/handoffs/; defaults to docs/handoffs/<date>.md]"
-allowed-tools: Bash, Read, Write, AskUserQuestion, Glob
+allowed-tools: Bash, Read, Write, Glob
 ---
 
 # hh: shortcut for /handoff

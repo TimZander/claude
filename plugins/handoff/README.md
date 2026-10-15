@@ -34,7 +34,7 @@ A note is disposable task state, so it should never merge into `main` with the w
   anything lasting from its "Decisions & gotchas" into `CLAUDE.md` or an ADR, it deletes it.
 - **Committed only to outlive a container.** A note you `/clear` past and `/pickup` straight away
   needs nothing more: the file is still there. A cloud session's container is reclaimed after a
-  period of inactivity, so there `/handoff` asks whether to commit and push the note. That commit
+  period of inactivity, so there `/handoff` commits and pushes the note without asking. That commit
   holds only the note, goes on the current branch (never `main` or `master`), and is never
   forced. A later session finds it with `/pickup`, which looks on remote branches when the
   current one has none, and whose deletion is a commit of its own, pushed, so the branch stops
