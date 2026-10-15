@@ -39,11 +39,13 @@ or `unspecified`).
    on main goes in a `MODIFIED` block holding its **full** current text with your edit; keep
    every scenario it had unless the finding removes one. Add or update the scenario that would
    have caught the finding.
-2. If the repo pins deltas to the requirements they were written against (a `spec:pin` script
-   in `package.json`), re-pin after merging any newer text of the requirement into the delta.
+2. Re-pin: `npm run spec:pin -- <change>` (unless the repository turned pins off). If the main
+   spec's text of a requirement you modify has changed since the delta was written, merge that
+   newer text into the delta first: pinning records what the delta was written against.
 3. Update `tasks.md` if the work changed.
-4. Commit the spec edits, then run `bash scripts/sdd/check-specs.sh` (it checks committed files
-   only). On failure, fix and commit again. Never push a spec commit that fails it.
+4. Run `bash scripts/sdd/check-specs.sh --worktree` while editing, then commit the spec edits and
+   run `bash scripts/sdd/check-specs.sh` on the commit. On failure, fix and commit again. Never
+   push a spec commit that fails it.
 5. **Re-review** with `/sdd:spec-review <change>` only while the last review round found a
    blocker, or this round changes behaviour on real data, and only within the repo's round cap
    (3 unless the owner says otherwise). Past the cap, record the change in `design.md` as made

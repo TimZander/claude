@@ -14,6 +14,9 @@ How specs are written in this repository. Read this before writing or changing a
 ## Requirements
 
 - A requirement states one rule with SHALL. Descriptive text gets no SHALL.
+- A requirement's text (everything above its first scenario) stays under 500 characters.
+  OpenSpec 1.14.1's strict validation fails longer ones; 1.14.0 only noted them. Move examples
+  and edge cases into scenarios, and split a long rule into several requirements.
 - Every requirement has at least one scenario whose THEN is observable: an output, a file, a
   response, a page, an exit status.
 - Scenarios use illustrative data, never values copied from real content that may change.
@@ -25,6 +28,8 @@ How specs are written in this repository. Read this before writing or changing a
 - A change carries `proposal.md` (why and scope), its deltas, `design.md` when there are
   decisions or open questions, and `tasks.md`.
 - A `MODIFIED` requirement holds the requirement's full text, with every scenario it keeps.
+- `base-pins.json` records the main-spec text each delta was written against
+  (`npm run spec:pin -- <change>`). Re-pin after every delta edit; never hand-edit it.
 - Tests cite the requirement they verify.
 
 ## Project terms

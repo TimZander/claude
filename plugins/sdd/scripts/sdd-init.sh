@@ -9,8 +9,9 @@
 # version of the plugin's files. Two kinds of file:
 #
 #   Owned by the plugin, overwritten on every run (each says so at its top):
-#     scripts/sdd/*                     OpenSpec runner, archive and spec checks, and the
-#                                       SessionStart hook (npm ci when stale, sdd status)
+#     scripts/sdd/*                     OpenSpec runner, archive and spec checks, base pins,
+#                                       settings, the CI reporter, and the SessionStart hook
+#                                       (npm ci --ignore-scripts when stale, sdd status)
 #     .claude/sdd-workflow.md           the flow agents follow, imported by CLAUDE.md
 #     .github/workflows/sdd-checks.yml  the PR checks (skipped with --no-ci)
 #     .claude/sdd-version               the plugin version installed
@@ -63,6 +64,9 @@ done
 printf '%s' "$openspec_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
     || { echo "sdd-init: --openspec-version must be an exact x.y.z version" >&2; exit 2; }
 
+TMPDIR_INIT="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR_INIT"' EXIT
+
 command -v git >/dev/null || fail "git is required"
 command -v node >/dev/null || fail "node (>= 20.19) is required: OpenSpec runs on it"
 root="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" || fail "$repo is not inside a git repository"
@@ -107,7 +111,9 @@ echo "Plugin files:"
 for f in openspec.sh sdd-archive.sh check-specs.sh session-start.sh; do
     owned "scripts/sdd/$f" 755
 done
-owned scripts/sdd/setup-agent-skills.mjs
+for f in setup-agent-skills.mjs sdd-config.mjs sdd-specs.mjs sdd-github.mjs; do
+    owned "scripts/sdd/$f"
+done
 owned .claude/sdd-workflow.md
 if [ $ci -eq 1 ]; then
     owned .github/workflows/sdd-checks.yml
@@ -166,6 +172,19 @@ if [ $install -eq 1 ]; then
     echo "Installing the pinned OpenSpec CLI:"
     OPENSPEC_TELEMETRY=0 npm install --no-audit --no-fund >/dev/null || fail "npm install failed"
     note "npm install done"
+fi
+
+if ! node scripts/sdd/sdd-config.mjs --root . --json >/dev/null 2>"$TMPDIR_INIT/config.err"; then
+    note "warning: $(sed 's/^sdd-config: //' "$TMPDIR_INIT/config.err" | head -n 1); the sdd scripts fail until it is fixed"
+elif [ "$(node scripts/sdd/sdd-config.mjs --root . pins)" = true ] && [ -d openspec/changes ]; then
+    for d in openspec/changes/*/; do
+        [ -d "$d" ] || continue
+        d="${d%/}"; d="${d##*/}"
+        [ "$d" = archive ] && continue
+        if [ ! -f "openspec/changes/$d/base-pins.json" ]; then
+            note "warning: active change $d has no base-pins.json, so check-specs fails until it has one: check its deltas still hold against the main specs, then run \`npm run spec:pin -- $d\`"
+        fi
+    done
 fi
 
 if [ $ci -eq 1 ] && [ ! -f package-lock.json ]; then

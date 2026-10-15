@@ -2,8 +2,13 @@
 #
 # Spec checks for every PR. These checks gate merging, so they run only code
 # from the base branch: `pull_request_target` checks out the base, and the PR is
-# fetched as data (its merge commit) and never executed. Nothing here uses a
-# secret, and the token is read-only.
+# fetched as data (its merge commit) and never executed.
+#
+# The token reaches two steps only: the fetch of the merge commit (as an HTTP
+# header for that one git process, never stored in .git/config), and the last
+# step, which posts commit statuses and the main-spec diff comment when
+# package.json's "sdd" settings ask for them. No step that reads the PR's
+# content gets it.
 #
 # Each check prints its verdict to this job's log as one line, `<check>: <state>`.
 # Agents read the verdict there, through the Actions API: they cannot read
@@ -16,6 +21,8 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write # the main-spec diff comment ("specDiffComment", on by default)
+  statuses: write # commit statuses ("statuses", off by default)
 
 concurrency:
   group: sdd-checks-${{ github.event.pull_request.number }}
@@ -47,44 +54,120 @@ jobs:
         env:
           PR: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SERVER_URL: ${{ github.server_url }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
+          # The checkout keeps no credentials, and a private repository can't be
+          # fetched without them: the token goes to each git fetch as an HTTP
+          # header in its own environment.
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
           # GitHub recomputes refs/pull/N/merge asynchronously after a push, so
           # right after one it can still be the merge of the previous head. Use
           # it only once its second parent is this event's head.
+          reason=""
+          last_error=""
           for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
-            if git fetch -q --no-tags origin "+refs/pull/$PR/merge:refs/sdd/result" 2>/dev/null \
-              && [ "$(git rev-parse refs/sdd/result^2)" = "$HEAD_SHA" ]; then
-              echo "result=$(git rev-parse refs/sdd/result)" >> "$GITHUB_OUTPUT"
-              echo "base=$(git rev-parse refs/sdd/result^1)" >> "$GITHUB_OUTPUT"
-              exit 0
+            if err="$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.$SERVER_URL/.extraheader" GIT_CONFIG_VALUE_0="$auth" \
+                git fetch -q --no-tags origin "+refs/pull/$PR/merge:refs/sdd/result" 2>&1)"; then
+              if [ "$(git rev-parse refs/sdd/result^2)" = "$HEAD_SHA" ]; then
+                echo "result=$(git rev-parse refs/sdd/result)" >> "$GITHUB_OUTPUT"
+                echo "base=$(git rev-parse refs/sdd/result^1)" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+              reason="the merge commit is still for an earlier head (GitHub is slow, or the PR has a merge conflict)"
+              last_error=""
+            else
+              reason="git fetch failed:"
+              last_error="$err"
             fi
             sleep 10
           done
-          echo "- reason: no merge commit for head $HEAD_SHA after 2 minutes (a merge conflict, or GitHub is slow)"
+          echo "- reason: no merge commit for head $HEAD_SHA after 2 minutes: $reason"
+          if [ -n "$last_error" ]; then
+            printf '%s\n' "$last_error" | tail -n 5 | sed -e 's/##\[/#\\u0023[/g' -e 's/::/:\\u003a/g' -e 's/^/  | /'
+          fi
           echo "spec-checks: failure"
+          echo "requirements-through-change: failure"
+          echo "main-spec-diff: failure"
           echo "archive-mechanical: failure"
           exit 1
 
       - name: Specs validate, before and after archiving
-        if: always() && steps.pr.outcome == 'success'
-        run: bash scripts/sdd/check-specs.sh --rev "${{ steps.pr.outputs.result }}"
-
-      - name: Archive PR is mechanical
+        id: specs
         if: always() && steps.pr.outcome == 'success'
         env:
+          RESULT: ${{ steps.pr.outputs.result }}
+        run: |
+          set +e
+          bash scripts/sdd/check-specs.sh --rev "$RESULT" | tee "$RUNNER_TEMP/sdd-specs.log"
+          status=${PIPESTATUS[0]}
+          echo "state=$(tail -n 1 "$RUNNER_TEMP/sdd-specs.log" | sed -n 's/^spec-checks: \([a-z-]*\)$/\1/p')" >> "$GITHUB_OUTPUT"
+          exit $status
+
+      - name: Requirements change only through a change
+        id: requirements
+        if: always() && steps.pr.outcome == 'success'
+        env:
+          BASE: ${{ steps.pr.outputs.base }}
+          RESULT: ${{ steps.pr.outputs.result }}
+        run: |
+          set +e
+          node scripts/sdd/sdd-specs.mjs requirements --base "$BASE" --result "$RESULT" | tee "$RUNNER_TEMP/sdd-requirements.log"
+          status=${PIPESTATUS[0]}
+          echo "state=$(tail -n 1 "$RUNNER_TEMP/sdd-requirements.log" | sed -n 's/^requirements-through-change: \([a-z-]*\)$/\1/p')" >> "$GITHUB_OUTPUT"
+          exit $status
+
+      - name: Main specs after archiving
+        id: diff
+        if: always() && steps.pr.outcome == 'success'
+        env:
+          BASE: ${{ steps.pr.outputs.base }}
+          RESULT: ${{ steps.pr.outputs.result }}
+        run: |
+          set +e
+          node scripts/sdd/sdd-specs.mjs spec-diff --base "$BASE" --result "$RESULT" \
+            --out "$RUNNER_TEMP/sdd-spec-diff.md" | tee "$RUNNER_TEMP/sdd-diff.log"
+          status=${PIPESTATUS[0]}
+          echo "state=$(tail -n 1 "$RUNNER_TEMP/sdd-diff.log" | sed -n 's/^main-spec-diff: \([a-z-]*\)$/\1/p')" >> "$GITHUB_OUTPUT"
+          exit $status
+
+      # Last of the checks, so its verdict is the last archive-mechanical line in the log.
+      - name: Archive PR is mechanical
+        id: archive
+        if: always() && steps.pr.outcome == 'success'
+        env:
+          BASE: ${{ steps.pr.outputs.base }}
+          RESULT: ${{ steps.pr.outputs.result }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           status=0
-          out="$(bash scripts/sdd/sdd-archive.sh verify \
-            --base "${{ steps.pr.outputs.base }}" \
-            --result "${{ steps.pr.outputs.result }}")" || status=$?
+          out="$(bash scripts/sdd/sdd-archive.sh verify --base "$BASE" --result "$RESULT")" || status=$?
           # An archive into any branch but the default one is never mechanical.
           if [ "$BASE_REF" != "$DEFAULT_BRANCH" ] && [ "$(printf '%s\n' "$out" | tail -n 1)" = "archive-mechanical: success" ]; then
-            printf '%s\n' "$out" | sed '$d'
-            echo "- the base branch $BASE_REF is not the default branch $DEFAULT_BRANCH"
-            echo "archive-mechanical: failure"
-            exit 1
+            out="$(printf '%s\n' "$out" | sed '$d'; echo "- the base branch $BASE_REF is not the default branch $DEFAULT_BRANCH"; echo "archive-mechanical: failure")"
+            status=1
           fi
           printf '%s\n' "$out"
+          echo "state=$(printf '%s\n' "$out" | tail -n 1 | sed -n 's/^archive-mechanical: \([a-z-]*\)$/\1/p')" >> "$GITHUB_OUTPUT"
           exit $status
+
+      - name: Post statuses and the main-spec diff comment (as package.json asks)
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SPECS: ${{ steps.specs.outputs.state }}
+          REQUIREMENTS: ${{ steps.requirements.outputs.state }}
+          DIFF: ${{ steps.diff.outputs.state }}
+          ARCHIVE: ${{ steps.archive.outputs.state }}
+        run: |
+          [ -f scripts/sdd/sdd-github.mjs ] || exit 0
+          node scripts/sdd/sdd-github.mjs report \
+            --check "spec-checks=$SPECS" \
+            --check "requirements-through-change=$REQUIREMENTS" \
+            --check "main-spec-diff=$DIFF" \
+            --check "archive-mechanical=$ARCHIVE" \
+            --comment "$RUNNER_TEMP/sdd-spec-diff.md"

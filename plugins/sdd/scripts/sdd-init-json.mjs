@@ -48,12 +48,36 @@ function section(obj, key) {
   return obj[key]
 }
 
+// x.y.z as numbers, or null for anything else (a range, a tag).
+function version(text) {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(text))
+  return m === null ? null : m.slice(1).map(Number)
+}
+
+function older(a, b) {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) {
+      return a[i] < b[i]
+    }
+  }
+  return false
+}
+
 if (mode === 'package') {
-  ensure(section(data, 'devDependencies'), '@fission-ai/openspec', arg, 'devDependencies["@fission-ai/openspec"]')
+  const deps = section(data, 'devDependencies')
+  const pinned = deps['@fission-ai/openspec']
+  ensure(deps, '@fission-ai/openspec', arg, 'devDependencies["@fission-ai/openspec"]')
+  // 1.14.1 turned "requirement text over 500 characters" from a note into a warning, which
+  // `validate --strict` fails, so a repository bumping from 1.14.0 can fail wholesale.
+  const have = version(pinned)
+  if (pinned !== undefined && pinned !== arg && have !== null && older(have, [1, 14, 1]) && !older(version(arg) ?? [0, 0, 0], [1, 14, 1])) {
+    console.log(`warning: before bumping OpenSpec past ${pinned}: from 1.14.1, \`validate --strict\` fails any requirement whose text is over 500 characters (${pinned} only notes it). Split long requirements first (move examples and edge cases into scenarios), then bump in its own PR`)
+  }
   const scripts = section(data, 'scripts')
   ensure(scripts, 'openspec', 'bash scripts/sdd/openspec.sh', 'scripts.openspec')
   ensure(scripts, 'spec:validate', 'bash scripts/sdd/openspec.sh validate --all --strict', 'scripts["spec:validate"]')
   ensure(scripts, 'spec:check', 'bash scripts/sdd/check-specs.sh', 'scripts["spec:check"]')
+  ensure(scripts, 'spec:pin', 'node scripts/sdd/sdd-specs.mjs pin', 'scripts["spec:pin"]')
   ensure(scripts, 'prepare', 'node scripts/sdd/setup-agent-skills.mjs', 'scripts.prepare')
 } else {
   ensure(section(data, 'env'), 'OPENSPEC_TELEMETRY', '0', 'env.OPENSPEC_TELEMETRY')
