@@ -1,0 +1,30 @@
+name: test-handoff-scripts
+
+# The handoff plugin's script edits a repository's handoff index and can commit and push a
+# note. The smoke test runs it against real git repos with a bare origin.
+# macOS is in the matrix because it ships bash 3.2, the floor the script targets.
+on:
+  pull_request:
+    paths:
+      - "plugins/handoff/**"
+      - ".github/workflows/test-handoff-scripts.yml"
+  push:
+    branches: [main]
+
+jobs:
+  handoff-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check
+        run: for f in plugins/handoff/scripts/*.sh; do bash -n "$f"; done
+      - name: Smoke test
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name CI
+          bash plugins/handoff/scripts/test_handoff.sh
