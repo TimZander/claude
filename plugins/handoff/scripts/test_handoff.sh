@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test for handoff.sh: usage errors, note naming and the local exclude, open's order
 # and next actions, the state facts, commit's refusals and push, remote, and drop for a local
-# and a committed note. Uses real git repos with a bare origin, offline.
+# note, a pushed one, an unpushed one, and one on main. Uses real git repos with a bare origin, offline.
 #
 #   bash plugins/handoff/scripts/test_handoff.sh
 
@@ -116,5 +116,21 @@ git -C "$r" diff --quiet -- README.md && fail "drop swept up an unrelated change
 [ -z "$(git -C "$r" diff --name-only main origin/work -- docs)" ] || fail "the note still differs from main"
 [ -z "$(bash "$H" remote -C "$r")" ] || fail "remote still lists a dropped note"
 pass "drop commits and pushes the deletion of a committed note, so the branch matches main"
+
+# --- drop: a committed note that was never pushed, and one on main --------------------------
+printf '# Local\n' > "$r/docs/handoffs/2026-02-01.md"
+git -C "$r" add -f docs/handoffs/2026-02-01.md && git -C "$r" commit -q -m local -- docs/handoffs/2026-02-01.md
+before="$(git -C "$r" rev-parse origin/work)"
+bash "$H" drop -C "$r" docs/handoffs/2026-02-01.md >/dev/null
+[ "$(git -C "$r" rev-parse origin/work)" = "$before" ] || fail "drop pushed a note that was never on the upstream"
+git -C "$r" stash -q && git -C "$r" checkout -q main
+printf '# Merged\n' > "$r/docs/handoffs/2026-03-01.md"
+git -C "$r" add -f docs/handoffs/2026-03-01.md && git -C "$r" commit -q -m merged -- docs/handoffs/2026-03-01.md
+head_before="$(git -C "$r" rev-parse HEAD)"
+bash "$H" drop -C "$r" docs/handoffs/2026-03-01.md > "$TMP_ROOT/out"
+grep -q 'first commit of the next work branch' "$TMP_ROOT/out" || fail "drop on main didn't say where the deletion goes"
+[ "$(git -C "$r" rev-parse HEAD)" = "$head_before" ] || fail "drop committed on main"
+[ "$(git -C "$r" diff --cached --name-status)" = "$(printf 'D\tdocs/handoffs/2026-03-01.md')" ] || fail "drop on main didn't stage the deletion"
+pass "drop pushes only a note the upstream has, and stages the deletion on main"
 
 echo "all handoff tests passed"

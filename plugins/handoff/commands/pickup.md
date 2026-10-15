@@ -37,11 +37,18 @@ It is `${CLAUDE_PLUGIN_ROOT}/scripts/handoff.sh`. If that path still reads liter
    that is gone, commits the note doesn't mention), tell the user what differs and ask before
    acting on the note.
 4. **Carry the decisions and gotchas forward**, so they aren't argued again.
-5. **Delete the note**: `<handoff> drop <note>`, only now that step 3 has passed (if the user
+5. **Promote what lasts.** The note is about to go, so anything in **Decisions & gotchas** that
+   outlives this task (a rule, a trap others will hit, a design choice) belongs where the
+   repository keeps its rules: `CLAUDE.md`, or an ADR when the repository records decisions
+   that way. Name each one to the user and record it as the repository's own rules say. If
+   nothing lasts beyond the task, say so and move on.
+6. **Delete the note**: `<handoff> drop <note>`, only now that step 3 has passed (if the user
    stopped at step 3, keep it). Its content is in this context; a later `/pickup` won't take it
    again. A note that only existed here is just deleted. A committed one is deleted in a commit
-   of that path alone, pushed when the branch has an upstream, so the branch no longer adds it
-   and it can't merge into the base branch. Report what `drop` printed.
-6. **Start from the literal Next action**, then work the Remaining work in order. Commit only as
+   of that path alone, so the branch no longer adds it and it can't merge into the base branch,
+   and the commit is pushed when the note was on the upstream, so `remote` can't find it again.
+   On `main` or `master` (a note whose PR merged before pickup), `drop` only stages the
+   deletion: make it the first commit of the next work branch. Report what `drop` printed.
+7. **Start from the literal Next action**, then work the Remaining work in order. Commit only as
    the repository's own rules and the user say; apart from removing a committed note, resuming
    doesn't commit anything.

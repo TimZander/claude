@@ -30,14 +30,16 @@ A note is disposable task state, so it should never merge into `main` with the w
   `.git/info/exclude`, a local ignore list that is never committed. Notes don't show in
   `git status` and no `git add -A` picks them up. There is no index: a note waits to be picked
   up for as long as its file exists.
-- **Deleted on pickup.** Once `/pickup` has checked a note against the repository, it deletes it.
+- **Deleted on pickup.** Once `/pickup` has checked a note against the repository, and moved
+  anything lasting from its "Decisions & gotchas" into `CLAUDE.md` or an ADR, it deletes it.
 - **Committed only to outlive a container.** A note you `/clear` past and `/pickup` straight away
   needs nothing more: the file is still there. A cloud session's container is reclaimed after a
   period of inactivity, so there `/handoff` asks whether to commit and push the note. That commit
   holds only the note, goes on the current branch (never `main` or `master`), and is never
   forced. A later session finds it with `/pickup`, which looks on remote branches when the
   current one has none, and whose deletion is a commit of its own, pushed, so the branch stops
-  adding the note.
+  adding the note. On `main` (a PR that merged before pickup) the deletion is staged for the
+  next work branch's first commit, since the script never commits there.
 - **Guarded at PR time.** `/craft-pr` stops if the branch still adds a note under
   `docs/handoffs/`, so one that was never picked up can't slip into a PR.
 

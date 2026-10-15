@@ -32,9 +32,10 @@
 #
 #   bash handoff.sh drop   [-C <dir>] <note>
 #       Deletes a note that has been picked up or replaced. If it was committed, also commits
-#       the deletion (that path alone) and pushes it when the branch has an upstream, so the
-#       note doesn't reach the base branch with the work. On main or master it only deletes
-#       the file and says so.
+#       the deletion (that path alone), so the note doesn't reach the base branch with the
+#       work, and pushes it when the note was on the upstream, so `remote` can't find it
+#       again. On main or master it stages the deletion for the next work branch's first
+#       commit instead.
 #
 # Exit status: 0 done, 1 failure (reported on stderr), 2 usage error.
 
@@ -182,7 +183,7 @@ cmd_commit() {
 
 cmd_drop() {
     [ $# -eq 1 ] || usage
-    local note branch
+    local note branch pushed=""
     note="$(note_rel "$1")"
     if ! git ls-files --error-unmatch -- "$note" >/dev/null 2>&1; then
         [ -f "$note" ] || die "no such note: $note"
@@ -193,14 +194,16 @@ cmd_drop() {
     branch="$(git symbolic-ref --quiet --short HEAD)" || branch=""
     case "$branch" in
         ""|main|master)
-            rm -f -- "$note"
-            echo "deleted $note; it is committed on ${branch:-a detached HEAD}, so remove it there through a pull request"
+            git rm -q -- "$note"
+            echo "deleted $note and staged the deletion; ${branch:-a detached HEAD} takes no handoff commits, so commit it as the first commit of the next work branch"
             return 0 ;;
     esac
+    # Push only when the note reached the upstream: that copy is the one a later `remote` finds.
+    if git cat-file -e "@{upstream}:$note" 2>/dev/null; then pushed=yes; fi
     git rm -q -- "$note"
     git commit -q -m "handoff: drop $(basename "$note" .md)" -- "$note" || die "could not commit the deletion of $note"
     echo "deleted $note and committed the deletion on $branch"
-    if git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1; then
+    if [ -n "$pushed" ]; then
         git push -q || die "push failed; the deletion is committed but only on this machine"
         echo "pushed $branch"
     fi
