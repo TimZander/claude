@@ -154,7 +154,7 @@
     },
     {
       "name": "handoff",
-      "description": "Deliberate continuity between contexts: /handoff writes a four-field resume note and indexes it in docs/handoffs/, /pickup resumes the newest open one after /clear or in a new session; in cloud sessions the note can be committed and pushed so it outlives the container. Adapted from Jordan Loyd's keystone (MIT)",
+      "description": "Deliberate continuity between contexts: /handoff (/hh) writes a four-field resume note in docs/handoffs/, kept out of git; /pickup (/hp) resumes the newest after /clear or in a new session and deletes it, so notes never merge into main; in cloud sessions the note can be committed and pushed so it outlives the container. Adapted from Jordan Loyd's keystone (MIT)",
       "author": { "name": "Tim Zander" },
       "source": "./plugins/handoff",
       "category": "development"

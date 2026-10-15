@@ -47,7 +47,8 @@ APT_PID=$!
 #
 # A cloud session ignores plugins a repository enables in its own .claude/settings.json,
 # so the plugins are installed through the plugin system here: sdd for the flow, and handoff
-# (/handoff, /pickup) for resuming work across a /clear or a new session. Each install is
+# (/handoff, /pickup, and their shortcuts /hh, /hp) for resuming work across a /clear or a new
+# session. Each install is
 # independent: one that fails doesn't stop the others. `claude` may not be on PATH yet while
 # the setup script runs, so look in the usual install locations as well.
 CLAUDE_BIN="$(command -v claude 2>/dev/null || true)"
@@ -93,9 +94,10 @@ skills).
   Never run `/sdd:init` unasked: setting up a repository is the owner's decision.
 - **Use the sdd reviews.** `/sdd:spec-review` for the spec, `/sdd:conformance-review` for the
   code, and what the workflow adds for high-risk changes.
-- **Hand off on purpose.** Before a `/clear`, a pause or the end of a session, run `/handoff`;
-  resume with `/pickup`. This container is reclaimed after a period of inactivity, so commit and
-  push a handoff that has to outlive it (`/handoff` asks).
+- **Hand off on purpose.** Before a `/clear`, a pause or the end of a session, run `/handoff`
+  (`/hh`); resume with `/pickup` (`/hp`). This container is reclaimed after a period of
+  inactivity, so `/handoff` commits and pushes the note to the work branch, and `/pickup` deletes
+  it again once it resumes.
 MD
 echo "sdd instructions written: ${SETUP_HOME}/.claude/CLAUDE.md"
 

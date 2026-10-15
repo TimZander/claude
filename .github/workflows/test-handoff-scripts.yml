@@ -1,7 +1,6 @@
 name: test-handoff-scripts
 
-# The handoff plugin's script edits a repository's handoff index and can commit and push a
-# note. The smoke test runs it against real git repos with a bare origin.
+# The handoff plugin's script manages resume notes and can commit, delete and push them. The smoke test runs it against real git repos with a bare origin.
 # macOS is in the matrix because it ships bash 3.2, the floor the script targets.
 on:
   pull_request:

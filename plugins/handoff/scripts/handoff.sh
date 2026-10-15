@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# Bookkeeping for /handoff and /pickup: resume notes in docs/handoffs/ and their index,
-# docs/handoffs/README.md. The commands decide what to write; this script does the
-# file and git work, so it behaves the same on every run.
+# Bookkeeping for /handoff and /pickup: resume notes in docs/handoffs/, local to the
+# machine unless a note has to outlive it, and deleted once picked up, so they never reach
+# the base branch. The commands decide what to write; this script does the file and git
+# work, so it behaves the same on every run.
 #
 #   bash handoff.sh state  [-C <dir>]
 #       Facts for a note's "Current state", one `key: value` line each: branch, upstream,
@@ -10,39 +11,38 @@
 #       (a cloud session, whose container is thrown away after a period of inactivity).
 #
 #   bash handoff.sh new    [-C <dir>]
-#       Creates the index from the template if it is missing, and prints the path for a new
-#       note: docs/handoffs/<today>.md, or <today>-2.md, -3.md, ... if that one exists.
-#
-#   bash handoff.sh add    [-C <dir>] <note> <next-action>
-#       Adds the note's row to the top of the index as `open`, or updates its row if it has
-#       one. The next action is cut to one line of at most 120 characters.
-#
-#   bash handoff.sh set    [-C <dir>] <note> <open|resumed|superseded>
-#       Sets a row's status.
+#       Keeps notes local: adds docs/handoffs/ to the repository's .git/info/exclude, an
+#       ignore list that is never committed. Prints the path for a new note:
+#       docs/handoffs/<today>.md, or <today>-2.md, -3.md, ... if that one exists.
 #
 #   bash handoff.sh open   [-C <dir>]
-#       Lists the open notes, newest first: `<note>\t<next action>` per line. Without an
-#       index, lists every dated note in docs/handoffs/, newest name first, with the next
-#       action `(no index)`. Prints nothing when there is nothing to resume.
+#       Lists the notes waiting to be picked up, newest first: `<note>\t<next action>` per
+#       line, the next action being the first line under the note's "## Next action".
+#       A note is open as long as its file exists. Prints nothing when there is none.
 #
 #   bash handoff.sh remote [-C <dir>]
-#       Open notes on other branches: fetches origin, reads each remote branch's index, and
-#       prints `<branch>\t<note>\t<next action>` per open note. For a handoff committed in
-#       another session, which lives on its work branch.
+#       Notes on other branches: fetches origin and prints `<branch>\t<note>\t<next action>`
+#       per note committed on a remote branch. For a handoff committed in another session,
+#       which lives on its work branch.
 #
 #   bash handoff.sh commit [-C <dir>] <note>
-#       Commits only the note and the index, and pushes the current branch, so the note
-#       outlives the machine. Refuses on main or master, never forces, and leaves every
-#       other change uncommitted.
+#       Commits only the note, and pushes the current branch, so the note outlives the
+#       machine. Refuses on main or master, never forces, and leaves every other change
+#       uncommitted. `drop` takes the note back out once it is picked up.
+#
+#   bash handoff.sh drop   [-C <dir>] <note>
+#       Deletes a note that has been picked up or replaced. If it was committed, also commits
+#       the deletion (that path alone), so the note doesn't reach the base branch with the
+#       work, and pushes it when the note was on the upstream, so `remote` can't find it
+#       again. On main or master it stages the deletion for the next work branch's first
+#       commit instead.
 #
 # Exit status: 0 done, 1 failure (reported on stderr), 2 usage error.
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TEMPLATE="$SCRIPT_DIR/../templates/index.md"
 DIR_REL="docs/handoffs"
-INDEX_REL="$DIR_REL/README.md"
+NOTE_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}(-[0-9]+)?\.md$'
 
 usage() {
     sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//' >&2
@@ -66,23 +66,39 @@ fi
 root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || die "$dir is not inside a git repository"
 cd "$root"
 
-ensure_index() {
-    if [ ! -f "$INDEX_REL" ]; then
-        mkdir -p "$DIR_REL"
-        cp "$TEMPLATE" "$INDEX_REL"
-    fi
-    grep -q '^| ---- | ---- | ------ | ----------- |$' "$INDEX_REL" \
-        || die "$INDEX_REL has no handoff table; restore it from the plugin's templates/index.md"
+# Keep docs/handoffs/ out of `git status` and out of commits, without touching any committed
+# file: .git/info/exclude is local to this clone.
+ensure_excluded() {
+    local exclude
+    exclude="$(git rev-parse --git-path info/exclude)"
+    mkdir -p "$(dirname "$exclude")"
+    grep -qxF "/$DIR_REL/" "$exclude" 2>/dev/null || echo "/$DIR_REL/" >> "$exclude"
 }
 
-# A note path as the index records it: relative to the repo root, under docs/handoffs/.
+# Note file names read from stdin, newest first: by date, then by the -N suffix (none counts
+# as 1).
+newest_first() {
+    { grep -E "$NOTE_RE" || true; } \
+        | awk '{ n = substr($0, 11); sub(/\.md$/, "", n); n = (n == "" ? 1 : substr(n, 2) + 0);
+                 printf "%s %06d\t%s\n", substr($0, 1, 10), n, $0 }' \
+        | sort -r | cut -f 2-
+}
+
+# The first line under a note's "## Next action", read from stdin, cut to 120 characters.
+next_action() {
+    local line
+    line="$(awk '/^## / { if (f) exit; f = ($0 ~ /^## Next action/); next } f && NF { print; exit }' \
+        | tr '\t\r' '  ' | cut -c 1-120)"
+    printf '%s' "${line:-(no next action)}"
+}
+
+# A note path relative to the repo root, under docs/handoffs/.
 note_rel() {
     local n="${1#./}"
     case "$n" in
         "$DIR_REL"/*.md) ;;
         *) die "a note must be a .md file in $DIR_REL/: $1" ;;
     esac
-    [ "$n" != "$INDEX_REL" ] || die "the index is not a note"
     case "$n" in *'|'*|*' '*|*..*|*$'\t'*) die "a note path can't contain spaces, tabs, | or ..: $1" ;; esac
     printf '%s' "$n"
 }
@@ -109,98 +125,38 @@ cmd_state() {
 
 cmd_new() {
     [ $# -eq 0 ] || usage
-    ensure_index
+    ensure_excluded
+    mkdir -p "$DIR_REL"
     local today path n=1
     today="$(date +%Y-%m-%d)"
     path="$DIR_REL/$today.md"
-    while [ -e "$path" ] || grep -qF "| $path |" "$INDEX_REL"; do
+    while [ -e "$path" ]; do
         n=$((n + 1))
         path="$DIR_REL/$today-$n.md"
     done
     echo "$path"
 }
 
-cmd_add() {
-    [ $# -eq 2 ] || usage
-    ensure_index
-    local note next date
-    note="$(note_rel "$1")"
-    [ -f "$note" ] || die "no such note: $note (write it first)"
-    # One line, no table breaks, at most 120 characters.
-    next="$(printf '%s' "$2" | tr '\r\n\t' '   ' | sed -e 's/|/\//g' -e 's/  */ /g' -e 's/^ //' -e 's/ $//' | cut -c 1-120)"
-    [ -n "$next" ] || die "the next action is empty"
-    date="$(basename "$note" .md | cut -c 1-10)"
-    printf '%s' "$date" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || date="$(date +%Y-%m-%d)"
-    local row="| $date | $note | open | $next |"
-    local tmp
-    tmp="$(mktemp)"
-    # ENVIRON, not -v: awk would read backslashes in the text as escapes.
-    NOTE="$note" ROW="$row" awk '
-        BEGIN { sep = "| ---- | ---- | ------ | ----------- |"; note = ENVIRON["NOTE"]; row = ENVIRON["ROW"] }
-        $0 == sep { print; print row; next }
-        index($0, "| " note " |") > 0 { next }
-        { print }
-    ' "$INDEX_REL" > "$tmp"
-    mv "$tmp" "$INDEX_REL"
-    echo "added $note to $INDEX_REL as open"
-}
-
-cmd_set() {
-    [ $# -eq 2 ] || usage
-    case "$2" in open|resumed|superseded) ;; *) usage ;; esac
-    [ -f "$INDEX_REL" ] || die "no $INDEX_REL"
-    local note tmp
-    note="$(note_rel "$1")"
-    grep -qF "| $note |" "$INDEX_REL" || die "$note has no row in $INDEX_REL"
-    tmp="$(mktemp)"
-    # Replace the status cell, the one right after the note's cell.
-    NOTE="$note" STATUS="$2" awk '
-        BEGIN { p = "| " ENVIRON["NOTE"] " | " }
-        {
-            i = index($0, p)
-            if (i > 0) {
-                rest = substr($0, i + length(p))
-                j = index(rest, " |")
-                $0 = substr($0, 1, i + length(p) - 1) ENVIRON["STATUS"] substr(rest, j)
-            }
-            print
-        }
-    ' "$INDEX_REL" > "$tmp"
-    mv "$tmp" "$INDEX_REL"
-    echo "marked $note $2"
-}
-
 cmd_open() {
     [ $# -eq 0 ] || usage
-    if [ -f "$INDEX_REL" ]; then
-        open_rows < "$INDEX_REL"
-        return 0
-    fi
     [ -d "$DIR_REL" ] || return 0
-    # Newest first: by date, then by the -N suffix (none counts as 1).
-    ls -1 "$DIR_REL" | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}(-[0-9]+)?\.md$' \
-        | awk -v d="$DIR_REL" '{ n = substr($0, 11); sub(/\.md$/, "", n); n = (n == "" ? 1 : substr(n, 2) + 0);
-                                 printf "%s %06d\t%s/%s\t(no index)\n", substr($0, 1, 10), n, d, $0 }' \
-        | sort -r | cut -f 2-
-}
-
-# Open rows of an index read from stdin: `<note>\t<next action>`.
-open_rows() {
-    awk -F ' \\| ' '
-        /^\| [0-9]{4}-[0-9]{2}-[0-9]{2} \| / && $3 == "open" { sub(/ \|$/, "", $4); print $2 "\t" $4 }
-    '
+    local f
+    ls -1 "$DIR_REL" | newest_first | while IFS= read -r f; do
+        printf '%s/%s\t%s\n' "$DIR_REL" "$f" "$(next_action < "$DIR_REL/$f")"
+    done
 }
 
 cmd_remote() {
     [ $# -eq 0 ] || usage
     git fetch -q origin 2>/dev/null || die "cannot fetch origin"
-    local b line
+    local b f
     git for-each-ref --format='%(refname:short)' refs/remotes/origin | grep -v '^origin/HEAD$' | grep -vx origin \
         | while IFS= read -r b; do
-            git cat-file -e "$b:$INDEX_REL" 2>/dev/null || continue
-            git show "$b:$INDEX_REL" | open_rows | while IFS= read -r line; do
-                printf '%s\t%s\n' "${b#origin/}" "$line"
-            done
+            git ls-tree --name-only "$b" "$DIR_REL/" 2>/dev/null | sed "s#^$DIR_REL/##" | newest_first \
+                | while IFS= read -r f; do
+                    printf '%s\t%s/%s\t%s\n' "${b#origin/}" "$DIR_REL" "$f" \
+                        "$(git show "$b:$DIR_REL/$f" | next_action)"
+                done
         done
 }
 
@@ -213,9 +169,10 @@ cmd_commit() {
     case "$branch" in
         main|master) die "won't commit a handoff on $branch; switch to the work branch" ;;
     esac
-    git add -- "$note" "$INDEX_REL"
-    git commit -q -m "handoff: $(basename "$note" .md)" -- "$note" "$INDEX_REL" || die "nothing to commit"
-    echo "committed $note and $INDEX_REL on $branch"
+    # -f: the note is in .git/info/exclude so that nothing else commits it by accident.
+    git add -f -- "$note"
+    git commit -q -m "handoff: $(basename "$note" .md)" -- "$note" || die "nothing to commit"
+    echo "committed $note on $branch"
     if git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1; then
         git push -q || die "push failed; the handoff is committed but only on this machine"
     else
@@ -224,14 +181,41 @@ cmd_commit() {
     echo "pushed $branch"
 }
 
+cmd_drop() {
+    [ $# -eq 1 ] || usage
+    local note branch pushed=""
+    note="$(note_rel "$1")"
+    if ! git ls-files --error-unmatch -- "$note" >/dev/null 2>&1; then
+        [ -f "$note" ] || die "no such note: $note"
+        rm -f -- "$note"
+        echo "deleted $note"
+        return 0
+    fi
+    branch="$(git symbolic-ref --quiet --short HEAD)" || branch=""
+    case "$branch" in
+        ""|main|master)
+            git rm -q -- "$note"
+            echo "deleted $note and staged the deletion; ${branch:-a detached HEAD} takes no handoff commits, so commit it as the first commit of the next work branch"
+            return 0 ;;
+    esac
+    # Push only when the note reached the upstream: that copy is the one a later `remote` finds.
+    if git cat-file -e "@{upstream}:$note" 2>/dev/null; then pushed=yes; fi
+    git rm -q -- "$note"
+    git commit -q -m "handoff: drop $(basename "$note" .md)" -- "$note" || die "could not commit the deletion of $note"
+    echo "deleted $note and committed the deletion on $branch"
+    if [ -n "$pushed" ]; then
+        git push -q || die "push failed; the deletion is committed but only on this machine"
+        echo "pushed $branch"
+    fi
+}
+
 case "$cmd" in
     state) [ $# -eq 0 ] || usage; cmd_state ;;
     new) cmd_new "$@" ;;
-    add) cmd_add "$@" ;;
-    set) cmd_set "$@" ;;
     open) cmd_open "$@" ;;
     remote) cmd_remote "$@" ;;
     commit) cmd_commit "$@" ;;
+    drop) cmd_drop "$@" ;;
     -h|--help|help) usage ;;
     *) usage ;;
 esac

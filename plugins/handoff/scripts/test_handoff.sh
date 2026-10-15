@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Smoke test for handoff.sh: usage errors, the index (create, add, update, set, open),
-# note naming, the state facts, the fallback without an index, and commit's refusals and
-# push. Uses real git repos with a bare origin, offline.
+# Smoke test for handoff.sh: usage errors, note naming and the local exclude, open's order
+# and next actions, the state facts, commit's refusals and push, remote, and drop for a local
+# note, a pushed one, an unpushed one, and one on main. Uses real git repos with a bare origin, offline.
 #
 #   bash plugins/handoff/scripts/test_handoff.sh
 
@@ -41,58 +41,40 @@ fresh_repo() {
 expect_exit 2 bash "$H"
 expect_exit 2 bash "$H" bogus
 r="$(fresh_repo)"
-expect_exit 2 bash "$H" add -C "$r" only-one
-expect_exit 2 bash "$H" set -C "$r" docs/handoffs/x.md bogus
+expect_exit 2 bash "$H" drop -C "$r"
+expect_exit 2 bash "$H" commit -C "$r" a b
 expect_exit 1 bash "$H" state -C "$TMP_ROOT"
-pass "usage errors exit 2, outside a repo exits 1"
+expect_exit 1 bash "$H" drop -C "$r" "docs/handoffs/../x.md"
+expect_exit 1 bash "$H" drop -C "$r" "notes/x.md"
+pass "usage errors exit 2, outside a repo or a bad note path exits 1"
 
-# --- new: index from the template, free note names ---------------------------------------
+# --- new: free note names, kept out of git ------------------------------------------------
 today="$(date +%Y-%m-%d)"
+[ -z "$(bash "$H" open -C "$r")" ] || fail "open in a repo without handoffs"
 note="$(bash "$H" new -C "$r")"
 [ "$note" = "docs/handoffs/$today.md" ] || fail "first note path: $note"
-[ -f "$r/docs/handoffs/README.md" ] || fail "index not created"
-grep -q '^| Date | File | Status | Next action |$' "$r/docs/handoffs/README.md" || fail "index table header"
-printf '# Handoff\n' > "$r/$note"
-[ "$(bash "$H" new -C "$r")" = "docs/handoffs/$today-2.md" ] || fail "second note path"
-pass "new creates the index and picks a free note name"
-
-# --- add, open, set -----------------------------------------------------------------------
-expect_exit 1 bash "$H" add -C "$r" "docs/handoffs/$today-9.md" "x"
-grep -q 'no such note' "$TMP_ROOT/out" || fail "a missing note was added"
-expect_exit 1 bash "$H" add -C "$r" "docs/handoffs/../x.md" "x"
-expect_exit 1 bash "$H" add -C "$r" "docs/handoffs/README.md" "x"
-bash "$H" add -C "$r" "$note" 'Run the | migration
-then \n check' >/dev/null
-row="$(grep -F "| $note |" "$r/docs/handoffs/README.md")"
-[ "$row" = "| $today | $note | open | Run the / migration then \\n check |" ] || fail "row: $row"
+printf '# Handoff\n\n## Current state\nx\n\n## Next action\n\nRun the\tmigration\n\n## Remaining work\nnone\n' > "$r/$note"
 note2="$(bash "$H" new -C "$r")"
-printf '# Handoff 2\n' > "$r/$note2"
-bash "$H" add -C "$r" "$note2" "Second" >/dev/null
-[ "$(bash "$H" open -C "$r" | cut -f 1 | tr '\n' ' ')" = "$note2 $note " ] || fail "open order: $(bash "$H" open -C "$r")"
-[ "$(bash "$H" open -C "$r" | head -n 1 | cut -f 2)" = "Second" ] || fail "open next action"
-bash "$H" add -C "$r" "$note" "Updated" >/dev/null
-[ "$(grep -cF "| $note |" "$r/docs/handoffs/README.md")" = 1 ] || fail "re-adding duplicated the row"
-[ "$(bash "$H" open -C "$r" | head -n 1 | cut -f 1)" = "$note" ] || fail "an updated note didn't move to the top"
-bash "$H" set -C "$r" "$note" resumed >/dev/null
-grep -qxF "| $today | $note | resumed | Updated |" "$r/docs/handoffs/README.md" || fail "set resumed"
-[ "$(bash "$H" open -C "$r")" = "$(printf '%s\tSecond' "$note2")" ] || fail "a resumed note is still open"
-bash "$H" set -C "$r" "$note2" superseded >/dev/null
-[ -z "$(bash "$H" open -C "$r")" ] || fail "nothing should be open"
-expect_exit 1 bash "$H" set -C "$r" "docs/handoffs/$today-7.md" resumed
-grep -q 'has no row' "$TMP_ROOT/out" || fail "set on a missing row"
-long="$(printf 'x%.0s' $(seq 1 300))"
-bash "$H" add -C "$r" "$note" "$long" >/dev/null
-[ "$(bash "$H" open -C "$r" | cut -f 2 | wc -c | tr -d ' ')" = 121 ] || fail "next action not cut to 120 characters"
-pass "add, set and open keep one row per note, newest first, on one line"
+[ "$note2" = "docs/handoffs/$today-2.md" ] || fail "second note path: $note2"
+[ "$(grep -cxF /docs/handoffs/ "$r/.git/info/exclude")" = 1 ] || fail "exclude entry missing or repeated"
+[ -z "$(git -C "$r" status --porcelain -- docs)" ] || fail "a note shows up in git status"
+git -C "$r" add -A && git -C "$r" diff --cached --quiet -- docs || fail "git add -A picked up a note"
+pass "new picks a free note name and keeps notes out of git"
 
-# --- open without an index ----------------------------------------------------------------
-r2="$(fresh_repo)"
-[ -z "$(bash "$H" open -C "$r2")" ] || fail "open in a repo without handoffs"
-mkdir -p "$r2/docs/handoffs"
-for f in 2026-01-02.md 2026-01-02-2.md 2026-01-02-10.md 2025-12-31.md notes.md; do echo x > "$r2/docs/handoffs/$f"; done
-got="$(bash "$H" open -C "$r2" | cut -f 1 | sed 's#docs/handoffs/##' | tr '\n' ' ')"
-[ "$got" = "2026-01-02-10.md 2026-01-02-2.md 2026-01-02.md 2025-12-31.md " ] || fail "fallback order: $got"
-pass "open without an index lists dated notes, newest first"
+# --- open ----------------------------------------------------------------------------------
+printf '# Handoff 2\n\n## Next action\nSecond\n' > "$r/$note2"
+mkdir -p "$r/docs/handoffs"
+for f in 2026-01-02.md 2026-01-02-10.md 2025-12-31.md notes.md README.md; do echo x > "$r/docs/handoffs/$f"; done
+got="$(bash "$H" open -C "$r" | cut -f 1 | sed 's#docs/handoffs/##' | tr '\n' ' ')"
+[ "$got" = "$today-2.md $today.md 2026-01-02-10.md 2026-01-02.md 2025-12-31.md " ] || fail "open order: $got"
+[ "$(bash "$H" open -C "$r" | sed -n 2p | cut -f 2)" = "Run the migration" ] || fail "next action: $(bash "$H" open -C "$r")"
+[ "$(bash "$H" open -C "$r" | sed -n 3p | cut -f 2)" = "(no next action)" ] || fail "missing next action"
+for f in 2026-01-02.md 2026-01-02-10.md 2025-12-31.md; do bash "$H" drop -C "$r" "docs/handoffs/$f" >/dev/null; done
+[ ! -e "$r/docs/handoffs/2025-12-31.md" ] || fail "drop left a local note"
+expect_exit 1 bash "$H" drop -C "$r" "docs/handoffs/2025-12-31.md"
+[ "$(bash "$H" open -C "$r" | cut -f 1 | tr '\n' ' ')" = "$note2 $note " ] || fail "open after drop"
+pass "open lists dated notes newest first with their next actions; drop deletes a local note"
+
 
 # --- state ---------------------------------------------------------------------------------
 git -C "$r" checkout -q -b work
@@ -108,22 +90,47 @@ pass "state reports the branch, its upstream, uncommitted files and a cloud sess
 
 # --- commit --------------------------------------------------------------------------------
 bash "$H" commit -C "$r" "$note" >/dev/null || { bash "$H" commit -C "$r" "$note"; fail "commit"; }
-[ "$(git -C "$r" show --name-only --format= HEAD | sort | tr '\n' ' ')" = "$(printf '%s\n' docs/handoffs/README.md "$note" | sort | tr '\n' ' ')" ] \
-    || fail "commit took more than the note and the index"
+[ "$(git -C "$r" show --name-only --format= HEAD)" = "$note" ] || fail "commit took more than the note"
 git -C "$r" diff --quiet -- README.md && fail "commit swept up an unrelated change"
 [ "$(git -C "$r" rev-parse origin/work)" = "$(git -C "$r" rev-parse HEAD)" ] || fail "commit did not push"
 out="$(CLAUDE_CODE_REMOTE= bash "$H" state -C "$r")"
 printf '%s\n' "$out" | grep -qx 'upstream: origin/work' || { echo "$out"; fail "push did not set the upstream"; }
-git -C "$r" checkout -q main 2>/dev/null || { git -C "$r" stash -q && git -C "$r" checkout -q main; }
+git -C "$r" stash -q && git -C "$r" checkout -q main
 expect_exit 1 bash "$H" commit -C "$r" "$note2"
 grep -q "won't commit a handoff on main" "$TMP_ROOT/out" || fail "commit on main not refused"
-pass "commit takes only the note and the index, pushes, and refuses main"
+pass "commit takes only the note, pushes, and refuses main"
 
-# --- remote: open notes on other branches ---------------------------------------------------
-git -C "$r" checkout -q work
+# --- remote: notes on other branches -------------------------------------------------------
 out="$(bash "$H" remote -C "$r")"
-[ "$(printf '%s\n' "$out" | cut -f 1,2)" = "$(printf 'work\t%s' "$note")" ] \
-    || { echo "$out"; fail "remote did not find exactly the open note on origin/work (main has no index)"; }
-pass "remote lists open notes on remote branches"
+[ "$out" = "$(printf 'work\t%s\tRun the migration' "$note")" ] \
+    || { echo "$out"; fail "remote did not find exactly the note on origin/work"; }
+pass "remote lists notes committed on remote branches"
+
+# --- drop a committed note -----------------------------------------------------------------
+git -C "$r" checkout -q work && git -C "$r" stash pop -q
+bash "$H" drop -C "$r" "$note" >/dev/null || { bash "$H" drop -C "$r" "$note"; fail "drop"; }
+[ ! -e "$r/$note" ] || fail "drop left the committed note"
+[ "$(git -C "$r" show --name-status --format= HEAD)" = "$(printf 'D\t%s' "$note")" ] || fail "drop commit holds more than the deletion"
+git -C "$r" diff --quiet -- README.md && fail "drop swept up an unrelated change"
+[ "$(git -C "$r" rev-parse origin/work)" = "$(git -C "$r" rev-parse HEAD)" ] || fail "drop did not push"
+[ -z "$(git -C "$r" diff --name-only main origin/work -- docs)" ] || fail "the note still differs from main"
+[ -z "$(bash "$H" remote -C "$r")" ] || fail "remote still lists a dropped note"
+pass "drop commits and pushes the deletion of a committed note, so the branch matches main"
+
+# --- drop: a committed note that was never pushed, and one on main --------------------------
+printf '# Local\n' > "$r/docs/handoffs/2026-02-01.md"
+git -C "$r" add -f docs/handoffs/2026-02-01.md && git -C "$r" commit -q -m local -- docs/handoffs/2026-02-01.md
+before="$(git -C "$r" rev-parse origin/work)"
+bash "$H" drop -C "$r" docs/handoffs/2026-02-01.md >/dev/null
+[ "$(git -C "$r" rev-parse origin/work)" = "$before" ] || fail "drop pushed a note that was never on the upstream"
+git -C "$r" stash -q && git -C "$r" checkout -q main
+printf '# Merged\n' > "$r/docs/handoffs/2026-03-01.md"
+git -C "$r" add -f docs/handoffs/2026-03-01.md && git -C "$r" commit -q -m merged -- docs/handoffs/2026-03-01.md
+head_before="$(git -C "$r" rev-parse HEAD)"
+bash "$H" drop -C "$r" docs/handoffs/2026-03-01.md > "$TMP_ROOT/out"
+grep -q 'first commit of the next work branch' "$TMP_ROOT/out" || fail "drop on main didn't say where the deletion goes"
+[ "$(git -C "$r" rev-parse HEAD)" = "$head_before" ] || fail "drop committed on main"
+[ "$(git -C "$r" diff --cached --name-status)" = "$(printf 'D\tdocs/handoffs/2026-03-01.md')" ] || fail "drop on main didn't stage the deletion"
+pass "drop pushes only a note the upstream has, and stages the deletion on main"
 
 echo "all handoff tests passed"
