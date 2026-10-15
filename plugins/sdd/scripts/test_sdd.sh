@@ -328,7 +328,8 @@ mkdir -p node_modules && touch node_modules/.package-lock.json
 EOF2
 chmod +x "$nfake/npm"
 export NPM_LOG="$TMP_ROOT/npm.log"
-ss() { PATH="$nfake:$PATH" bash "$r6/scripts/sdd/session-start.sh" "$r6"; }
+# CI= : these tests run in CI, where setup-agent-skills.mjs skips on purpose.
+ss() { CI= PATH="$nfake:$PATH" bash "$r6/scripts/sdd/session-start.sh" "$r6"; }
 
 : > "$NPM_LOG"
 out="$(NPM_FAILS=1 ss)" || fail "session-start exited non-zero when npm failed"
@@ -566,7 +567,7 @@ grep -q 'sdd.pinz is not an sdd setting' "$TMP_ROOT/out" || fail "unknown settin
 expect_exit 3 bash "$rn/scripts/sdd/sdd-archive.sh" active -C "$rn"
 echo '{"sdd":{"tools":["claude","opencode"]}}' > "$rn/package.json"
 : > "$TMP_ROOT/init.log"
-STUB_INIT_LOG="$TMP_ROOT/init.log" node "$rn/scripts/sdd/setup-agent-skills.mjs" >/dev/null || fail "setup-agent-skills"
+CI= STUB_INIT_LOG="$TMP_ROOT/init.log" node "$rn/scripts/sdd/setup-agent-skills.mjs" >/dev/null || fail "setup-agent-skills"
 grep -qx 'init --tools claude,opencode --no-animation' "$TMP_ROOT/init.log" || { cat "$TMP_ROOT/init.log"; fail "tools not read from package.json"; }
 pass "settings: a stricter change-name rule, a name with a line break, unknown keys, agent tools"
 
