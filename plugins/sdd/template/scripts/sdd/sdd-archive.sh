@@ -10,7 +10,8 @@
 #       Active change names (folders in openspec/changes/ other than archive/),
 #       one per line, in ascending byte order: the order they are archived in.
 #       Fails when a name isn't [A-Za-z0-9][A-Za-z0-9._-]*, so no folder name
-#       can reach the CLI as an option.
+#       can reach the CLI as an option, or breaks the repository's stricter
+#       rule ("sdd": { "changeNames": "lowercase" } in package.json).
 #
 #   bash sdd-archive.sh run     [-C <dir>]
 #       Archives every active change in that order. Stops at the first failure.
@@ -20,18 +21,24 @@
 #       adds under openspec/changes/archive/ archives a change active on <base>,
 #       re-running `openspec archive` for those changes on <base> reproduces
 #       <result>'s openspec/ tree exactly, and nothing outside openspec/ changed.
+#       Right before each archive, in that order, the change's base pins must
+#       match the main specs as they are at that moment (unless pins are off in
+#       package.json), and its tasks.md must have no unfinished task.
 #       Last line, on every exit path: `archive-mechanical: success|failure|
 #       not-an-archive-pr`, preceded by `- compared base <sha> with result <sha>`
 #       when a comparison ran. Every other line starts with `- ` or `  | `, so
 #       text from the PR (paths, folder names, CLI output) never starts a line.
 #       The OpenSpec CLI always comes from this checkout's node_modules.
 #
-#   bash sdd-archive.sh verdict <log-file>
+#   bash sdd-archive.sh verdict [--line <name>] <log-file>
 #       Reads a CI log and prints `verdict=<state>` and `base=<sha>`. Counts only
 #       whole lines (after GitHub's timestamp prefix, or `gh run view --log`'s
 #       job, step and timestamp), takes the last, and accepts `success` only
 #       when the line right before it is the `- compared base` line. Accepts
 #       the `openspec/archive-mechanical:` spelling too.
+#       With --line, reads another check's verdict instead: the last whole line
+#       `<name>: success|failure|error`, with `base=unknown`. For the extra
+#       verdicts a repository names in package.json ("archiveVerdicts").
 #
 # Exit status: 0 success (or not-an-archive-pr, or no active change), 1 failure,
 # 2 usage error, 3 internal error.
@@ -50,6 +57,26 @@ usage() {
 VERIFYING=0
 VERDICT_PRINTED=0
 NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]*$'
+LOWER_RE='^[a-z0-9][a-z0-9-]*$'
+DATE_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}-'
+NAME_RULE=""
+
+# The repository's change-name rule, from this checkout's package.json (never the PR's).
+load_name_rule() {
+    [ -n "$NAME_RULE" ] && return 0
+    NAME_RULE="$(node "$SCRIPT_DIR/sdd-config.mjs" changeNames)" || internal "invalid sdd settings in package.json"
+}
+
+# Is $1 a valid change name? [[ =~ ]] matches the whole string, so a name with a line
+# break in it never passes. Call load_name_rule first.
+name_ok() {
+    [[ "$1" =~ $NAME_RE ]] || return 1
+    if [ "$NAME_RULE" = lowercase ]; then
+        [[ "$1" =~ $LOWER_RE ]] || return 1
+        if [[ "$1" =~ $DATE_RE ]]; then return 1; fi
+    fi
+    return 0
+}
 
 internal() {
     echo "sdd-archive: $*" >&2
@@ -91,7 +118,7 @@ active_in() {
         d="${d%/}"
         d="${d##*/}"
         [ "$d" = "archive" ] && continue
-        if printf '%s' "$d" | grep -Eq "$NAME_RE"; then
+        if name_ok "$d"; then
             names="$names$d"$'\n'
         else
             echo "sdd-archive: not a valid change name: $(printf '%q' "$d")" >&2
@@ -105,12 +132,14 @@ active_in() {
 cmd_active() {
     local root
     root="$(git -C "$DIR" rev-parse --show-toplevel)" || internal "$DIR is not a git repository"
+    load_name_rule
     active_in "$root" || exit 1
 }
 
 cmd_run() {
     local root names name
     root="$(git -C "$DIR" rev-parse --show-toplevel)" || internal "$DIR is not a git repository"
+    load_name_rule
     names="$(active_in "$root")" || exit 1
     if [ -z "$names" ]; then
         echo "no active change"
@@ -153,20 +182,27 @@ cmd_verify() {
         return 0
     fi
 
-    local problems="" active folder change names="" seen=""
-    active="$(folders_at "$base" openspec/changes | grep -vx archive | grep -E "$NAME_RE" || true)"
+    local problems="" active="" folder change names="" seen=""
+    load_name_rule
+    while IFS= read -r folder; do
+        if [ -n "$folder" ] && [ "$folder" != archive ] && name_ok "$folder"; then
+            active="$active$folder"$'\n'
+        fi
+    done <<EOF
+$(folders_at "$base" openspec/changes)
+EOF
     while IFS= read -r folder; do
         # A dated folder, YYYY-MM-DD-<change>. OpenSpec keeps a change name that
         # already starts with a date as the whole folder name, so try that first.
-        if printf '%s\n' "$active" | grep -qxF -- "$folder"; then
+        if printf '%s' "$active" | grep -qxF -- "$folder"; then
             change="$folder"
-        elif printf '%s' "$folder" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}-.+'; then
+        elif [[ "$folder" =~ $DATE_RE ]] && name_ok "${folder:11}"; then
             change="${folder:11}"
         else
-            problems="$problems- $folder is not a dated archive folder"$'\n'
+            problems="$problems- $folder is not a dated archive folder of a valid change name"$'\n'
             continue
         fi
-        if ! printf '%s\n' "$active" | grep -qxF -- "$change"; then
+        if ! printf '%s' "$active" | grep -qxF -- "$change"; then
             problems="$problems- $folder archives $change, which is not an active change on the base"$'\n'
         elif printf '%s' "$seen" | grep -qxF -- "$change"; then
             problems="$problems- $change is archived more than once"$'\n'
@@ -215,6 +251,11 @@ reproduce() {
     local change folder made before out
     while IFS=' ' read -r change folder; do
         [ -n "$change" ] || continue
+        # Pins and tasks, against the main specs as the archives before it left them.
+        if ! out="$(node "$SCRIPT_DIR/sdd-specs.mjs" gate --cli-root "$root" --dir "$checkout" --change "$change" 2>&1)"; then
+            printf '%s\n' "$out" | sed '/^$/d' | sed 's/^sdd-specs: /- /'
+            status=1
+        fi
         before="$(ls -1 "$checkout/$ARCHIVE" 2>/dev/null | LC_ALL=C sort)"
         if ! out="$(bash "$OPENSPEC" -C "$checkout" --cli-root "$root" archive "$change" --yes 2>&1)"; then
             echo "- \`openspec archive $change\` fails on the base:"
@@ -249,8 +290,37 @@ EOF
 }
 
 cmd_verdict() {
+    local line=""
+    if [ "${1:-}" = "--line" ]; then
+        [ $# -ge 2 ] || usage
+        line="$2"
+        shift 2
+        [[ "$line" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || usage
+    fi
     [ $# -eq 1 ] || usage
     [ -f "$1" ] || internal "no such log file: $1"
+    if [ -n "$line" ]; then
+        # Another check's verdict: the last whole line `<name>: <state>`, nothing more.
+        awk -v name="$line" '
+            BEGIN { ts = "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9:.]+Z " }
+            {
+                sub(/\r$/, "")
+                if ($0 ~ /^[^\t]+\t[^\t]*\t/) { sub(/^[^\t]+\t[^\t]*\t/, "") }
+                if ($0 ~ ts) { sub(ts, "") }
+                n = length(name) + 2
+                if (substr($0, 1, n) == name ": ") {
+                    v = substr($0, n + 1)
+                    if (v == "success" || v == "failure" || v == "error") { verdict = v }
+                }
+            }
+            END {
+                if (verdict == "") { print "verdict=none"; exit 1 }
+                print "verdict=" verdict
+                print "base=unknown"
+            }
+        ' "$1"
+        return
+    fi
     # Strip a log line to the text the step printed: drop `gh run view --log`'s
     # `<job>\t<step>\t` and GitHub's `<timestamp> ` prefix, nothing else. A line
     # with any other prefix (such as the `  | ` on quoted output) never matches.

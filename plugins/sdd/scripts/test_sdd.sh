@@ -2,10 +2,11 @@
 # Smoke test for the sdd plugin's scripts: the installer (sdd-init.sh) and the
 # scripts it installs into a repo (template/scripts/sdd/). Uses real git repos
 # and a stub OpenSpec CLI, so it runs offline: the stub archives a change by
-# moving its folder to archive/<date>-<name> and copying its delta specs over
+# moving its folder to archive/<date>-<name> and applying its delta specs to
 # the main specs, and fails `validate` when a spec contains the word INVALID.
 #
 #   bash plugins/sdd/scripts/test_sdd.sh
+#   SDD_TEST_OPENSPEC=<dir> bash plugins/sdd/scripts/test_sdd.sh   # also against a real CLI
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -37,42 +38,111 @@ fresh_repo() {
 }
 
 install_stub() {
-    local bin="$1/node_modules/@fission-ai/openspec/bin"
-    mkdir -p "$bin"
-    cat > "$bin/openspec.js" <<'EOF'
+    local pkg="$1/node_modules/@fission-ai/openspec"
+    mkdir -p "$pkg/bin" "$pkg/dist/core/parsers" "$pkg/dist/utils"
+    echo '{"type":"module"}' > "$pkg/dist/package.json"
+    # Just enough of OpenSpec's parsers: requirement blocks, delta sections, task lines.
+    cat > "$pkg/dist/core/parsers/requirement-blocks.js" <<'EOF'
+const HEADER = /^###\s+Requirement:\s*(.+?)\s*$/
+function blocksOf(lines) {
+  const out = []
+  let cur = null
+  for (const line of lines) {
+    const m = HEADER.exec(line)
+    if (m) { cur = { name: m[1], lines: [line] }; out.push(cur) } else if (cur) { cur.lines.push(line) }
+  }
+  return out.map(b => ({ name: b.name, raw: b.lines.join('\n').replace(/\s+$/, '') }))
+}
+function sections(content) {
+  const out = {}
+  let cur = null
+  for (const line of content.replace(/\r\n?/g, '\n').split('\n')) {
+    const m = /^##\s+(.+?)\s*$/.exec(line)
+    if (m) { cur = m[1].toLowerCase(); out[cur] = [] } else if (cur) { out[cur].push(line) }
+  }
+  return out
+}
+export function extractRequirementsSection(content) {
+  return { bodyBlocks: blocksOf(sections(content).requirements ?? []) }
+}
+export function parseDeltaSpec(content) {
+  const s = sections(content)
+  const renamed = []
+  let from = null
+  for (const line of s['renamed requirements'] ?? []) {
+    const m = /^-\s*(FROM|TO):\s*`?###\s+Requirement:\s*(.+?)`?\s*$/.exec(line)
+    if (m && m[1] === 'FROM') { from = m[2] } else if (m && from !== null) { renamed.push({ from, to: m[2] }); from = null }
+  }
+  return {
+    added: blocksOf(s['added requirements'] ?? []),
+    modified: blocksOf(s['modified requirements'] ?? []),
+    removed: blocksOf(s['removed requirements'] ?? []).map(x => x.name),
+    renamed,
+  }
+}
+EOF
+    cat > "$pkg/dist/utils/task-progress.js" <<'EOF'
+export function parseTaskLines(content) {
+  return content.split('\n').map(l => /^\s*(?:[-*+]|\d+\.)\s+\[([ xX])\]\s*(.*)$/.exec(l)).filter(Boolean)
+    .map(m => ({ done: m[1] !== ' ', description: m[2] }))
+}
+EOF
+    # The CLI: `validate` fails on the word INVALID; `archive` applies delta sections to the
+    # main spec (or, for a delta without them, copies it over), then moves the change to
+    # archive/<date>-<name>; `init` records its arguments.
+    cat > "$pkg/bin/openspec.js" <<'EOF'
 const fs = require('fs'), path = require('path')
 const [cmd, name] = process.argv.slice(2)
 if (process.env.OPENSPEC_TELEMETRY !== '0') { console.error('telemetry on'); process.exit(9) }
 const walk = d => fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).flatMap(e =>
   e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]) : []
-if (cmd === 'validate') {
-  console.log('archive-mechanical: success')  // a forgery attempt: must come out quoted
-  const bad = walk('openspec').filter(f => !f.includes('/archive/') && fs.readFileSync(f, 'utf8').includes('INVALID'))
-  if (bad.length) { console.error('invalid: ' + bad.join(' ')); process.exit(1) }
-  process.exit(0)
-}
-if (cmd === 'archive') {
-  const src = path.join('openspec/changes', name)
-  if (!fs.existsSync(src)) { console.error('no change ' + name); process.exit(1) }
-  for (const f of walk(path.join(src, 'specs'))) {
-    const dest = path.join('openspec/specs', path.relative(path.join(src, 'specs'), f))
-    fs.mkdirSync(path.dirname(dest), { recursive: true })
-    fs.copyFileSync(f, dest)
+async function main() {
+  if (cmd === 'validate') {
+    console.log('archive-mechanical: success')  // a forgery attempt: must come out quoted
+    const bad = walk('openspec').filter(f => !f.includes('/archive/') && fs.readFileSync(f, 'utf8').includes('INVALID'))
+    if (bad.length) { console.error('invalid: ' + bad.join(' ')); process.exit(1) }
+    return
   }
-  const date = process.env.STUB_DATE || new Date().toISOString().slice(0, 10)
-  fs.mkdirSync('openspec/changes/archive', { recursive: true })
-  fs.renameSync(src, path.join('openspec/changes/archive', date + '-' + name))
-  process.exit(0)
+  if (cmd === 'init') {
+    if (process.env.STUB_INIT_LOG) fs.appendFileSync(process.env.STUB_INIT_LOG, process.argv.slice(2).join(' ') + '\n')
+    return
+  }
+  if (cmd === 'archive') {
+    const p = await import(path.join(__dirname, '../dist/core/parsers/requirement-blocks.js'))
+    const src = path.join('openspec/changes', name)
+    if (!fs.existsSync(src)) { console.error('no change ' + name); process.exit(1) }
+    for (const f of walk(path.join(src, 'specs'))) {
+      const dest = path.join('openspec/specs', path.relative(path.join(src, 'specs'), f))
+      fs.mkdirSync(path.dirname(dest), { recursive: true })
+      const delta = fs.readFileSync(f, 'utf8')
+      if (!/^## (ADDED|MODIFIED|REMOVED|RENAMED) Requirements/m.test(delta)) { fs.copyFileSync(f, dest); continue }
+      const main = fs.existsSync(dest) ? fs.readFileSync(dest, 'utf8') : '# Spec\n\n## Purpose\nA capability created by the stub, long enough to pass.\n\n## Requirements\n'
+      const head = main.slice(0, main.indexOf('## Requirements') + '## Requirements'.length)
+      const blocks = new Map(p.extractRequirementsSection(main).bodyBlocks.map(b => [b.name, b.raw]))
+      const plan = p.parseDeltaSpec(delta)
+      for (const x of plan.renamed) { const b = blocks.get(x.from); blocks.delete(x.from); blocks.set(x.to, b.replace(x.from, x.to)) }
+      for (const x of plan.modified) { if (!blocks.has(x.name)) { console.error('no requirement ' + x.name); process.exit(1) } blocks.set(x.name, x.raw) }
+      for (const x of plan.removed) blocks.delete(x)
+      for (const x of plan.added) blocks.set(x.name, x.raw)
+      fs.writeFileSync(dest, head + '\n\n' + [...blocks.values()].join('\n\n') + '\n')
+    }
+    const date = process.env.STUB_DATE || new Date().toISOString().slice(0, 10)
+    fs.mkdirSync('openspec/changes/archive', { recursive: true })
+    fs.renameSync(src, path.join('openspec/changes/archive', date + '-' + name))
+  }
 }
-process.exit(0)
+main().catch(e => { console.error(e); process.exit(1) })
 EOF
 }
 
+# A change whose delta is plain text (copied over the main spec when archived), with empty
+# base pins.
 add_change() {
     local repo="$1" name="$2" text="${3:-ok}"
     mkdir -p "$repo/openspec/changes/$name/specs/$name"
     echo "# $name" > "$repo/openspec/changes/$name/proposal.md"
     echo "$text" > "$repo/openspec/changes/$name/specs/$name/spec.md"
+    printf '{\n  "version": 1,\n  "pins": {\n    "%s": {}\n  }\n}\n' "$name" > "$repo/openspec/changes/$name/base-pins.json"
 }
 
 # --- usage errors -----------------------------------------------------------
@@ -82,6 +152,9 @@ expect_exit 2 bash "$T/openspec.sh"
 expect_exit 2 bash "$T/sdd-archive.sh"
 expect_exit 2 bash "$T/sdd-archive.sh" verify --base HEAD
 expect_exit 2 bash "$T/check-specs.sh" --bogus
+expect_exit 2 node "$T/sdd-specs.mjs" bogus
+expect_exit 2 node "$T/sdd-specs.mjs" pin
+expect_exit 2 node "$T/sdd-config.mjs" nonsense
 pass "usage errors exit 2"
 
 # --- sdd-init: fresh repo -----------------------------------------------------
@@ -125,7 +198,9 @@ printf '# Mine\n\nUse /opsx:propose.\n' > "$r2/CLAUDE.md"
 mkdir -p "$r2/openspec" && echo mine > "$r2/openspec/conventions.md"
 mkdir -p "$r2/.claude" && echo '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo mine"}]}]}}' > "$r2/.claude/settings.json"
 out="$(bash "$INIT" --repo "$r2" --no-install)"
-[ "$(printf '%s\n' "$out" | tail -n 1)" = 'sdd-init: done, 4 warnings' ] || { echo "$out"; fail "expected 4 warnings"; }
+[ "$(printf '%s\n' "$out" | tail -n 1)" = 'sdd-init: done, 5 warnings' ] || { echo "$out"; fail "expected 5 warnings"; }
+printf '%s\n' "$out" | grep -q 'from 1.14.1, `validate --strict` fails any requirement whose text is over 500 characters' \
+    || { echo "$out"; fail "no warning about 1.14.1's requirement-length rule"; }
 grep -q '"node other.mjs"' "$r2/package.json" || fail "overwrote the repo's prepare script"
 grep -q '"1.14.0"' "$r2/package.json" || fail "overwrote the repo's OpenSpec pin"
 [ "$(cat "$r2/openspec/conventions.md")" = mine ] || fail "overwrote repo-owned conventions"
@@ -257,17 +332,22 @@ ss() { PATH="$nfake:$PATH" bash "$r6/scripts/sdd/session-start.sh" "$r6"; }
 
 : > "$NPM_LOG"
 out="$(NPM_FAILS=1 ss)" || fail "session-start exited non-zero when npm failed"
-printf '%s\n' "$out" | grep -q 'warning: `npm ci` failed' || { echo "$out"; fail "npm failure not reported"; }
+printf '%s\n' "$out" | grep -q 'warning: `npm ci --ignore-scripts` failed' || { echo "$out"; fail "npm failure not reported"; }
+install_stub "$r6"
+export STUB_INIT_LOG="$TMP_ROOT/init.log"
+: > "$STUB_INIT_LOG"
 out="$(ss)"
 grep -q '^npm ci' "$NPM_LOG" || fail "session-start did not run npm ci on a fresh repo"
+if grep '^npm ci' "$NPM_LOG" | grep -vq -- '--ignore-scripts'; then cat "$NPM_LOG"; fail "session-start ran npm ci with install scripts"; fi
 printf '%s\n' "$out" | grep -q 'installed the pinned OpenSpec CLI' || { echo "$out"; fail "install not reported"; }
+grep -qx 'init --tools claude --no-animation' "$STUB_INIT_LOG" || { cat "$STUB_INIT_LOG"; fail "session-start did not generate the agent skills"; }
 : > "$NPM_LOG"
 out="$(ss)"
 [ ! -s "$NPM_LOG" ] || fail "session-start ran npm ci with node_modules current"
 sleep 1; touch "$r6/package-lock.json"
 out="$(ss)"
 grep -q '^npm ci' "$NPM_LOG" || fail "session-start did not rerun npm ci after the lock file changed"
-pass "session-start runs npm ci only when node_modules is stale, and never fails"
+pass "session-start runs npm ci --ignore-scripts only when node_modules is stale, then generates skills, and never fails"
 
 add_change "$r6" pending-one
 printf '\nADR detail: learning\n' >> "$r6/CLAUDE.md"
@@ -303,6 +383,319 @@ grep -qx 'verdict=none' "$TMP_ROOT/out" || fail "a quoted or mid-line verdict co
 printf 'spec-checks: success\narchive-mechanical: success\n' > "$TMP_ROOT/log7"
 expect_exit 1 bash "$T/sdd-archive.sh" verdict "$TMP_ROOT/log7"
 pass "verdict ignores quoted lines and success without its compared-base line"
+
+# --- base pins, open tasks, requirements through a change, main-spec diff -----------------
+rp="$(fresh_repo)"
+bash "$INIT" --repo "$rp" --no-install >/dev/null
+echo '{}' > "$rp/package-lock.json"
+install_stub "$rp"
+mkdir -p "$rp/openspec/specs/nav"
+cat > "$rp/openspec/specs/nav/spec.md" <<'EOF'
+# nav
+
+## Purpose
+How a visitor moves between the pages of the site.
+
+## Requirements
+
+### Requirement: NAV-1 Menu
+The site SHALL show a menu.
+
+#### Scenario: Menu
+- **WHEN** a page loads
+- **THEN** the menu shows
+
+### Requirement: NAV-2 Footer
+The site SHALL show a footer.
+EOF
+git -C "$rp" add -A && git -C "$rp" commit -q -m specs
+SPECS="$rp/scripts/sdd/sdd-specs.mjs"
+CHECK="$rp/scripts/sdd/check-specs.sh"
+ARC="$rp/scripts/sdd/sdd-archive.sh"
+
+# A change modifying NAV-1 (and adding NAV-9) with the text given.
+delta_change() {
+    local repo="$1" name="$2" text="$3"
+    mkdir -p "$repo/openspec/changes/$name/specs/nav"
+    echo "# $name" > "$repo/openspec/changes/$name/proposal.md"
+    printf '## MODIFIED Requirements\n\n### Requirement: NAV-1 Menu\nThe site SHALL show %s.\n\n## ADDED Requirements\n\n### Requirement: NAV-9 %s\nThe site SHALL do %s.\n' \
+        "$text" "$name" "$name" > "$repo/openspec/changes/$name/specs/nav/spec.md"
+}
+
+delta_change "$rp" a-menu "a top menu"
+head_before="$(git -C "$rp" rev-parse HEAD)"
+expect_exit 1 bash "$CHECK" -C "$rp" --worktree
+grep -q '^- a-menu: no base-pins.json; run `npm run spec:pin -- a-menu`' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "missing pins not reported"; }
+grep -qx 'base-pins: failure' "$TMP_ROOT/out" || fail "base-pins verdict"
+grep -qx 'archived-specs: success' "$TMP_ROOT/out" || fail "--worktree did not see the uncommitted change"
+[ "$(git -C "$rp" rev-parse HEAD)" = "$head_before" ] || fail "--worktree moved HEAD"
+[ -n "$(git -C "$rp" status --porcelain openspec/changes)" ] || fail "--worktree touched the index"
+[ -z "$(git -C "$rp" diff --cached --name-only)" ] || fail "--worktree staged files"
+pass "check-specs --worktree checks uncommitted files and reports missing pins"
+
+(cd "$rp" && node scripts/sdd/sdd-specs.mjs pin a-menu) >/dev/null || fail "pin failed"
+node -e '
+  const p = require(process.argv[1]).pins.nav
+  if (!/^[0-9a-f]{64}$/.test(p["NAV-1 Menu"]) || p["NAV-9 a-menu"] !== null || Object.keys(p).length !== 2) throw JSON.stringify(p)
+' "$rp/openspec/changes/a-menu/base-pins.json" || fail "pin format"
+# The pin is the SHA-256 of the normalised block, as timzander.com's spec:pin writes it.
+want="$(printf '### Requirement: NAV-1 Menu\nThe site SHALL show a menu.\n\n#### Scenario: Menu\n- **WHEN** a page loads\n- **THEN** the menu shows' | shasum -a 256 | cut -d' ' -f1)"
+grep -q "\"NAV-1 Menu\": \"$want\"" "$rp/openspec/changes/a-menu/base-pins.json" || fail "pin is not the hash of the normalised block"
+bash "$CHECK" -C "$rp" --worktree >"$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "check-specs after pinning"; }
+mkdir -p "$rp/openspec/changes/z-bad/specs/nav"
+printf '## MODIFIED Requirements\n\n### Requirement: NAV-404 Gone\nThe site SHALL x.\n' > "$rp/openspec/changes/z-bad/specs/nav/spec.md"
+expect_exit 1 node "$SPECS" pin -C "$rp" z-bad
+grep -q 'nav / NAV-404 Gone' "$TMP_ROOT/out" || fail "pin did not name the missing requirement"
+[ ! -f "$rp/openspec/changes/z-bad/base-pins.json" ] || fail "pin wrote a file for a missing requirement"
+printf '{"version":1,"pins":{"nav":{"NAV-404 Gone":"%s"}}}' "$want" > "$rp/openspec/changes/z-bad/base-pins.json"
+expect_exit 1 bash "$CHECK" -C "$rp" --worktree
+grep -q '`openspec archive z-bad` failed' "$TMP_ROOT/out" || fail "archive failure not reported"
+bash "$CHECK" -C "$rp" --worktree --no-archive >"$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "--no-archive failed on a change that doesn't archive"; }
+grep -qx 'archived-specs: skipped' "$TMP_ROOT/out" || fail "--no-archive verdict"
+rm -rf "$rp/openspec/changes/z-bad"
+expect_exit 2 bash "$CHECK" -C "$rp" --worktree --rev HEAD
+pass "pin writes complete pins, refuses a missing requirement; --no-archive skips the archive"
+
+# A change PR: requirements-through-change and the main-spec diff.
+git -C "$rp" checkout -q -b change-a
+git -C "$rp" add -A && git -C "$rp" commit -q -m change-a
+out="$(node "$SPECS" requirements -C "$rp" --base main --result HEAD)" || { echo "$out"; fail "requirements on a clean change PR"; }
+[ "$(printf '%s\n' "$out" | tail -n 1)" = 'requirements-through-change: success' ] || fail "requirements verdict"
+out="$(node "$SPECS" spec-diff -C "$rp" --base main --result HEAD --out "$TMP_ROOT/diff.md")" || { echo "$out"; fail "spec-diff"; }
+[ "$(printf '%s\n' "$out" | tail -n 1)" = 'main-spec-diff: success' ] || fail "spec-diff verdict"
+head -n 1 "$TMP_ROOT/diff.md" | grep -qxF '<!-- sdd-main-spec-diff -->' || fail "comment marker"
+grep -qF -- '- **From this PR:** `a-menu`' "$TMP_ROOT/diff.md" || fail "comment lists the change"
+grep -qF -- '+The site SHALL show a top menu.' "$TMP_ROOT/diff.md" || { cat "$TMP_ROOT/diff.md"; fail "comment diff"; }
+grep -qF -- '+++ b/openspec/specs/nav/spec.md' "$TMP_ROOT/diff.md" || fail "diff paths not labelled openspec/specs"
+pass "a change PR passes requirements-through-change and gets a main-spec diff"
+
+git -C "$rp" checkout -q -b direct
+sed -i.bak 's/show a footer/show a big footer/' "$rp/openspec/specs/nav/spec.md" && rm "$rp/openspec/specs/nav/spec.md.bak"
+git -C "$rp" commit -q -am direct
+expect_exit 1 node "$SPECS" requirements -C "$rp" --base main --result HEAD
+grep -qx -- '- nav / NAV-2 Footer: edited without a change' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "direct edit not reported"; }
+git -C "$rp" checkout -q change-a && git -C "$rp" branch -qD direct
+pass "requirements-through-change fails a direct edit of a main spec"
+
+# Main moves on: change-a merges and is archived; b-menu was pinned before that.
+git -C "$rp" checkout -q main && git -C "$rp" merge -q --no-ff -m merge-a change-a
+git -C "$rp" checkout -q -b change-b main~1
+delta_change "$rp" b-menu "a side menu"
+(cd "$rp" && node scripts/sdd/sdd-specs.mjs pin b-menu) >/dev/null
+git -C "$rp" add -A && git -C "$rp" commit -q -m change-b
+git -C "$rp" checkout -q main && git -C "$rp" merge -q --no-ff -m merge-b change-b
+base="$(git -C "$rp" rev-parse HEAD)"
+out="$(node "$SPECS" spec-diff -C "$rp" --base main~1 --result HEAD --out "$TMP_ROOT/diff2.md")"
+grep -qF -- '- **Already on the base:** `a-menu`' "$TMP_ROOT/diff2.md" || { cat "$TMP_ROOT/diff2.md"; fail "base change not listed"; }
+grep -qF 'They touch the same requirements as this PR: `nav / NAV-1 Menu`' "$TMP_ROOT/diff2.md" || fail "shared requirement not named"
+git -C "$rp" checkout -q -b archive-ab
+STUB_DATE=2026-03-04 bash "$ARC" run -C "$rp" >/dev/null
+git -C "$rp" add -A && git -C "$rp" commit -q -m archive
+expect_exit 1 bash "$ARC" verify -C "$rp" --base "$base" --result HEAD
+grep -qx -- '- b-menu: nav / NAV-1 Menu changed since the delta was written; merge the newer text into the delta, re-pin, and have the archive reviewed' "$TMP_ROOT/out" \
+    || { cat "$TMP_ROOT/out"; fail "stale pin not reported by verify"; }
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || fail "stale pin verdict"
+out="$(node "$SPECS" requirements -C "$rp" --base "$base" --result HEAD)" || { echo "$out"; fail "requirements on an archive PR"; }
+pass "verify fails an archive whose pins went stale earlier in the same PR"
+
+# With pins off, the same archive is mechanical. The setting comes from the checkout the
+# scripts run from.
+node -e 'const f=process.argv[1],p=require(f);p.sdd={pins:false};require("fs").writeFileSync(f,JSON.stringify(p,null,2))' "$rp/package.json"
+out="$(bash "$ARC" verify -C "$rp" --base "$base" --result HEAD)" || { echo "$out"; fail "verify with pins off"; }
+git -C "$rp" checkout -q package.json
+pass "pins can be turned off in package.json"
+
+# Open tasks block a mechanical archive.
+git -C "$rp" checkout -q main
+git -C "$rp" checkout -q -b tasks
+printf -- '- [x] 1.1 done\n1. [ ] 1.2 not yet\n' > "$rp/openspec/changes/a-menu/tasks.md"
+git -C "$rp" add -A && git -C "$rp" commit -q -m tasks
+tbase="$(git -C "$rp" rev-parse HEAD)"
+STUB_DATE=2026-03-04 bash "$ARC" run -C "$rp" >/dev/null
+git -C "$rp" add -A && git -C "$rp" commit -q -m archive
+expect_exit 1 bash "$ARC" verify -C "$rp" --base "$tbase" --result HEAD
+grep -qx -- '- a-menu: 1 unfinished task in tasks.md' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "open task not reported"; }
+pass "verify fails an archive with an unfinished task"
+
+# A change PR whose pins went stale on the base: c-menu is pinned on main, then a-menu's
+# archive lands first.
+git -C "$rp" checkout -q -b archive-a main
+(cd "$rp" && OPENSPEC_TELEMETRY=0 STUB_DATE=2026-03-04 node node_modules/@fission-ai/openspec/bin/openspec.js archive a-menu --yes)
+git -C "$rp" add -A && git -C "$rp" commit -q -m archive-a-only
+newbase="$(git -C "$rp" rev-parse HEAD)"
+git -C "$rp" checkout -q -b change-c main
+delta_change "$rp" c-menu "a bottom menu"
+(cd "$rp" && node scripts/sdd/sdd-specs.mjs pin c-menu) >/dev/null
+git -C "$rp" add -A && git -C "$rp" commit -q -m change-c
+git -C "$rp" checkout -q -b c-merged "$newbase" && git -C "$rp" merge -q --no-edit change-c
+expect_exit 1 node "$SPECS" requirements -C "$rp" --base "$newbase" --result HEAD
+grep -q '^- c-menu: nav / NAV-1 Menu changed since the delta was written; update the delta, then run `npm run spec:pin -- c-menu`' "$TMP_ROOT/out" \
+    || { cat "$TMP_ROOT/out"; fail "stale pin on a change PR not reported"; }
+pass "requirements-through-change reports a change PR's stale pins"
+
+# Backticks in spec text lengthen the diff's fence.
+git -C "$rp" checkout -q -b ticks "$newbase"
+delta_change "$rp" d-ticks 'a ````quoted```` menu'
+(cd "$rp" && node scripts/sdd/sdd-specs.mjs pin d-ticks) >/dev/null
+git -C "$rp" add -A && git -C "$rp" commit -q -m ticks
+node "$SPECS" spec-diff -C "$rp" --base "$newbase" --result HEAD --out "$TMP_ROOT/diff3.md" >/dev/null
+grep -qx '`````diff' "$TMP_ROOT/diff3.md" || { cat "$TMP_ROOT/diff3.md"; fail "fence not lengthened"; }
+out="$(node "$SPECS" spec-diff -C "$rp" --base "$head_before" --result "$head_before" --out "$TMP_ROOT/diff4.md")"
+[ "$(printf '%s\n' "$out" | tail -n 1)" = 'main-spec-diff: no-active-change' ] || { echo "$out"; fail "no-active-change verdict"; }
+pass "spec-diff lengthens fences and reports a PR without an active change"
+
+# --- settings: change names, tools, invalid settings --------------------------------------
+rn="$(fresh_repo)"
+mkdir -p "$rn/scripts" && cp -R "$T" "$rn/scripts/sdd" && install_stub "$rn" && echo node_modules > "$rn/.gitignore"
+add_change "$rn" Upper.Case
+bash "$rn/scripts/sdd/sdd-archive.sh" active -C "$rn" >/dev/null || fail "default rule refused Upper.Case"
+echo '{"sdd":{"changeNames":"lowercase"}}' > "$rn/package.json"
+expect_exit 1 bash "$rn/scripts/sdd/sdd-archive.sh" active -C "$rn"
+grep -q 'not a valid change name: Upper.Case' "$TMP_ROOT/out" || fail "lowercase rule not applied"
+rm -rf "$rn/openspec/changes/Upper.Case" && add_change "$rn" 2026-01-01-dated
+expect_exit 1 bash "$rn/scripts/sdd/sdd-archive.sh" active -C "$rn"
+rm -rf "$rn/openspec/changes/2026-01-01-dated" && add_change "$rn" "two
+lines"
+echo '{}' > "$rn/package.json"
+expect_exit 1 bash "$rn/scripts/sdd/sdd-archive.sh" active -C "$rn"
+rm -rf "$rn/openspec/changes/two
+lines"
+echo '{"sdd":{"pinz":false}}' > "$rn/package.json"
+expect_exit 3 node "$rn/scripts/sdd/sdd-config.mjs" pins
+grep -q 'sdd.pinz is not an sdd setting' "$TMP_ROOT/out" || fail "unknown setting not reported"
+expect_exit 3 bash "$rn/scripts/sdd/sdd-archive.sh" active -C "$rn"
+echo '{"sdd":{"tools":["claude","opencode"]}}' > "$rn/package.json"
+: > "$TMP_ROOT/init.log"
+STUB_INIT_LOG="$TMP_ROOT/init.log" node "$rn/scripts/sdd/setup-agent-skills.mjs" >/dev/null || fail "setup-agent-skills"
+grep -qx 'init --tools claude,opencode --no-animation' "$TMP_ROOT/init.log" || { cat "$TMP_ROOT/init.log"; fail "tools not read from package.json"; }
+pass "settings: a stricter change-name rule, a name with a line break, unknown keys, agent tools"
+
+# --- other checks' verdicts, for archiveVerdicts -----------------------------------------
+printf 'checks\tArchive PR\t2026-10-13T10:00:00.1Z openspec/archive-mechanical: failure\nchecks\tArchive PR\t2026-10-13T10:00:01.1Z openspec/archive-mechanical: success\n' > "$TMP_ROOT/log8"
+out="$(bash "$T/sdd-archive.sh" verdict --line openspec/archive-mechanical "$TMP_ROOT/log8")"
+[ "$out" = "$(printf 'verdict=success\nbase=unknown')" ] || fail "--line verdict: $out"
+printf '  | openspec/archive-mechanical: success\nx openspec/archive-mechanical: success\n' > "$TMP_ROOT/log9"
+expect_exit 1 bash "$T/sdd-archive.sh" verdict --line openspec/archive-mechanical "$TMP_ROOT/log9"
+expect_exit 2 bash "$T/sdd-archive.sh" verdict --line 'bad name' "$TMP_ROOT/log9"
+pass "verdict --line reads another check's whole verdict line only"
+
+# --- sdd-github.mjs: statuses and the comment, as package.json asks -------------------------
+cat > "$TMP_ROOT/report.mjs" <<'EOF'
+const [mod, statuses, comment] = process.argv.slice(2)
+const { report } = await import(mod)
+const calls = []
+const existing = [
+  { id: 1, user: { login: 'someone' }, body: '<!-- sdd-main-spec-diff -->\nquoted by a person' },
+  { id: 2, user: { login: 'github-actions[bot]' }, body: '<!-- sdd-main-spec-diff -->\nold' },
+]
+const fetch = async (url, init) => {
+  calls.push(`${init.method} ${new URL(url).pathname}${init.body ? ' ' + init.body : ''}`)
+  const body = init.method === 'GET' ? JSON.stringify(process.env.NO_COMMENTS ? [] : existing) : '{}'
+  return { ok: !(process.env.REFUSE && init.method === 'POST'), status: process.env.REFUSE ? 403 : 200, text: async () => body }
+}
+const lines = []
+await report({
+  env: { GITHUB_TOKEN: 't', GITHUB_REPOSITORY: 'o/r', PR_NUMBER: '7', HEAD_SHA: 'abc', RUN_URL: 'https://run' },
+  fetch, log: x => lines.push(x),
+  config: { statuses: statuses === 'true', specDiffComment: true },
+}, new Map([['spec-checks', 'success'], ['archive-mechanical', 'not-an-archive-pr'], ['main-spec-diff', process.env.DIFF ?? 'success'], ['requirements-through-change', '']]), comment)
+console.log(calls.join('\n'))
+console.log(lines.join('\n'))
+EOF
+echo body > "$TMP_ROOT/comment.md"
+out="$(node "$TMP_ROOT/report.mjs" "$T/sdd-github.mjs" false "$TMP_ROOT/comment.md")"
+printf '%s\n' "$out" | grep -q '^POST /repos/o/r/statuses' && fail "posted statuses with statuses off"
+printf '%s\n' "$out" | grep -qx 'PATCH /repos/o/r/issues/comments/2 {"body":"body\\n"}' || { echo "$out"; fail "did not update its own comment"; }
+printf '%s\n' "$out" | grep -q 'comments/1' && fail "edited a person's comment"
+out="$(node "$TMP_ROOT/report.mjs" "$T/sdd-github.mjs" true "$TMP_ROOT/comment.md")"
+printf '%s\n' "$out" | grep -q '"state":"success","context":"sdd/archive-mechanical","description":"Not an archive PR"' || { echo "$out"; fail "status for not-an-archive-pr"; }
+printf '%s\n' "$out" | grep -q '"state":"error","context":"sdd/requirements-through-change"' || fail "a check that didn't run is not error"
+out="$(NO_COMMENTS=1 DIFF=no-active-change node "$TMP_ROOT/report.mjs" "$T/sdd-github.mjs" false "$TMP_ROOT/comment.md")"
+printf '%s\n' "$out" | grep -q '^POST' && { echo "$out"; fail "created a comment for a PR without an active change"; }
+out="$(REFUSE=1 NO_COMMENTS=1 node "$TMP_ROOT/report.mjs" "$T/sdd-github.mjs" true "$TMP_ROOT/comment.md")" || fail "a refused post failed the reporter"
+printf '%s\n' "$out" | grep -q 'could not post sdd/spec-checks (HTTP 403)' || { echo "$out"; fail "refusal not reported"; }
+pass "sdd-github posts statuses only when asked, and edits only its own comment"
+
+# --- sdd-checks.yml: the merge-commit fetch carries the token (private repositories) ------
+WF="$SCRIPT_DIR/../template/.github/workflows/sdd-checks.yml"
+[ "$(grep -c 'GITHUB_TOKEN: ${{ github.token }}' "$WF")" = 2 ] || fail "the token should reach exactly two steps"
+awk '/- name: Fetch the PR.s merge commit as data/ { f = 1 } f && /^      - name:/ && !/Fetch/ { exit } f && r { sub(/^          /, ""); print } f && /run: \|/ { r = 1 }' "$WF" > "$TMP_ROOT/fetch.sh"
+grep -q 'git fetch' "$TMP_ROOT/fetch.sh" || fail "could not extract the fetch step"
+# An origin that, like a private repository, refuses a fetch without the token.
+wo="$TMP_ROOT/wf-origin" && wc="$TMP_ROOT/wf-clone"
+git init -q -b main "$wo" && git -C "$wo" -c user.email=t@e -c user.name=t commit -q --allow-empty -m base
+git -C "$wo" checkout -q -b head && git -C "$wo" -c user.email=t@e -c user.name=t commit -q --allow-empty -m head
+git -C "$wo" checkout -q main && git -C "$wo" -c user.email=t@e -c user.name=t merge -q --no-ff --no-edit head
+git -C "$wo" update-ref refs/pull/5/merge HEAD
+git clone -q "$wo" "$wc"
+gfake="$TMP_ROOT/gitfake" && mkdir -p "$gfake"
+real_git="$(command -v git)"
+cat > "$gfake/git" <<EOF
+#!/bin/bash
+if [ "\$1" = fetch ]; then
+    want="AUTHORIZATION: basic \$(printf 'x-access-token:%s' secret-token | base64 | tr -d '\n')"
+    if [ "\${GIT_CONFIG_COUNT:-}" != 1 ] || [ "\${GIT_CONFIG_KEY_0:-}" != "http.https://github.com/.extraheader" ] || [ "\${GIT_CONFIG_VALUE_0:-}" != "\$want" ]; then
+        echo "fatal: could not read Username for 'https://github.com': terminal prompts disabled" >&2
+        exit 128
+    fi
+fi
+exec "$real_git" "\$@"
+EOF
+printf '#!/bin/bash\nexit 0\n' > "$gfake/sleep"
+chmod +x "$gfake/git" "$gfake/sleep"
+head_sha="$(git -C "$wo" rev-parse head)"
+: > "$TMP_ROOT/gh-output"
+(cd "$wc" && PATH="$gfake:$PATH" PR=5 HEAD_SHA="$head_sha" SERVER_URL=https://github.com GITHUB_TOKEN=secret-token \
+    GITHUB_OUTPUT="$TMP_ROOT/gh-output" bash -e "$TMP_ROOT/fetch.sh") >"$TMP_ROOT/out" 2>&1 || { cat "$TMP_ROOT/out"; fail "fetch step failed with the token"; }
+grep -qx "result=$(git -C "$wo" rev-parse refs/pull/5/merge)" "$TMP_ROOT/gh-output" || fail "fetch step output"
+[ -z "$(git -C "$wc" config --get-regexp 'extraheader' || true)" ] || fail "the token was stored in .git/config"
+fetch_wrong() {
+    cd "$wc" && PATH="$gfake:$PATH" PR=5 HEAD_SHA="$head_sha" SERVER_URL=https://github.com GITHUB_TOKEN=wrong \
+        GITHUB_OUTPUT="$TMP_ROOT/gh-output" bash -e "$TMP_ROOT/fetch.sh"
+}
+expect_exit 1 fetch_wrong
+cd "$SCRIPT_DIR"
+grep -q '^  | fatal: could not read Username' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "git's error not shown, quoted"; }
+grep -qx 'archive-mechanical: failure' "$TMP_ROOT/out" || fail "no verdict when the fetch fails"
+pass "the workflow fetches the merge commit with the token, and shows git's error when it can't"
+
+# --- sdd-init: spec:pin, unpinned active changes -------------------------------------------
+ri="$(fresh_repo)"
+add_change "$ri" pinned
+add_change "$ri" unpinned && rm "$ri/openspec/changes/unpinned/base-pins.json"
+out="$(bash "$INIT" --repo "$ri" --no-install)"
+printf '%s\n' "$out" | grep -q 'warning: active change unpinned has no base-pins.json' || { echo "$out"; fail "unpinned change not reported"; }
+printf '%s\n' "$out" | grep -q 'active change pinned has' && fail "pinned change reported"
+grep -q '"spec:pin": "node scripts/sdd/sdd-specs.mjs pin"' "$ri/package.json" || fail "spec:pin script"
+pass "init adds spec:pin and reports active changes without pins"
+
+# --- optional: the same pin and archive checks against the real OpenSpec CLI -----------------
+# SDD_TEST_OPENSPEC=<dir whose node_modules holds @fission-ai/openspec> runs them; skipped
+# otherwise, so the test stays offline.
+if [ -n "${SDD_TEST_OPENSPEC:-}" ]; then
+    rr="$(fresh_repo)"
+    bash "$INIT" --repo "$rr" --no-install >/dev/null
+    ln -s "$SDD_TEST_OPENSPEC/node_modules" "$rr/node_modules"
+    mkdir -p "$rr/openspec/specs/nav"
+    printf '# nav Specification\n\n## Purpose\nHow a visitor moves between the pages and sections of the site.\n\n## Requirements\n\n### Requirement: NAV-1 Menu\nThe site SHALL show a menu.\n\n#### Scenario: Menu\n- **WHEN** a page loads\n- **THEN** the menu shows\n' > "$rr/openspec/specs/nav/spec.md"
+    for c in a-real b-real; do
+        mkdir -p "$rr/openspec/changes/$c/specs/nav"
+        printf '# %s\n\n## Why\nThe menu needs to move so that visitors can find it on small screens.\n\n## What Changes\n- The menu moves.\n' "$c" > "$rr/openspec/changes/$c/proposal.md"
+        printf -- '- [x] 1.1 Move the menu\n' > "$rr/openspec/changes/$c/tasks.md"
+        printf '## MODIFIED Requirements\n\n### Requirement: NAV-1 Menu\nThe site SHALL show a menu (%s).\n\n#### Scenario: Menu\n- **WHEN** a page loads\n- **THEN** the menu shows\n' "$c" > "$rr/openspec/changes/$c/specs/nav/spec.md"
+        (cd "$rr" && node scripts/sdd/sdd-specs.mjs pin "$c") >/dev/null || fail "real: pin $c"
+    done
+    git -C "$rr" add -A && git -C "$rr" commit -q -m changes
+    out="$(bash "$rr/scripts/sdd/check-specs.sh" -C "$rr")" || { echo "$out"; fail "real: check-specs"; }
+    rbase="$(git -C "$rr" rev-parse HEAD)"
+    git -C "$rr" checkout -q -b archive
+    bash "$rr/scripts/sdd/sdd-archive.sh" run -C "$rr" >/dev/null 2>&1 || fail "real: archive run"
+    git -C "$rr" add -A && git -C "$rr" commit -q -m archive
+    expect_exit 1 bash "$rr/scripts/sdd/sdd-archive.sh" verify -C "$rr" --base "$rbase" --result HEAD
+    grep -q '^- b-real: nav / NAV-1 Menu changed since the delta was written' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "real: stale pin"; }
+    out="$(node "$rr/scripts/sdd/sdd-specs.mjs" requirements -C "$rr" --base "$rbase" --result HEAD)" || { echo "$out"; fail "real: requirements"; }
+    pass "real OpenSpec CLI: pins, check-specs, and a stale pin at archive time"
+fi
 
 # --- cloud-setup.sh: sdd only, always exits 0, updates an existing marketplace ---------
 CS="$SCRIPT_DIR/../cloud-setup.sh"
