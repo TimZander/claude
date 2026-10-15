@@ -1,6 +1,6 @@
 ---
 description: Shortcut for /pickup. Resume interrupted work from the newest /handoff (or /hh) note.
-argument-hint: "[optional: a note path in docs/handoffs/; defaults to the newest open note]"
+argument-hint: "[optional: a note path in docs/handoffs/; defaults to the newest note]"
 allowed-tools: Bash, Read, Write, Glob
 ---
 

@@ -18,31 +18,38 @@ It works the same in a terminal, the desktop app and a cloud session.
 
 | Command | What it does |
 |---|---|
-| `/handoff [note]` | Writes `docs/handoffs/<date>.md` with four sections (Current state, Next action, Remaining work, Decisions & gotchas), lists anything left stranded (uncommitted or unpushed work, debug probes, background processes, worktrees), and adds an `open` row to the index `docs/handoffs/README.md` |
-| `/pickup [note]` | Takes the newest `open` note, checks it against `git status` before trusting it, carries the decisions forward, marks the row `resumed`, and starts on the next action |
+| `/handoff [note]` | Writes `docs/handoffs/<date>.md` with four sections (Current state, Next action, Remaining work, Decisions & gotchas), lists anything left stranded (uncommitted or unpushed work, debug probes, background processes, worktrees), and deletes an older note it replaces |
+| `/pickup [note]` | Takes the newest note, checks it against `git status` before trusting it, carries the decisions forward, deletes the note, and starts on the next action |
 | `/hh [note]`, `/hp [note]` | Shortcuts for `/handoff` and `/pickup` |
 
-### Cloud sessions
+### Notes stay off the base branch
 
-A note you `/clear` past and `/pickup` straight away needs nothing more: the files are still
-there. A note that must outlive the container does, since a cloud session's container is
-reclaimed after a period of inactivity. So in a cloud session `/handoff` asks whether to commit
-and push it. That commit holds only the note and the index, goes on the current branch (never
-`main` or `master`), and is never forced. A later session finds it with `/pickup`, which also
-looks for open notes on remote branches when the current one has none.
+A note is disposable task state, so it should never merge into `main` with the work:
 
-Outside a cloud session nothing is committed unless you ask.
+- **Local by default.** `/handoff` adds `docs/handoffs/` to the repository's
+  `.git/info/exclude`, a local ignore list that is never committed. Notes don't show in
+  `git status` and no `git add -A` picks them up. There is no index: a note waits to be picked
+  up for as long as its file exists.
+- **Deleted on pickup.** Once `/pickup` has checked a note against the repository, it deletes it.
+- **Committed only to outlive a container.** A note you `/clear` past and `/pickup` straight away
+  needs nothing more: the file is still there. A cloud session's container is reclaimed after a
+  period of inactivity, so there `/handoff` asks whether to commit and push the note. That commit
+  holds only the note, goes on the current branch (never `main` or `master`), and is never
+  forced. A later session finds it with `/pickup`, which looks on remote branches when the
+  current one has none, and whose deletion is a commit of its own, pushed, so the branch stops
+  adding the note.
+- **Guarded at PR time.** `/craft-pr` stops if the branch still adds a note under
+  `docs/handoffs/`, so one that was never picked up can't slip into a PR.
+
+Outside a cloud session nothing is committed unless you ask. An older version kept an index at
+`docs/handoffs/README.md`; it is no longer read, and can be deleted.
 
 ## Files
 
 - `commands/handoff.md`, `commands/pickup.md`: the two commands; `commands/hh.md` and
   `commands/hp.md` are shortcuts that follow them.
-- `scripts/handoff.sh`: the bookkeeping both call: `state`, `new`, `add`, `set`, `open`,
-  `remote`, `commit` (see its header).
-- `templates/index.md`: the index a repository starts with.
-
-The index is plain Markdown, so any person or tool can read it. Keep its table as it is: the
-script edits it.
+- `scripts/handoff.sh`: the bookkeeping both call: `state`, `new`, `open`, `remote`, `commit`,
+  `drop` (see its header).
 
 ## Tests
 
@@ -57,7 +64,8 @@ Runs against real git repos with a bare origin, offline. CI runs it on Linux and
 
 Adapted from the `/handoff` and `/pickup` commands of
 [keystone](https://github.com/j-loyd/keystone) by Jordan Loyd (version 0.9.0), under the MIT
-License. Changes here: the index bookkeeping moved into a tested script; keystone's
+License. Changes here: the bookkeeping moved into a tested script, and the index was dropped in
+favor of deleting a note once it is picked up; keystone's
 `subagent-driven-development` run-state resume, `/pause` and `/learn` hand-offs were left out;
 and cloud sessions can commit and push a note so it outlives the container.
 

@@ -51,6 +51,8 @@ Check the reported exit code:
 
 If there are no commits ahead of `origin/<base>`, stop immediately and tell the user: "No changes found compared to origin/<base>. Make sure you're on a feature branch with commits."
 
+If the `--stat` output lists any file under `docs/handoffs/`, the branch still adds a handoff note (the handoff plugin's disposable resume notes, which must not merge into `<base>`). Stop and tell the user: "This branch still adds a handoff note: <paths>. Resume it with /pickup (which deletes it), or remove it with `git rm` and commit, then run /craft-pr again."
+
 ## Step 2: Analyze the Changes
 
 Read every line of the diff carefully.
