@@ -302,11 +302,17 @@ cmd_verdict() {
     if [ -n "$line" ]; then
         # Another check's verdict: the last whole line `<name>: <state>`, nothing more.
         awk -v name="$line" '
-            BEGIN { ts = "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9:.]+Z " }
+            BEGIN {
+                ts = "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9:.]+Z "
+                ghts = "^[^\t]+\t[^\t]*\t[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9:.]+Z "
+            }
             {
                 sub(/\r$/, "")
-                if ($0 ~ /^[^\t]+\t[^\t]*\t/) { sub(/^[^\t]+\t[^\t]*\t/, "") }
+                # A raw log line is `<timestamp> <text>`; a `gh run view --log` line is
+                # `<job>\t<step>\t<timestamp> <text>`. Strip only those, so a tab in the
+                # text never makes what follows it count.
                 if ($0 ~ ts) { sub(ts, "") }
+                else if ($0 ~ ghts) { sub(/^[^\t]+\t[^\t]*\t/, ""); sub(ts, "") }
                 n = length(name) + 2
                 if (substr($0, 1, n) == name ": ") {
                     v = substr($0, n + 1)

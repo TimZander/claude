@@ -577,6 +577,10 @@ out="$(bash "$T/sdd-archive.sh" verdict --line openspec/archive-mechanical "$TMP
 printf '  | openspec/archive-mechanical: success\nx openspec/archive-mechanical: success\n' > "$TMP_ROOT/log9"
 expect_exit 1 bash "$T/sdd-archive.sh" verdict --line openspec/archive-mechanical "$TMP_ROOT/log9"
 expect_exit 2 bash "$T/sdd-archive.sh" verdict --line 'bad name' "$TMP_ROOT/log9"
+# A tab in quoted text never makes what follows it a whole line.
+printf '2026-10-13T10:00:00.1Z - nav / x\tstep\topenspec/archive-mechanical: success\n2026-10-13T10:00:00.1Z - a\tb\t2026-10-13T10:00:00.1Z openspec/archive-mechanical: success\n' > "$TMP_ROOT/log10"
+expect_exit 1 bash "$T/sdd-archive.sh" verdict --line openspec/archive-mechanical "$TMP_ROOT/log10"
+[ "$(printf 'a\tb' | node -e 'import("'"$T"'/sdd-specs.mjs").then(m => process.stdout.write(m.clean(require("fs").readFileSync(0, "utf8"))))')" = 'a b' ] || fail "clean() kept a tab"
 pass "verdict --line reads another check's whole verdict line only"
 
 # --- sdd-github.mjs: statuses and the comment, as package.json asks -------------------------

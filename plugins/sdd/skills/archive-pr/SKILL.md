@@ -77,7 +77,9 @@ If the command fails, the settings are invalid: report its message and don't mer
    with `archive-mechanical: success` too. This doesn't depend on CI at all, so a forged or
    misread log can't merge the PR on its own.
 6. If every verdict is `success`, the base is the current tip and your re-run passed, merge the
-   PR without waiting for other jobs or review, unless `--no-merge` was given, `autoMerge` is
+   PR **pinned to the head commit you verified** (the merge API's `sha`, or
+   `gh pr merge --match-head-commit <sha>`), so a push after your checks makes the merge fail
+   instead of merging unchecked commits. Merge without waiting for other jobs or review, unless `--no-merge` was given, `autoMerge` is
    `false`, or the user asked to merge themselves.
 7. Otherwise don't merge: report the lines above each verdict that failed. The owner reviews the
    PR.

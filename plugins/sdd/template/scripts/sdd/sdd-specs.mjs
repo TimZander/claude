@@ -59,13 +59,13 @@ export class InternalError extends Error {}
 // --- output ----------------------------------------------------------------------------------
 
 /**
- * Makes text safe for one log line: no line breaks, and GitHub's `::` and `##[` workflow
+ * Makes text safe for one log line: no line breaks or tabs, and GitHub's `::` and `##[` workflow
  * command syntax broken.
  * @param {string} text
  * @returns {string}
  */
 export function clean(text) {
-  return String(text).replace(/[\r\n]+/g, ' ').replace(/##\[/g, '#\\u0023[').replace(/::/g, ':\\u003a')
+  return String(text).replace(/[\r\n\t]+/g, ' ').replace(/##\[/g, '#\\u0023[').replace(/::/g, ':\\u003a')
 }
 
 /** @param {string} text */

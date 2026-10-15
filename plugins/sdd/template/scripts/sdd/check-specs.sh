@@ -68,7 +68,7 @@ internal() {
 
 # Quotes command output: every line indented, workflow-command syntax broken.
 quote() {
-    sed -e 's/##\[/#\\u0023[/g' -e 's/::/:\\u003a/g' -e 's/^/  | /'
+    sed -e 's/##\[/#\\u0023[/g' -e 's/::/:\\u003a/g' -e "s/$(printf '\t')/ /g" -e 's/^/  | /'
 }
 
 root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || internal "$dir is not a git repository"
