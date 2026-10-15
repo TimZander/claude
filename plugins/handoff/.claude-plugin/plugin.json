@@ -1,0 +1,8 @@
+{
+  "name": "handoff",
+  "version": "0.1.0",
+  "description": "Deliberate continuity: /handoff writes a four-field resume note and indexes it, /pickup resumes the newest open one; in cloud sessions the note can be committed and pushed so it outlives the container",
+  "author": {
+    "name": "Tim Zander"
+  }
+}
