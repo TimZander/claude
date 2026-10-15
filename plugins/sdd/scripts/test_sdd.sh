@@ -631,8 +631,8 @@ grep -q 'git fetch' "$TMP_ROOT/fetch.sh" || fail "could not extract the fetch st
 # An origin that, like a private repository, refuses a fetch without the token.
 wo="$TMP_ROOT/wf-origin" && wc="$TMP_ROOT/wf-clone"
 git init -q -b main "$wo" && git -C "$wo" -c user.email=t@e -c user.name=t commit -q --allow-empty -m base
-git -C "$wo" checkout -q -b head && git -C "$wo" -c user.email=t@e -c user.name=t commit -q --allow-empty -m head
-git -C "$wo" checkout -q main && git -C "$wo" -c user.email=t@e -c user.name=t merge -q --no-ff --no-edit head
+git -C "$wo" checkout -q -b pr-head && git -C "$wo" -c user.email=t@e -c user.name=t commit -q --allow-empty -m head
+git -C "$wo" checkout -q main && git -C "$wo" -c user.email=t@e -c user.name=t merge -q --no-ff --no-edit pr-head
 git -C "$wo" update-ref refs/pull/5/merge HEAD
 git clone -q "$wo" "$wc"
 gfake="$TMP_ROOT/gitfake" && mkdir -p "$gfake"
@@ -650,7 +650,7 @@ exec "$real_git" "\$@"
 EOF
 printf '#!/bin/bash\nexit 0\n' > "$gfake/sleep"
 chmod +x "$gfake/git" "$gfake/sleep"
-head_sha="$(git -C "$wo" rev-parse head)"
+head_sha="$(git -C "$wo" rev-parse pr-head)"
 : > "$TMP_ROOT/gh-output"
 (cd "$wc" && PATH="$gfake:$PATH" PR=5 HEAD_SHA="$head_sha" SERVER_URL=https://github.com GITHUB_TOKEN=secret-token \
     GITHUB_OUTPUT="$TMP_ROOT/gh-output" bash -e "$TMP_ROOT/fetch.sh") >"$TMP_ROOT/out" 2>&1 || { cat "$TMP_ROOT/out"; fail "fetch step failed with the token"; }
