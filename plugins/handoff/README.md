@@ -20,6 +20,7 @@ It works the same in a terminal, the desktop app and a cloud session.
 |---|---|
 | `/handoff [note]` | Writes `docs/handoffs/<date>.md` with four sections (Current state, Next action, Remaining work, Decisions & gotchas), lists anything left stranded (uncommitted or unpushed work, debug probes, background processes, worktrees), and adds an `open` row to the index `docs/handoffs/README.md` |
 | `/pickup [note]` | Takes the newest `open` note, checks it against `git status` before trusting it, carries the decisions forward, marks the row `resumed`, and starts on the next action |
+| `/hh [note]`, `/hp [note]` | Shortcuts for `/handoff` and `/pickup` |
 
 ### Cloud sessions
 
@@ -34,7 +35,8 @@ Outside a cloud session nothing is committed unless you ask.
 
 ## Files
 
-- `commands/handoff.md`, `commands/pickup.md`: the two commands.
+- `commands/handoff.md`, `commands/pickup.md`: the two commands; `commands/hh.md` and
+  `commands/hp.md` are shortcuts that follow them.
 - `scripts/handoff.sh`: the bookkeeping both call: `state`, `new`, `add`, `set`, `open`,
   `remote`, `commit` (see its header).
 - `templates/index.md`: the index a repository starts with.
