@@ -25,10 +25,11 @@ updating the plugin.
 Use one cloud environment for all sdd work: **Add cloud environment…**, then paste
 [`cloud-setup.sh`](cloud-setup.sh) into its setup script. A cloud session doesn't install the
 plugins a repository enables in its `.claude/settings.json`, so the script does it. It adds the
-`tzander-skills` marketplace (or updates it), installs `sdd` and `gh`, and writes a short
+`tzander-skills` marketplace (or updates it), installs `sdd`, `handoff` and `gh`, and writes a short
 `~/.claude/CLAUDE.md` that points every session at the repository's sdd workflow. If a repository
 isn't set up yet, the session tells you and asks rather than running `/sdd:init` itself. It
-installs nothing else: no shared team standards and no other plugins.
+installs nothing else: no shared team standards and no other plugins. `handoff` adds `/handoff`
+and `/pickup`, for resuming work across a `/clear` or in a new session.
 
 Every step is non-fatal and it always exits 0, because a failing setup script fails the session;
 problems show as `WARNING` lines in `/root/setup-script.log`. The default "Trusted" network level
