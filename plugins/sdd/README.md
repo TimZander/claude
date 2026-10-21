@@ -27,7 +27,12 @@ Use one cloud environment for all sdd work: **Add cloud environment…**, then p
 plugins a repository enables in its `.claude/settings.json`, so the script does it. It adds the
 `tzander-skills` marketplace (or updates it), installs `sdd`, `handoff` and `gh`, and writes a short
 `~/.claude/CLAUDE.md` that points every session at the repository's sdd workflow. If a repository
-isn't set up yet, the session tells you and asks rather than running `/sdd:init` itself. It
+isn't set up yet, the session asks once, before its first change, rather than running
+`/sdd:init` itself: set it up, not now, or never. "Never" opts the repository out by adding one
+line to its `CLAUDE.md`, *This repository doesn't use spec-driven development (sdd).*, which every
+later session reads, so the environment works for repositories that won't use sdd too. An
+existing environment picks up a new version of this text only when you paste the updated script
+into its settings. It
 installs nothing else: no shared team standards and no other plugins. `handoff` adds `/handoff`
 and `/pickup`, for resuming work across a `/clear` or in a new session.
 

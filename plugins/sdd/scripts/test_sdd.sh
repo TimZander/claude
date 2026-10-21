@@ -738,9 +738,11 @@ md="$TMP_ROOT/cshome/.claude/CLAUDE.md"
 [ -f "$md" ] || fail "cloud-setup wrote no ~/.claude/CLAUDE.md"
 grep -q 'sdd-workflow.md' "$md" || fail "CLAUDE.md does not point at the sdd workflow"
 grep -q 'Never run `/sdd:init` unasked' "$md" || fail "CLAUDE.md does not say to ask before /sdd:init"
+grep -q "doesn't use spec-driven development" "$md" || fail "CLAUDE.md does not describe the opt-out"
+grep -q 'Neither: ask once, at the first change' "$md" || fail "CLAUDE.md does not limit the ask to once"
 grep -q 'recording decisions as ADRs' "$md" || fail "CLAUDE.md does not point at the ADR rules"
 grep -q '`/handoff`' "$md" || fail "CLAUDE.md does not mention /handoff"
-pass "cloud-setup writes a CLAUDE.md that points at the workflow and asks before /sdd:init"
+pass "cloud-setup writes a CLAUDE.md that points at the workflow, honors an opt-out, and asks once before /sdd:init"
 
 FAKE_MARKETPLACE_EXISTS=1 cs_run
 grep -qx 'plugin marketplace update tzander-skills' "$FAKE_LOG" || { cat "$FAKE_LOG"; fail "cloud-setup did not update an existing marketplace"; }
