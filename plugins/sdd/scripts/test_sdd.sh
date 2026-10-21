@@ -188,6 +188,16 @@ pass "init sets up a fresh repo"
 out="$(bash "$INIT" --repo "$r" --no-install)"
 if printf '%s\n' "$out" | grep -Eq '^  (added|updated|set) '; then echo "$out"; fail "second run changed files"; fi
 [ "$(grep -c 'sdd-workflow.md' "$r/CLAUDE.md")" = 1 ] || fail "import line duplicated"
+
+# --- sdd-init: removes an earlier opt-out ------------------------------------------
+ro="$(fresh_repo)"
+printf "# Mine\n\nKeep this.\n\nThis repository doesn't use spec-driven development (sdd).\n\nAnd this.\n" > "$ro/CLAUDE.md"
+out="$(bash "$INIT" --repo "$ro" --no-install)" || { echo "$out"; fail "init on an opted-out repo"; }
+printf '%s\n' "$out" | grep -q "removed the sdd opt-out from CLAUDE.md" || { echo "$out"; fail "init did not report removing the opt-out"; }
+grep -qF "doesn't use spec-driven development" "$ro/CLAUDE.md" && fail "init left the opt-out line"
+[ "$(sed -n 1,5p "$ro/CLAUDE.md")" = "$(printf '# Mine\n\nKeep this.\n\nAnd this.')" ] || { cat "$ro/CLAUDE.md"; fail "init mangled CLAUDE.md around the opt-out"; }
+grep -qxF '@.claude/sdd-workflow.md' "$ro/CLAUDE.md" || fail "init on an opted-out repo did not add the import"
+pass "init removes an earlier opt-out and keeps the rest of CLAUDE.md"
 [ "$(grep -o 'session-start.sh' "$r/.claude/settings.json" | wc -l | tr -d ' ')" = 1 ] || fail "session hook duplicated"
 pass "init is idempotent"
 

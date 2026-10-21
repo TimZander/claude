@@ -23,7 +23,10 @@
 # .claude/settings.json (telemetry off, the plugin enabled, the SessionStart hook),
 # .gitignore, and
 # the `@.claude/sdd-workflow.md` import line in CLAUDE.md. A value the repo
-# already set differently is kept and reported as a warning.
+# already set differently is kept and reported as a warning. The one removal: a
+# CLAUDE.md line saying the repository doesn't use spec-driven development (the
+# opt-out /sdd:opt-out writes) is deleted, since running this is the owner's
+# decision to use it.
 #
 # Last line: `sdd-init: done` (with `, N warnings`), or `sdd-init: failed`.
 # Exit status: 0 done, 1 failed, 2 usage error.
@@ -142,6 +145,19 @@ for line in 'node_modules' '.claude/skills/openspec-*/' '.claude/commands/opsx/'
         note "added $line to .gitignore"
     fi
 done
+
+# An earlier opt-out would contradict the workflow import: drop the line, and the blank line it
+# leaves when it stood between two others.
+if [ -f CLAUDE.md ] && grep -qF "doesn't use spec-driven development" CLAUDE.md; then
+    grep -F "doesn't use spec-driven development" CLAUDE.md | while IFS= read -r l; do
+        note "removed the sdd opt-out from CLAUDE.md: $l"
+    done
+    awk -v phrase="doesn't use spec-driven development" '
+        index($0, phrase) { dropped = 1; next }
+        dropped && $0 == "" && (n == 0 || last == "") { dropped = 0; next }
+        { dropped = 0; print; last = $0; n++ }
+    ' CLAUDE.md > CLAUDE.md.sdd-tmp && mv CLAUDE.md.sdd-tmp CLAUDE.md
+fi
 
 import='@.claude/sdd-workflow.md'
 if [ ! -f CLAUDE.md ]; then

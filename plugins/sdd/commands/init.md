@@ -30,6 +30,8 @@ The installer script does the work; you run it, then report.
      current text of every requirement they modify (pinning blesses that text);
    - invalid `sdd` settings in `package.json`: quote the message; the scripts fail until fixed;
    - no `package-lock.json`: CI's `npm ci` needs one, so run `npm install` and commit the lock.
+   - `removed the sdd opt-out from CLAUDE.md`: not a warning, but name it, since the repository
+     had opted out of sdd before.
 5. List the next steps that apply:
    - commit the changes on a branch and open a PR (this is a code-free change);
    - `openspec/specs/` is empty: describe the first capability with `/opsx:propose`;
