@@ -1,7 +1,7 @@
 {
   "name": "handoff",
   "version": "0.3.0",
-  "description": "Deliberate continuity: /handoff (/hh) writes a four-field resume note kept out of git, /pickup (/hp) resumes the newest and deletes it; in cloud sessions the note can be committed and pushed so it outlives the container, and is deleted again on pickup",
+  "description": "Deliberate continuity: /handoff (/hh) writes a four-field resume note kept out of git, /pickup (/hp) resumes the newest and deletes it; in cloud sessions the note can be committed and pushed so it outlives the container, and is deleted again on pickup; /handoff:relay (/hr) continues the work in a new cloud session instead of a /clear",
   "author": {
     "name": "Tim Zander"
   }
