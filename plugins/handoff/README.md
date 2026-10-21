@@ -6,7 +6,8 @@ progress; `/pickup` reads it back and continues from where it stopped. The flow 
 the note, instead of relying on the harness's automatic compaction, which keeps the facts and
 loses the intent.
 
-It works the same in a terminal, the desktop app and a cloud session.
+It works the same in a terminal, the desktop app and a cloud session. In a cloud session, use
+`/handoff:relay` instead of `/clear` (see below).
 
 ## Install
 
@@ -20,7 +21,39 @@ It works the same in a terminal, the desktop app and a cloud session.
 |---|---|
 | `/handoff [note]` | Writes `docs/handoffs/<date>.md` with four sections (Current state, Next action, Remaining work, Decisions & gotchas), lists anything left stranded (uncommitted or unpushed work, debug probes, background processes, worktrees), and deletes an older note it replaces |
 | `/pickup [note]` | Takes the newest note, checks it against `git status` before trusting it, carries the decisions forward, deletes the note, and starts on the next action |
-| `/hh [note]`, `/hp [note]` | Shortcuts for `/handoff` and `/pickup` |
+| `/handoff:relay [note]` | Cloud sessions only: writes and pushes a note, starts a new cloud session on the same branch that runs `/pickup` on it, and archives this one once you confirm |
+| `/hh [note]`, `/hp [note]`, `/hr [note]` | Shortcuts for `/handoff`, `/pickup` and `/handoff:relay` |
+
+### Cloud sessions: relay instead of `/clear`
+
+In a cloud session, `/clear` starts a new transcript but keeps the old one, and a worker restart
+after an idle spell can bring back the conversation from before the first `/clear`
+([#247](https://github.com/TimZander/claude/issues/247)). That context doesn't remember its own
+later work: it finds commits it doesn't recognize and decides another session made them.
+
+`/handoff:relay` avoids the second transcript. It:
+
+1. refuses while background shells, subagents or workflows are still running, since archiving
+   the session kills them;
+2. writes the note, with a fifth section, **Recreate the environment**: the commands a fresh
+   clone needs (worktrees, dependencies, deeper history). `/pickup` shows them and asks before
+   running them, once it has checked the branch, and only then checks the rest of the note
+   against the repository and deletes it;
+3. commits and pushes it, then runs `handoff.sh relay`, which fetches the branch and refuses
+   unless everything is on `origin/<branch>` (tracked under the same name, no uncommitted
+   changes, nothing unpushed or unpulled, not on `main`), and lists what the clone won't have:
+   untracked and ignored files, stashes, local branches with commits on no remote, and other
+   worktrees with their uncommitted and unpushed counts;
+4. starts a new cloud session on the same branch (`source_revision` and `outcome_branch`), with
+   `/handoff:pickup <note>` as its only prompt;
+5. gives you its link, and archives this session once you confirm the new one has picked up.
+
+`/handoff` still works in a cloud session, for a pause or when relay isn't available, but it
+never suggests `/clear` there: it warns against it and points to relay, a later `/pickup` in a
+new session, or carrying on in this one.
+
+The new session may ask for tool approvals again: it inherits this session's permission mode,
+never a wider one.
 
 ### Notes stay off the base branch
 
@@ -48,10 +81,10 @@ Outside a cloud session nothing is committed unless you ask. An older version ke
 
 ## Files
 
-- `commands/handoff.md`, `commands/pickup.md`: the two commands; `commands/hh.md` and
-  `commands/hp.md` are shortcuts that follow them.
-- `scripts/handoff.sh`: the bookkeeping both call: `state`, `new`, `open`, `remote`, `commit`,
-  `drop` (see its header).
+- `commands/handoff.md`, `commands/pickup.md`, `commands/relay.md`: the commands;
+  `commands/hh.md`, `commands/hp.md` and `commands/hr.md` are shortcuts that follow them.
+- `scripts/handoff.sh`: the bookkeeping they call: `state`, `new`, `open`, `remote`, `commit`,
+  `relay`, `drop` (see its header).
 
 ## Tests
 
@@ -69,7 +102,8 @@ Adapted from the `/handoff` and `/pickup` commands of
 License. Changes here: the bookkeeping moved into a tested script, and the index was dropped in
 favor of deleting a note once it is picked up; keystone's
 `subagent-driven-development` run-state resume, `/pause` and `/learn` hand-offs were left out;
-and cloud sessions can commit and push a note so it outlives the container.
+cloud sessions can commit and push a note so it outlives the container; and `/handoff:relay`
+continues the work in a new cloud session instead of a `/clear`.
 
 keystone's license notice:
 
