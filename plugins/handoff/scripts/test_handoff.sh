@@ -13,7 +13,8 @@ H="$SCRIPT_DIR/handoff.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok: $*"; }
 
-TMP_ROOT="$(mktemp -d)"
+# Resolved, so paths match what git reports (macOS's temp dir is behind a symlink).
+TMP_ROOT="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 expect_exit() {
