@@ -145,34 +145,37 @@ for line in 'node_modules' '.claude/skills/openspec-*/' '.claude/commands/opsx/'
     fi
 done
 
-# An earlier opt-out would contradict the workflow import. One pass drops the exact line, the
-# blank line it leaves behind, and blank lines it leaves at the end, then writes the result
-# back into the same file, so a symlinked CLAUDE.md stays a symlink. A CLAUDE.md that was only
+# An earlier opt-out would contradict the workflow import. One pass drops the exact line (not
+# inside a fenced code block), the blank line it leaves behind, and blank lines it leaves at
+# the end, CRLF or not, then writes the result back into the same file, so a symlinked
+# CLAUDE.md stays a symlink. A CLAUDE.md that was only
 # the opt-out (as /sdd:opt-out creates it) is removed, so the template below replaces it.
 if [ -f CLAUDE.md ]; then
-    optout_tmp="$(mktemp)"
-    removed="$(awk -v line="$(cat "$SCRIPT_DIR/optout-line.txt")" -v out="$optout_tmp" '
-        { l[NR] = $0; t = $0; sub(/\r$/, "", t); sub(/[ \t]+$/, "", t); m[NR] = (t == line) }
+    optout_tmp="$TMPDIR_INIT/claude-md"
+    removed="$(awk -v line="$(tr -d '\r' < "$SCRIPT_DIR/optout-line.txt")" -v out="$optout_tmp" '
+        { l[NR] = $0; t = $0; sub(/\r$/, "", t); sub(/[ \t]+$/, "", t); b[NR] = (t == "")
+          if (t ~ /^[ \t]*(```|~~~)/) fence = !fence
+          m[NR] = (!fence && t == line) }
         END {
             k = 0; removed = 0; skip = 0
             for (i = 1; i <= NR; i++) {
-                if (m[i]) { removed++; skip = (k == 0 || o[k] == ""); continue }
-                if (skip && l[i] == "") { skip = 0; continue }
-                skip = 0; o[++k] = l[i]
+                if (m[i]) { removed++; skip = (k == 0 || ob[k]); continue }
+                if (skip && b[i]) { skip = 0; continue }
+                skip = 0; o[++k] = l[i]; ob[k] = b[i]
             }
-            if (removed) while (k > 0 && o[k] == "") k--
+            if (removed) while (k > 0 && ob[k]) k--
+            printf "" > out
             for (i = 1; i <= k; i++) print o[i] > out
             print removed
         }' CLAUDE.md)"
     if [ "$removed" != 0 ]; then
-        if [ ! -L CLAUDE.md ] && ! grep -qv -e '^# CLAUDE.md$' -e '^$' "$optout_tmp"; then
+        if [ ! -L CLAUDE.md ] && ! awk '{ sub(/\r$/, "") } $0 != "" && $0 != "# CLAUDE.md" { f = 1 } END { exit !f }' "$optout_tmp"; then
             rm -f CLAUDE.md
         else
             cat "$optout_tmp" > CLAUDE.md
         fi
         note "removed the sdd opt-out from CLAUDE.md"
     fi
-    rm -f "$optout_tmp"
 fi
 
 import='@.claude/sdd-workflow.md'

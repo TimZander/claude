@@ -23,9 +23,10 @@ updating the plugin.
 `/sdd:opt-out` does the opposite for a repository that won't use sdd: it adds *This repository
 doesn't use spec-driven development (sdd).* to its `CLAUDE.md` (creating the file if needed) and
 commits it, so an sdd environment works there normally and never asks to set it up. It refuses
-a repository that is already set up for sdd, and a `CLAUDE.md` with uncommitted changes. The line
-is matched exactly, as written in [`scripts/optout-line.txt`](scripts/optout-line.txt), and
-running `/sdd:init` later removes it again.
+a repository that is already set up for sdd, and a `CLAUDE.md` with uncommitted changes; a
+symlinked `CLAUDE.md` is followed to its target. The line is matched exactly, as written in
+[`scripts/optout-line.txt`](scripts/optout-line.txt) (a quote inside a code fence doesn't count),
+and running `/sdd:init` later removes it again.
 
 ### In cloud sessions
 

@@ -209,6 +209,7 @@ printf '# Agents\n\nRules.\n' > "$rs/AGENTS.md" && ln -s AGENTS.md "$rs/CLAUDE.m
 git -C "$rs" add -A && git -C "$rs" commit -q -m agents
 bash "$SCRIPT_DIR/sdd-optout.sh" --repo "$rs" >/dev/null
 grep -qxF "$optline" "$rs/AGENTS.md" || fail "opt-out did not write through the symlink"
+git -C "$rs" commit -q -am optout
 bash "$INIT" --repo "$rs" --no-install >/dev/null
 [ -L "$rs/CLAUDE.md" ] || fail "init replaced a symlinked CLAUDE.md with a file"
 grep -qxF "$optline" "$rs/AGENTS.md" && fail "init left the opt-out in the symlink's target"
@@ -217,7 +218,18 @@ rt="$(fresh_repo)"
 bash "$SCRIPT_DIR/sdd-optout.sh" --repo "$rt" >/dev/null
 bash "$INIT" --repo "$rt" --no-install >/dev/null
 grep -q '^## Project' "$rt/CLAUDE.md" || { cat "$rt/CLAUDE.md"; fail "init did not give an opt-out-only CLAUDE.md the template"; }
-pass "init removes exactly the opt-out line, keeps symlinks, and templates an opt-out-only CLAUDE.md"
+# CRLF: blank lines are "\r", and the cleanup still drops the one the line leaves at the end.
+rc="$(fresh_repo)"
+printf '# Mine\r\n\r\nKeep.\r\n\r\n%s\r\n' "$optline" > "$rc/CLAUDE.md"
+bash "$INIT" --repo "$rc" --no-install >/dev/null
+[ "$(sed -n 4p "$rc/CLAUDE.md")" = "" ] && [ "$(sed -n 5p "$rc/CLAUDE.md")" = "## Spec-driven workflow" ] \
+    || { cat -A "$rc/CLAUDE.md"; fail "init left a stray CRLF blank line"; }
+# A quoted copy inside a fenced block is the repository's own text, not an opt-out.
+rf="$(fresh_repo)"
+printf '# Mine\n\n```\n%s\n```\n' "$optline" > "$rf/CLAUDE.md"
+bash "$INIT" --repo "$rf" --no-install >/dev/null
+grep -qxF "$optline" "$rf/CLAUDE.md" || fail "init removed a quoted opt-out inside a code fence"
+pass "init removes exactly the opt-out line, CRLF or not, keeps symlinks and fenced quotes, and templates an opt-out-only CLAUDE.md"
 
 # --- sdd-init: keeps the repo's own values, restores owned files -------------------
 r2="$(fresh_repo)"
@@ -762,7 +774,29 @@ mkdir -p "$o3/.claude" && echo x > "$o3/.claude/sdd-workflow.md"
 expect_exit 1 bash "$OPT" --repo "$o3"
 grep -q 'set up for sdd' "$TMP_ROOT/out" || fail "opt-out of an sdd repository not refused"
 [ ! -e "$o3/CLAUDE.md" ] || fail "a refused opt-out wrote CLAUDE.md"
-pass "sdd-optout adds the exact line once, commits nothing, and refuses an sdd repository or an uncommitted CLAUDE.md"
+# A symlinked CLAUDE.md: the target is the file to check, edit and commit.
+o5="$(fresh_repo)"
+printf '# Agents\n' > "$o5/AGENTS.md" && ln -s AGENTS.md "$o5/CLAUDE.md"
+git -C "$o5" add -A && git -C "$o5" commit -q -m agents
+echo "wip" >> "$o5/AGENTS.md"
+expect_exit 1 bash "$OPT" --repo "$o5"
+grep -q 'AGENTS.md has uncommitted changes' "$TMP_ROOT/out" || fail "opt-out missed uncommitted changes in the symlink's target"
+git -C "$o5" checkout -q -- AGENTS.md
+out="$(bash "$OPT" --repo "$o5")"
+printf '%s\n' "$out" | grep -qx 'file: AGENTS.md' || { echo "$out"; fail "opt-out did not name the symlink's target as the file to commit"; }
+# Set up for sdd by its import alone, and a fenced quote that isn't an opt-out.
+o6="$(fresh_repo)"
+printf '# Mine\n\n@.claude/sdd-workflow.md\n' > "$o6/CLAUDE.md" && git -C "$o6" add -A && git -C "$o6" commit -q -m sdd
+expect_exit 1 bash "$OPT" --repo "$o6"
+grep -q 'imports .claude/sdd-workflow.md' "$TMP_ROOT/out" || fail "opt-out of a CLAUDE.md that imports the workflow not refused"
+o7="$(fresh_repo)"
+printf '# Mine\n\n```\n%s\n```\n' "$optline" > "$o7/CLAUDE.md" && git -C "$o7" add -A && git -C "$o7" commit -q -m quote
+bash "$OPT" --repo "$o7" | tail -n 1 | grep -qx 'sdd-optout: done' || fail "opt-out took a fenced quote for the line"
+# An optout-line.txt checked out with CRLF still matches.
+crlf="$TMP_ROOT/crlf.$RANDOM" && mkdir -p "$crlf"
+cp "$OPT" "$crlf/" && printf '%s\r\n' "$optline" > "$crlf/optout-line.txt"
+bash "$crlf/sdd-optout.sh" --repo "$o2" | tail -n 1 | grep -qx 'sdd-optout: already opted out' || fail "a CRLF optout-line.txt did not match"
+pass "sdd-optout adds the exact line once, follows a symlink, commits nothing, and refuses an sdd repository or uncommitted changes"
 
 # --- cloud-setup.sh: sdd only, always exits 0, updates an existing marketplace ---------
 CS="$SCRIPT_DIR/../cloud-setup.sh"

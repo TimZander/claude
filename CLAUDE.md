@@ -8,8 +8,6 @@ This is the **tzander-skills** Claude Code plugin marketplace (MIT License, Tim 
 
 This repository doesn't use spec-driven development (sdd).
 
-Why: its plugins are mostly prompt markdown, which already states the behavior a spec would, and its non-trivial logic is pinned down by scripts and smoke tests instead (see below).
-
 ## Shared Team Standards
 
 The shared `~/.claude/CLAUDE.md` (team coding standards) is sourced from `standards/CLAUDE.md` in this repo. When asked to add or edit shared/team rules, modify `standards/CLAUDE.md` — not the developer's `~/.claude/CLAUDE.md` directly.
