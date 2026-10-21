@@ -48,28 +48,46 @@ cd "$root"
 
 [ ! -e .claude/sdd-workflow.md ] || die "this repository is set up for sdd (.claude/sdd-workflow.md), and opting out doesn't remove it"
 
-# The file to edit: CLAUDE.md, or the file it links to (AGENTS.md, say), as a path in the repo.
+# The file to edit: CLAUDE.md, or the file it links to (AGENTS.md, say). A link is resolved to
+# a physical path first, then has to land on a committed regular file inside the repository,
+# so no spelling of the target (`.//etc/x`, `sub/../../x`, a symlinked parent) gets outside it.
 file="CLAUDE.md"
 if [ -L CLAUDE.md ]; then
-    file="$(readlink CLAUDE.md)"
-    case "$file" in "$root"/*) file="${file#"$root"/}" ;; /*|*..*) die "CLAUDE.md links outside the repository: $file" ;; esac
-    file="${file#./}"
+    target="$(readlink CLAUDE.md)"
+    here="$(pwd -P)"
+    dir="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)" || die "CLAUDE.md links to $target, which doesn't exist"
+    base="$(basename "$target")"
+    case "$base" in .|..) die "CLAUDE.md links to $target, which is not a file" ;; esac
+    case "$dir/" in "$here"/*) file="${dir#"$here"}/$base"; file="${file#/}" ;; *) die "CLAUDE.md links outside the repository: $target" ;; esac
     [ -f "$file" ] && [ ! -L "$file" ] || die "CLAUDE.md links to $file, which is not a regular file"
+    git ls-files --error-unmatch -- "$file" >/dev/null 2>&1 || die "CLAUDE.md links to $file, which is not committed"
 fi
 
-# Lines outside fenced code blocks, without a trailing CR or trailing whitespace.
-plain_lines() {
-    awk '/^[ \t]*(```|~~~)/ { fence = !fence; next } !fence { sub(/\r$/, ""); sub(/[ \t]+$/, ""); print }' "$file"
+# Whether $file has the line $1 outside fenced code blocks, ignoring a trailing CR and trailing
+# whitespace. A fence closes only on the same character, at least as long, with nothing after
+# it, as in Markdown. All in awk, which reads the whole file: a `grep -q` that stops early
+# would make the pipeline fail under pipefail on a large file.
+has_plain() {
+    awk -v want="$1" '
+        { t = $0; sub(/\r$/, "", t); sub(/[ \t]+$/, "", t) }
+        t ~ /^[ \t]*(```|~~~)/ {
+            s = t; sub(/^[ \t]*/, "", s); c = substr(s, 1, 1); n = 0
+            while (substr(s, n + 1, 1) == c) n++
+            if (!fence) { fence = 1; fc = c; fl = n; next }
+            if (c == fc && n >= fl && substr(s, n + 1) ~ /^[ \t]*$/) { fence = 0; next }
+        }
+        !fence && t == want { found = 1 }
+        END { exit !found }' "$file"
 }
 
-if [ -f "$file" ] && plain_lines | grep -qxF -- "$LINE"; then
+if [ -f "$file" ] && has_plain "$LINE"; then
     echo "$file already has the opt-out line"
     echo "root: $root"
     echo "file: $file"
     echo "sdd-optout: already opted out"
     exit 0
 fi
-if [ -f "$file" ] && plain_lines | grep -qxF -- '@.claude/sdd-workflow.md'; then
+if [ -f "$file" ] && has_plain '@.claude/sdd-workflow.md'; then
     die "$file imports .claude/sdd-workflow.md, so the repository is set up for sdd"
 fi
 
@@ -81,9 +99,12 @@ if [ -s "$file" ]; then
     [ -z "$(tail -c 1 "$file")" ] || echo >> "$file"
     printf '\n%s\n' "$LINE" >> "$file"
     echo "added the opt-out line to $file"
-else
+elif [ "$file" = CLAUDE.md ]; then
     printf '# CLAUDE.md\n\n%s\n' "$LINE" > "$file"
     echo "created $file with the opt-out line"
+else
+    printf '%s\n' "$LINE" > "$file"
+    echo "added the opt-out line to the empty $file"
 fi
 echo "root: $root"
 echo "file: $file"

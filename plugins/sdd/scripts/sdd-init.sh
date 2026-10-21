@@ -153,9 +153,15 @@ done
 if [ -f CLAUDE.md ]; then
     optout_tmp="$TMPDIR_INIT/claude-md"
     removed="$(awk -v line="$(tr -d '\r' < "$SCRIPT_DIR/optout-line.txt")" -v out="$optout_tmp" '
-        { l[NR] = $0; t = $0; sub(/\r$/, "", t); sub(/[ \t]+$/, "", t); b[NR] = (t == "")
-          if (t ~ /^[ \t]*(```|~~~)/) fence = !fence
-          m[NR] = (!fence && t == line) }
+        { l[NR] = $0; t = $0; sub(/\r$/, "", t); sub(/[ \t]+$/, "", t); b[NR] = (t == ""); m[NR] = 0 }
+        # A fence closes only on the same character, at least as long, with nothing after it.
+        t ~ /^[ \t]*(```|~~~)/ {
+            s = t; sub(/^[ \t]*/, "", s); c = substr(s, 1, 1); n = 0
+            while (substr(s, n + 1, 1) == c) n++
+            if (!fence) { fence = 1; fc = c; fl = n; next }
+            if (c == fc && n >= fl && substr(s, n + 1) ~ /^[ \t]*$/) { fence = 0; next }
+        }
+        !fence { m[NR] = (t == line) }
         END {
             k = 0; removed = 0; skip = 0
             for (i = 1; i <= NR; i++) {

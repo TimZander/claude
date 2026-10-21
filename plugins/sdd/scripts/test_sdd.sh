@@ -796,7 +796,37 @@ bash "$OPT" --repo "$o7" | tail -n 1 | grep -qx 'sdd-optout: done' || fail "opt-
 crlf="$TMP_ROOT/crlf.$RANDOM" && mkdir -p "$crlf"
 cp "$OPT" "$crlf/" && printf '%s\r\n' "$optline" > "$crlf/optout-line.txt"
 bash "$crlf/sdd-optout.sh" --repo "$o2" | tail -n 1 | grep -qx 'sdd-optout: already opted out' || fail "a CRLF optout-line.txt did not match"
-pass "sdd-optout adds the exact line once, follows a symlink, commits nothing, and refuses an sdd repository or uncommitted changes"
+# A link can't reach outside the repository however it is spelled; only test files are targets.
+outside="$TMP_ROOT/outside.$RANDOM.md" && echo keep > "$outside"
+for spelling in ".//$outside" "sub/../../$(basename "$outside")" "$outside"; do
+    o8="$(fresh_repo)" && mkdir -p "$o8/sub" && ln -s "$spelling" "$o8/CLAUDE.md"
+    git -C "$o8" add -A && git -C "$o8" commit -q -m link
+    expect_exit 1 bash "$OPT" --repo "$o8"
+    [ "$(cat "$outside")" = keep ] || fail "opt-out wrote outside the repository through $spelling"
+done
+# An absolute link through a symlinked path to the repository still counts as inside it.
+o9="$(fresh_repo)" && printf '# Agents\n' > "$o9/AGENTS.md"
+ln -s "$o9" "$TMP_ROOT/via.$RANDOM" && via="$(ls -d "$TMP_ROOT"/via.* | tail -n 1)"
+ln -s "$via/AGENTS.md" "$o9/CLAUDE.md" && git -C "$o9" add -A && git -C "$o9" commit -q -m via
+bash "$OPT" --repo "$o9" | grep -qx 'file: AGENTS.md' || fail "opt-out refused an absolute link through a symlinked path"
+# An empty linked file gets just the line, not a CLAUDE.md heading.
+o10="$(fresh_repo)" && : > "$o10/AGENTS.md" && ln -s AGENTS.md "$o10/CLAUDE.md"
+git -C "$o10" add -A && git -C "$o10" commit -q -m empty
+bash "$OPT" --repo "$o10" >/dev/null
+[ "$(cat "$o10/AGENTS.md")" = "$optline" ] || { cat "$o10/AGENTS.md"; fail "opt-out headed an empty linked file"; }
+# A large file is still read to the end: no early-exit pipe to miss the line.
+o11="$(fresh_repo)"
+{ printf '# Big\n\n%s\n\n' "$optline"; awk 'BEGIN { for (i = 0; i < 40000; i++) print "filler line " i }'; } > "$o11/CLAUDE.md"
+git -C "$o11" add -A && git -C "$o11" commit -q -m big
+bash "$OPT" --repo "$o11" | tail -n 1 | grep -qx 'sdd-optout: already opted out' || fail "opt-out missed the line in a large file"
+# A ~~~ inside a ``` block doesn't close it: the line after the block is plain text.
+o12="$(fresh_repo)"
+printf '# Mine\n\n```md\n~~~\n```\n' > "$o12/CLAUDE.md" && git -C "$o12" add -A && git -C "$o12" commit -q -m fences
+bash "$OPT" --repo "$o12" >/dev/null && git -C "$o12" commit -q -am optout
+bash "$OPT" --repo "$o12" | tail -n 1 | grep -qx 'sdd-optout: already opted out' || fail "opt-out lost track of a fence and added the line twice"
+bash "$INIT" --repo "$o12" --no-install >/dev/null
+grep -qxF "$optline" "$o12/CLAUDE.md" && fail "init lost track of a fence and kept the opt-out"
+pass "sdd-optout adds the exact line once, follows a link only inside the repository, reads Markdown fences and large files right, and refuses an sdd repository or uncommitted changes"
 
 # --- cloud-setup.sh: sdd only, always exits 0, updates an existing marketplace ---------
 CS="$SCRIPT_DIR/../cloud-setup.sh"
