@@ -826,6 +826,42 @@ bash "$OPT" --repo "$o12" >/dev/null && git -C "$o12" commit -q -am optout
 bash "$OPT" --repo "$o12" | tail -n 1 | grep -qx 'sdd-optout: already opted out' || fail "opt-out lost track of a fence and added the line twice"
 bash "$INIT" --repo "$o12" --no-install >/dev/null
 grep -qxF "$optline" "$o12/CLAUDE.md" && fail "init lost track of a fence and kept the opt-out"
+# `link/..` resolves the way the kernel does: through the link first.
+elsewhere="$TMP_ROOT/elsewhere.$RANDOM" && mkdir -p "$elsewhere/dir" && echo keep > "$elsewhere/AGENTS.md"
+o13="$(fresh_repo)" && printf '# Agents\n' > "$o13/AGENTS.md"
+ln -s "$elsewhere/dir" "$o13/lnk" && ln -s lnk/../AGENTS.md "$o13/CLAUDE.md"
+git -C "$o13" add -A && git -C "$o13" commit -q -m dotdot
+expect_exit 1 bash "$OPT" --repo "$o13"
+grep -qxF "$optline" "$o13/AGENTS.md" && fail "opt-out edited the repo's AGENTS.md for a link that leaves it"
+[ "$(cat "$elsewhere/AGENTS.md")" = keep ] || fail "opt-out wrote outside the repository through link/.."
+# CDPATH can't redirect the lookup.
+o14="$(fresh_repo)" && mkdir -p "$o14/docs" "$elsewhere/cd/docs" && printf '# Agents\n' > "$o14/docs/AGENTS.md"
+ln -s docs/AGENTS.md "$o14/CLAUDE.md" && git -C "$o14" add -A && git -C "$o14" commit -q -m docs
+CDPATH="$elsewhere/cd" bash "$OPT" --repo "$o14" | grep -qx 'file: docs/AGENTS.md' || fail "CDPATH redirected the link lookup"
+# A trailing slash, a name starting with -, and a glob that matches a committed file.
+o15="$(fresh_repo)" && printf '# Agents\n' > "$o15/AGENTS.md" && git -C "$o15" add -A && git -C "$o15" commit -q -m agents
+for spelling in "AGENTS.md/" "-/AGENTS.md" "A*.md"; do
+    rm -f "$o15/CLAUDE.md" && ln -s -- "$spelling" "$o15/CLAUDE.md"
+    mkdir -p "$o15/-" && echo x > "$o15/-/AGENTS.md" && echo x > "$o15/A*.md"
+    printf '/-/\n/A*.md\n/CLAUDE.md\n' > "$o15/.git/info/exclude"
+    expect_exit 1 bash "$OPT" --repo "$o15"
+    tail -n 1 "$TMP_ROOT/out" | grep -qx 'sdd-optout: failed' || { cat "$TMP_ROOT/out"; fail "opt-out through $spelling didn't end with its failed line"; }
+done
+grep -qxF "$optline" "$o15/AGENTS.md" "$o15/-/AGENTS.md" "$o15/A*.md" && fail "opt-out edited a file through a link it should refuse"
+# Fences: 4 spaces of indent is code, not a fence; a backtick info string with a backtick isn't
+# a fence; a fence left open at the end is refused.
+o16="$(fresh_repo)"
+printf '# Mine\n\n    ```\n' > "$o16/CLAUDE.md" && git -C "$o16" add -A && git -C "$o16" commit -q -m indented
+bash "$OPT" --repo "$o16" >/dev/null && git -C "$o16" commit -q -am optout
+bash "$OPT" --repo "$o16" | tail -n 1 | grep -qx 'sdd-optout: already opted out' || fail "opt-out took an indented code line for a fence"
+o17="$(fresh_repo)"
+printf '# Mine\n\n```a`b\n' > "$o17/CLAUDE.md" && git -C "$o17" add -A && git -C "$o17" commit -q -m infostring
+bash "$OPT" --repo "$o17" >/dev/null && git -C "$o17" commit -q -am optout
+bash "$OPT" --repo "$o17" | tail -n 1 | grep -qx 'sdd-optout: already opted out' || fail "opt-out took a backtick info string for a fence"
+o18="$(fresh_repo)"
+printf '# Mine\n\n```\nopen\n' > "$o18/CLAUDE.md" && git -C "$o18" add -A && git -C "$o18" commit -q -m open
+expect_exit 1 bash "$OPT" --repo "$o18"
+grep -q 'unclosed code fence' "$TMP_ROOT/out" || fail "opt-out appended after an unclosed fence"
 pass "sdd-optout adds the exact line once, follows a link only inside the repository, reads Markdown fences and large files right, and refuses an sdd repository or uncommitted changes"
 
 # --- cloud-setup.sh: sdd only, always exits 0, updates an existing marketplace ---------

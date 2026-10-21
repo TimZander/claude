@@ -154,12 +154,14 @@ if [ -f CLAUDE.md ]; then
     optout_tmp="$TMPDIR_INIT/claude-md"
     removed="$(awk -v line="$(tr -d '\r' < "$SCRIPT_DIR/optout-line.txt")" -v out="$optout_tmp" '
         { l[NR] = $0; t = $0; sub(/\r$/, "", t); sub(/[ \t]+$/, "", t); b[NR] = (t == ""); m[NR] = 0 }
-        # A fence closes only on the same character, at least as long, with nothing after it.
-        t ~ /^[ \t]*(```|~~~)/ {
-            s = t; sub(/^[ \t]*/, "", s); c = substr(s, 1, 1); n = 0
+        # Fences as in Markdown: indented at most 3 spaces, no backtick in the info string of a
+        # backtick fence, closed only by the same character, at least as long, nothing after it.
+        t ~ /^(   |  | )?(```|~~~)/ {
+            s = t; sub(/^ */, "", s); c = substr(s, 1, 1); n = 0
             while (substr(s, n + 1, 1) == c) n++
-            if (!fence) { fence = 1; fc = c; fl = n; next }
-            if (c == fc && n >= fl && substr(s, n + 1) ~ /^[ \t]*$/) { fence = 0; next }
+            rest = substr(s, n + 1)
+            if (!fence && !(c == "`" && index(rest, "`"))) { fence = 1; fc = c; fl = n; next }
+            if (fence && c == fc && n >= fl && rest ~ /^[ \t]*$/) { fence = 0; next }
         }
         !fence { m[NR] = (t == line) }
         END {

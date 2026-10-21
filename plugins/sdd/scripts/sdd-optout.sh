@@ -55,31 +55,42 @@ file="CLAUDE.md"
 if [ -L CLAUDE.md ]; then
     target="$(readlink CLAUDE.md)"
     here="$(pwd -P)"
-    dir="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)" || die "CLAUDE.md links to $target, which doesn't exist"
-    base="$(basename "$target")"
+    # A trailing slash names a directory, so the link can't be read as a file.
+    case "$target" in */) die "CLAUDE.md links to $target, which is not a file" ;; esac
+    # cd -P follows each symlink before `..`, as the kernel does; CDPATH could send cd elsewhere.
+    dir="$(CDPATH= cd -P -- "$(dirname -- "$target")" 2>/dev/null && pwd -P)" || die "CLAUDE.md links to $target, which doesn't exist"
+    base="$(basename -- "$target")"
     case "$base" in .|..) die "CLAUDE.md links to $target, which is not a file" ;; esac
     case "$dir/" in "$here"/*) file="${dir#"$here"}/$base"; file="${file#/}" ;; *) die "CLAUDE.md links outside the repository: $target" ;; esac
     [ -f "$file" ] && [ ! -L "$file" ] || die "CLAUDE.md links to $file, which is not a regular file"
-    git ls-files --error-unmatch -- "$file" >/dev/null 2>&1 || die "CLAUDE.md links to $file, which is not committed"
+    git ls-files --error-unmatch -- ":(literal)$file" >/dev/null 2>&1 || die "CLAUDE.md links to $file, which is not committed"
 fi
 
 # Whether $file has the line $1 outside fenced code blocks, ignoring a trailing CR and trailing
-# whitespace. A fence closes only on the same character, at least as long, with nothing after
-# it, as in Markdown. All in awk, which reads the whole file: a `grep -q` that stops early
+# whitespace; exit 2 when a fence is left open at the end, where an appended line would land
+# inside it. Fences follow Markdown: indented at most 3 spaces, a backtick fence's info string
+# holds no backtick, and a fence closes only on the same character, at least as long, with
+# nothing after it. All in awk, which reads the whole file: a `grep -q` that stops early
 # would make the pipeline fail under pipefail on a large file.
 has_plain() {
     awk -v want="$1" '
         { t = $0; sub(/\r$/, "", t); sub(/[ \t]+$/, "", t) }
-        t ~ /^[ \t]*(```|~~~)/ {
-            s = t; sub(/^[ \t]*/, "", s); c = substr(s, 1, 1); n = 0
+        t ~ /^(   |  | )?(```|~~~)/ {
+            s = t; sub(/^ */, "", s); c = substr(s, 1, 1); n = 0
             while (substr(s, n + 1, 1) == c) n++
-            if (!fence) { fence = 1; fc = c; fl = n; next }
-            if (c == fc && n >= fl && substr(s, n + 1) ~ /^[ \t]*$/) { fence = 0; next }
+            rest = substr(s, n + 1)
+            if (!fence && !(c == "`" && index(rest, "`"))) { fence = 1; fc = c; fl = n; next }
+            if (fence && c == fc && n >= fl && rest ~ /^[ \t]*$/) { fence = 0; next }
         }
         !fence && t == want { found = 1 }
-        END { exit !found }' "$file"
+        END { exit fence ? 2 : !found }' "$file"
 }
 
+if [ -f "$file" ]; then
+    status=0
+    has_plain "$LINE" || status=$?
+    [ "$status" != 2 ] || die "$file ends inside an unclosed code fence; close it first, so the opt-out line isn't read as code"
+fi
 if [ -f "$file" ] && has_plain "$LINE"; then
     echo "$file already has the opt-out line"
     echo "root: $root"
