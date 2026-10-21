@@ -6,7 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is the **tzander-skills** Claude Code plugin marketplace (MIT License, Tim Zander). It provides a registry of plugins installable via `/plugin install plugin-name@tzander-skills`.
 
-This repository doesn't use spec-driven development (sdd). Its plugins are mostly prompt markdown, which already states the behavior a spec would, and its non-trivial logic is pinned down by scripts and smoke tests instead (see below).
+This repository doesn't use spec-driven development (sdd).
+
+Why: its plugins are mostly prompt markdown, which already states the behavior a spec would, and its non-trivial logic is pinned down by scripts and smoke tests instead (see below).
 
 ## Shared Team Standards
 

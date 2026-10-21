@@ -6,17 +6,20 @@
 #
 #   bash sdd-optout.sh [--repo <dir>]
 #
-# Creates CLAUDE.md if there is none. Idempotent: a CLAUDE.md that already says so is left as
-# is. Refuses a repository already set up for sdd (.claude/sdd-workflow.md exists): opting out
-# doesn't remove sdd, so the two would contradict each other. Commits nothing; the command
-# that runs it commits CLAUDE.md.
+# The line is the one in optout-line.txt, next to this script, matched exactly (ignoring
+# trailing whitespace and a CR); /sdd:init removes the same line. Creates CLAUDE.md if there is
+# none. Idempotent: a CLAUDE.md that already has the line is left as is. Refuses a repository
+# already set up for sdd (.claude/sdd-workflow.md exists), since the two would contradict each
+# other, and a CLAUDE.md with uncommitted changes, which the commit of the opt-out would sweep
+# up. Commits nothing; the command that runs it commits CLAUDE.md.
 #
 # Last line: `sdd-optout: done`, `sdd-optout: already opted out`, or `sdd-optout: failed`.
 # Exit status: 0 done or already opted out, 1 failed, 2 usage error.
 
 set -euo pipefail
 
-LINE="This repository doesn't use spec-driven development (sdd)."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LINE="$(cat "$SCRIPT_DIR/optout-line.txt")"
 
 usage() {
     sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//' >&2
@@ -41,13 +44,20 @@ done
 root="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" || die "$repo is not inside a git repository"
 cd "$root"
 
-[ ! -e .claude/sdd-workflow.md ] || die "this repository is set up for sdd (.claude/sdd-workflow.md); opting out doesn't remove it, so remove sdd first or keep it"
+[ ! -e .claude/sdd-workflow.md ] || die "this repository is set up for sdd (.claude/sdd-workflow.md), and opting out doesn't remove it"
 
-if [ -f CLAUDE.md ] && grep -qF "doesn't use spec-driven development" CLAUDE.md; then
-    echo "CLAUDE.md already says the repository doesn't use spec-driven development"
+has_line() {
+    awk -v line="$LINE" '{ t = $0; sub(/\r$/, "", t); sub(/[ \t]+$/, "", t) } t == line { f = 1 } END { exit !f }' CLAUDE.md
+}
+
+if [ -f CLAUDE.md ] && has_line; then
+    echo "CLAUDE.md already has the opt-out line"
     echo "sdd-optout: already opted out"
     exit 0
 fi
+
+[ -z "$(git status --porcelain -- CLAUDE.md)" ] \
+    || die "CLAUDE.md has uncommitted changes; commit or stash them first, so the opt-out commit holds only its line"
 
 if [ -s CLAUDE.md ]; then
     # Keep the file's last line intact, then leave a blank line before ours.

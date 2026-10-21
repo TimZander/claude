@@ -23,10 +23,9 @@
 # .claude/settings.json (telemetry off, the plugin enabled, the SessionStart hook),
 # .gitignore, and
 # the `@.claude/sdd-workflow.md` import line in CLAUDE.md. A value the repo
-# already set differently is kept and reported as a warning. The one removal: a
-# CLAUDE.md line saying the repository doesn't use spec-driven development (the
-# opt-out /sdd:opt-out writes) is deleted, since running this is the owner's
-# decision to use it.
+# already set differently is kept and reported as a warning. The one removal: the
+# opt-out line /sdd:opt-out writes (scripts/optout-line.txt, matched exactly) is
+# deleted from CLAUDE.md, since running this is the owner's decision to use sdd.
 #
 # Last line: `sdd-init: done` (with `, N warnings`), or `sdd-init: failed`.
 # Exit status: 0 done, 1 failed, 2 usage error.
@@ -146,17 +145,34 @@ for line in 'node_modules' '.claude/skills/openspec-*/' '.claude/commands/opsx/'
     fi
 done
 
-# An earlier opt-out would contradict the workflow import: drop the line, and the blank line it
-# leaves when it stood between two others.
-if [ -f CLAUDE.md ] && grep -qF "doesn't use spec-driven development" CLAUDE.md; then
-    grep -F "doesn't use spec-driven development" CLAUDE.md | while IFS= read -r l; do
-        note "removed the sdd opt-out from CLAUDE.md: $l"
-    done
-    awk -v phrase="doesn't use spec-driven development" '
-        index($0, phrase) { dropped = 1; next }
-        dropped && $0 == "" && (n == 0 || last == "") { dropped = 0; next }
-        { dropped = 0; print; last = $0; n++ }
-    ' CLAUDE.md > CLAUDE.md.sdd-tmp && mv CLAUDE.md.sdd-tmp CLAUDE.md
+# An earlier opt-out would contradict the workflow import. One pass drops the exact line, the
+# blank line it leaves behind, and blank lines it leaves at the end, then writes the result
+# back into the same file, so a symlinked CLAUDE.md stays a symlink. A CLAUDE.md that was only
+# the opt-out (as /sdd:opt-out creates it) is removed, so the template below replaces it.
+if [ -f CLAUDE.md ]; then
+    optout_tmp="$(mktemp)"
+    removed="$(awk -v line="$(cat "$SCRIPT_DIR/optout-line.txt")" -v out="$optout_tmp" '
+        { l[NR] = $0; t = $0; sub(/\r$/, "", t); sub(/[ \t]+$/, "", t); m[NR] = (t == line) }
+        END {
+            k = 0; removed = 0; skip = 0
+            for (i = 1; i <= NR; i++) {
+                if (m[i]) { removed++; skip = (k == 0 || o[k] == ""); continue }
+                if (skip && l[i] == "") { skip = 0; continue }
+                skip = 0; o[++k] = l[i]
+            }
+            if (removed) while (k > 0 && o[k] == "") k--
+            for (i = 1; i <= k; i++) print o[i] > out
+            print removed
+        }' CLAUDE.md)"
+    if [ "$removed" != 0 ]; then
+        if [ ! -L CLAUDE.md ] && ! grep -qv -e '^# CLAUDE.md$' -e '^$' "$optout_tmp"; then
+            rm -f CLAUDE.md
+        else
+            cat "$optout_tmp" > CLAUDE.md
+        fi
+        note "removed the sdd opt-out from CLAUDE.md"
+    fi
+    rm -f "$optout_tmp"
 fi
 
 import='@.claude/sdd-workflow.md'

@@ -189,17 +189,35 @@ out="$(bash "$INIT" --repo "$r" --no-install)"
 if printf '%s\n' "$out" | grep -Eq '^  (added|updated|set) '; then echo "$out"; fail "second run changed files"; fi
 [ "$(grep -c 'sdd-workflow.md' "$r/CLAUDE.md")" = 1 ] || fail "import line duplicated"
 
-# --- sdd-init: removes an earlier opt-out ------------------------------------------
-ro="$(fresh_repo)"
-printf "# Mine\n\nKeep this.\n\nThis repository doesn't use spec-driven development (sdd).\n\nAnd this.\n" > "$ro/CLAUDE.md"
-out="$(bash "$INIT" --repo "$ro" --no-install)" || { echo "$out"; fail "init on an opted-out repo"; }
-printf '%s\n' "$out" | grep -q "removed the sdd opt-out from CLAUDE.md" || { echo "$out"; fail "init did not report removing the opt-out"; }
-grep -qF "doesn't use spec-driven development" "$ro/CLAUDE.md" && fail "init left the opt-out line"
-[ "$(sed -n 1,5p "$ro/CLAUDE.md")" = "$(printf '# Mine\n\nKeep this.\n\nAnd this.')" ] || { cat "$ro/CLAUDE.md"; fail "init mangled CLAUDE.md around the opt-out"; }
-grep -qxF '@.claude/sdd-workflow.md' "$ro/CLAUDE.md" || fail "init on an opted-out repo did not add the import"
-pass "init removes an earlier opt-out and keeps the rest of CLAUDE.md"
 [ "$(grep -o 'session-start.sh' "$r/.claude/settings.json" | wc -l | tr -d ' ')" = 1 ] || fail "session hook duplicated"
 pass "init is idempotent"
+
+# --- sdd-init: removes an earlier opt-out ------------------------------------------
+optline="$(cat "$SCRIPT_DIR/optout-line.txt")"
+ro="$(fresh_repo)"
+printf '# Mine\n\nKeep this.\n\n%s\n\nThe docs tree doesn'"'"'t use spec-driven development (sdd).\n\n%s\r\n' "$optline" "$optline" > "$ro/CLAUDE.md"
+out="$(bash "$INIT" --repo "$ro" --no-install)" || { echo "$out"; fail "init on an opted-out repo"; }
+printf '%s\n' "$out" | grep -q "removed the sdd opt-out from CLAUDE.md" || { echo "$out"; fail "init did not report removing the opt-out"; }
+grep -qxF "$optline" "$ro/CLAUDE.md" && fail "init left the opt-out line"
+[ "$(sed -n 1,6p "$ro/CLAUDE.md")" = "$(printf "# Mine\n\nKeep this.\n\nThe docs tree doesn't use spec-driven development (sdd).\n")" ] \
+    || { cat -A "$ro/CLAUDE.md"; fail "init removed more than the exact opt-out line, or left a stray blank line"; }
+[ "$(sed -n 7p "$ro/CLAUDE.md")" = "## Spec-driven workflow" ] || { cat -A "$ro/CLAUDE.md"; fail "init left a stray blank line where the opt-out ended the file"; }
+grep -qxF '@.claude/sdd-workflow.md' "$ro/CLAUDE.md" || fail "init on an opted-out repo did not add the import"
+# Round trip: what /sdd:opt-out writes, /sdd:init removes, through a symlinked CLAUDE.md.
+rs="$(fresh_repo)"
+printf '# Agents\n\nRules.\n' > "$rs/AGENTS.md" && ln -s AGENTS.md "$rs/CLAUDE.md"
+git -C "$rs" add -A && git -C "$rs" commit -q -m agents
+bash "$SCRIPT_DIR/sdd-optout.sh" --repo "$rs" >/dev/null
+grep -qxF "$optline" "$rs/AGENTS.md" || fail "opt-out did not write through the symlink"
+bash "$INIT" --repo "$rs" --no-install >/dev/null
+[ -L "$rs/CLAUDE.md" ] || fail "init replaced a symlinked CLAUDE.md with a file"
+grep -qxF "$optline" "$rs/AGENTS.md" && fail "init left the opt-out in the symlink's target"
+# A CLAUDE.md that was only the opt-out gets the full template.
+rt="$(fresh_repo)"
+bash "$SCRIPT_DIR/sdd-optout.sh" --repo "$rt" >/dev/null
+bash "$INIT" --repo "$rt" --no-install >/dev/null
+grep -q '^## Project' "$rt/CLAUDE.md" || { cat "$rt/CLAUDE.md"; fail "init did not give an opt-out-only CLAUDE.md the template"; }
+pass "init removes exactly the opt-out line, keeps symlinks, and templates an opt-out-only CLAUDE.md"
 
 # --- sdd-init: keeps the repo's own values, restores owned files -------------------
 r2="$(fresh_repo)"
@@ -714,9 +732,10 @@ if [ -n "${SDD_TEST_OPENSPEC:-}" ]; then
     pass "real OpenSpec CLI: pins, check-specs, and a stale pin at archive time"
 fi
 
-# --- sdd-optout.sh: adds the line once, creates CLAUDE.md, refuses an sdd repository --------
+# --- sdd-optout.sh: adds the line once, creates CLAUDE.md, refuses what it would sweep up ----
 OPT="$SCRIPT_DIR/sdd-optout.sh"
-optline="This repository doesn't use spec-driven development (sdd)."
+optline="$(cat "$SCRIPT_DIR/optout-line.txt")"
+[ -x "$OPT" ] || fail "sdd-optout.sh is not executable"
 expect_exit 2 bash "$OPT" --bogus
 expect_exit 1 bash "$OPT" --repo "$TMP_ROOT"
 o="$(fresh_repo)"
@@ -724,18 +743,26 @@ bash "$OPT" --repo "$o" | tail -n 1 | grep -qx 'sdd-optout: done' || fail "opt-o
 [ "$(cat "$o/CLAUDE.md")" = "$(printf '# CLAUDE.md\n\n%s' "$optline")" ] || { cat "$o/CLAUDE.md"; fail "opt-out created the wrong CLAUDE.md"; }
 o2="$(fresh_repo)"
 printf '# Mine\n\nNo trailing newline' > "$o2/CLAUDE.md"
+expect_exit 1 bash "$OPT" --repo "$o2"
+grep -q 'uncommitted changes' "$TMP_ROOT/out" || fail "opt-out did not refuse an uncommitted CLAUDE.md"
+git -C "$o2" add CLAUDE.md && git -C "$o2" commit -q -m mine
 bash "$OPT" --repo "$o2" >/dev/null
 [ "$(cat "$o2/CLAUDE.md")" = "$(printf '# Mine\n\nNo trailing newline\n\n%s' "$optline")" ] || { cat "$o2/CLAUDE.md"; fail "opt-out mangled an existing CLAUDE.md"; }
+git -C "$o2" commit -q -am optout
 before="$(cat "$o2/CLAUDE.md")"
 bash "$OPT" --repo "$o2" | tail -n 1 | grep -qx 'sdd-optout: already opted out' || fail "second opt-out"
 [ "$(cat "$o2/CLAUDE.md")" = "$before" ] || fail "second opt-out changed CLAUDE.md"
-[ -z "$(git -C "$o2" log --oneline -1 -- CLAUDE.md)" ] || fail "opt-out committed"
+o4="$(fresh_repo)"
+printf "# Mine\n\nThis repository doesn’t use spec-driven development (sdd).\n" > "$o4/CLAUDE.md"
+git -C "$o4" add CLAUDE.md && git -C "$o4" commit -q -m curly
+bash "$OPT" --repo "$o4" | tail -n 1 | grep -qx 'sdd-optout: done' || fail "opt-out took a look-alike line for the exact one"
+[ -z "$(git -C "$o4" log --oneline -1 -- CLAUDE.md | grep -v curly)" ] || fail "opt-out committed"
 o3="$(fresh_repo)"
 mkdir -p "$o3/.claude" && echo x > "$o3/.claude/sdd-workflow.md"
 expect_exit 1 bash "$OPT" --repo "$o3"
 grep -q 'set up for sdd' "$TMP_ROOT/out" || fail "opt-out of an sdd repository not refused"
 [ ! -e "$o3/CLAUDE.md" ] || fail "a refused opt-out wrote CLAUDE.md"
-pass "sdd-optout adds the line once, creates CLAUDE.md, commits nothing, and refuses an sdd repository"
+pass "sdd-optout adds the exact line once, commits nothing, and refuses an sdd repository or an uncommitted CLAUDE.md"
 
 # --- cloud-setup.sh: sdd only, always exits 0, updates an existing marketplace ---------
 CS="$SCRIPT_DIR/../cloud-setup.sh"
@@ -771,7 +798,7 @@ md="$TMP_ROOT/cshome/.claude/CLAUDE.md"
 [ -f "$md" ] || fail "cloud-setup wrote no ~/.claude/CLAUDE.md"
 grep -q 'sdd-workflow.md' "$md" || fail "CLAUDE.md does not point at the sdd workflow"
 grep -q 'Never run `/sdd:init` unasked' "$md" || fail "CLAUDE.md does not say to ask before /sdd:init"
-grep -q "doesn't use spec-driven development" "$md" || fail "CLAUDE.md does not describe the opt-out"
+grep -qF "$(cat "$SCRIPT_DIR/optout-line.txt")" "$md" || fail "CLAUDE.md does not name the exact opt-out line"
 grep -q 'Neither: ask once, at the first change' "$md" || fail "CLAUDE.md does not limit the ask to once"
 grep -q '`/sdd:opt-out`' "$md" || fail "CLAUDE.md does not name /sdd:opt-out"
 grep -q 'recording decisions as ADRs' "$md" || fail "CLAUDE.md does not point at the ADR rules"
