@@ -30,6 +30,17 @@
 #       machine. Refuses on main or master, never forces, and leaves every other change
 #       uncommitted. `drop` takes the note back out once it is picked up.
 #
+#   bash handoff.sh relay  [-C <dir>] <note>
+#       Preflight for /handoff:relay, which moves the work to a new cloud session and archives
+#       this one. Refuses (exit 1, each reason on stderr) unless this is a cloud session, on a
+#       work branch that tracks origin/<the same name>, with the note committed, nothing
+#       uncommitted, and nothing unpushed or unpulled after a fresh fetch: a new session starts
+#       from a fresh clone of origin/<branch>, and archiving this one throws away its
+#       container. Then prints `key: value` lines for create_session: source_url, branch, head,
+#       shallow, prompt, and `left behind: <count>` with what the clone won't have, one
+#       indented `kind: item` line each (untracked, ignored, stash, branch with commits on no
+#       remote, worktree with its uncommitted and unpushed counts), the first 20 shown.
+#
 #   bash handoff.sh drop   [-C <dir>] <note>
 #       Deletes a note that has been picked up or replaced. If it was committed, also commits
 #       the deletion (that path alone), so the note doesn't reach the base branch with the
@@ -103,24 +114,68 @@ note_rel() {
     printf '%s' "$n"
 }
 
+# True in a cloud session, whose container is thrown away after a period of inactivity.
+in_cloud() {
+    [ "${CLAUDE_CODE_REMOTE:-}" = "true" ]
+}
+
+# The upstream of a ref (`origin/work`); fails when it has none.
+upstream_of() {
+    git rev-parse --abbrev-ref --symbolic-full-name "$1@{upstream}" 2>/dev/null
+}
+
+# `<behind> <ahead>` of HEAD against an upstream, or `? ?` when git can't tell.
+ahead_behind() {
+    git rev-list --left-right --count "$1...HEAD" 2>/dev/null | tr -s '\t ' '  ' || echo "? ?"
+}
+
+# The paths of the repository's other worktrees: every one but this checkout, which needn't be
+# the first `git worktree list` shows (relay can run from a linked worktree), and never a bare
+# repository's own entry, which has no checkout.
+other_worktrees() {
+    local here wt
+    here="$(pwd -P)"
+    git worktree list --porcelain \
+        | awk '/^worktree / { p = substr($0, 10) } /^bare$/ { p = "" }
+               /^$/ { if (p != "") print p; p = "" } END { if (p != "") print p }' \
+        | while IFS= read -r wt; do
+            [ "$(cd "$wt" 2>/dev/null && pwd -P)" = "$here" ] || printf '%s\n' "$wt"
+        done
+}
+
+# A worktree's short HEAD, or `?` when its directory is gone or no longer a checkout (git would
+# otherwise answer for whatever repository encloses it).
+wt_sha() {
+    if [ -e "$1/.git" ]; then git -C "$1" rev-parse --short HEAD 2>/dev/null || echo "?"; else echo "?"; fi
+}
+
+# Copies stdin with a prefix on each line, up to 20 lines, then says how many more there were.
+capped() {
+    awk -v p="$1" 'NR <= 20 { print p $0 } END { if (NR > 20) printf "%s... and %d more\n", p, NR - 20 }'
+}
+
 cmd_state() {
-    local branch upstream counts
+    local branch upstream counts status worktrees wt
     branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "(detached at $(git rev-parse --short HEAD 2>/dev/null || echo none))")"
     echo "branch: $branch"
-    if upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)"; then
-        counts="$(git rev-list --left-right --count "$upstream...HEAD" 2>/dev/null || echo "? ?")"
+    if upstream="$(upstream_of HEAD)"; then
+        counts="$(ahead_behind "$upstream")"
         echo "upstream: $upstream"
-        echo "behind: ${counts%%[[:space:]]*}"
-        echo "ahead: ${counts##*[[:space:]]}"
+        echo "behind: ${counts%% *}"
+        echo "ahead: ${counts##* }"
     else
         echo "upstream: none (this branch exists only here)"
     fi
-    echo "uncommitted: $(git status --porcelain | wc -l | tr -d ' ')"
-    git status --porcelain | head -n 20 | sed 's/^/  /'
+    status="$(git status --porcelain)"
+    echo "uncommitted: $(printf '%s' "$status" | grep -c . || true)"
+    [ -z "$status" ] || printf '%s\n' "$status" | capped "  "
     echo "stashes: $(git stash list | wc -l | tr -d ' ')"
-    echo "other worktrees: $(( $(git worktree list | wc -l | tr -d ' ') - 1 ))"
-    git worktree list | sed 1d | sed 's/^/  /'
-    if [ "${CLAUDE_CODE_REMOTE:-}" = "true" ]; then echo "cloud: yes"; else echo "cloud: no"; fi
+    worktrees="$(other_worktrees)"
+    echo "other worktrees: $(printf '%s' "$worktrees" | grep -c . || true)"
+    [ -z "$worktrees" ] || printf '%s\n' "$worktrees" | while IFS= read -r wt; do
+        echo "  $wt $(wt_sha "$wt")"
+    done
+    if in_cloud; then echo "cloud: yes"; else echo "cloud: no"; fi
 }
 
 cmd_new() {
@@ -173,12 +228,101 @@ cmd_commit() {
     git add -f -- "$note"
     git commit -q -m "handoff: $(basename "$note" .md)" -- "$note" || die "nothing to commit"
     echo "committed $note on $branch"
-    if git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1; then
+    if upstream_of HEAD >/dev/null; then
         git push -q || die "push failed; the handoff is committed but only on this machine"
     else
         git push -q -u origin "$branch" || die "push failed; the handoff is committed but only on this machine"
     fi
     echo "pushed $branch"
+}
+
+# origin as a URL a new cloud session can clone: credentials stripped, an SSH remote turned
+# into https, and the cloud session's git proxy for GitHub
+# (http://local_proxy@127.0.0.1:<port>/git/<owner>/<repo>) turned back into the GitHub URL.
+# Any other local server is left as it is.
+clone_url() {
+    printf '%s' "$1" | sed -E \
+        -e 's#^http://local_proxy@127\.0\.0\.1(:[0-9]+)?/git/#https://github.com/#' \
+        -e 's#^git@([^:]+):#https://\1/#' \
+        -e 's#^ssh://([^@/]+@)?([^/:]+)(:[0-9]+)?/#https://\2/#' \
+        -e 's#^(https?://)[^@/]+@#\1#' \
+        -e 's#\.git$##'
+}
+
+cmd_relay() {
+    [ $# -eq 1 ] || usage
+    local note branch="" upstream counts origin dirty bad=0 report b n wt sha
+    note="$(note_rel "$1")"
+    refuse() { echo "handoff: relay: $*" >&2; bad=1; }
+    in_cloud || refuse "not a cloud session; outside one, use /handoff, /clear and /pickup"
+    if branch="$(git symbolic-ref --quiet --short HEAD)"; then
+        case "$branch" in main|master) refuse "on $branch; the new session needs a work branch to continue on" ;; esac
+    else
+        branch=""
+        refuse "not on a branch: check out the work branch first"
+    fi
+    git cat-file -e "HEAD:$note" 2>/dev/null || refuse "$note is not committed: run \`handoff.sh commit $note\` first"
+    # The URL as configured, before any local insteadOf rewrite, which the new session won't have.
+    origin="$(git config --get remote.origin.url)" || refuse "no origin remote to clone from"
+    if [ -n "$branch" ] && upstream="$(upstream_of HEAD)"; then
+        # The new session clones origin/<branch>, so that's the upstream that has to hold the work.
+        if [ "$upstream" != "origin/$branch" ]; then
+            refuse "$branch tracks $upstream, but the new session clones origin/$branch: push to origin/$branch and track it"
+        elif [ "$bad" != 0 ]; then
+            : # already refused: don't fetch for a run that fails anyway
+        elif ! git fetch -q origin "$branch" 2>/dev/null; then
+            refuse "cannot fetch origin/$branch to check it holds the work"
+        else
+            counts="$(ahead_behind "$upstream")"
+            [ "${counts##* }" = 0 ] || refuse "${counts##* } commit(s) not pushed to $upstream"
+            [ "${counts%% *}" = 0 ] || refuse "$upstream has ${counts%% *} commit(s) this checkout lacks: pull them, and update the note if they change it"
+        fi
+    elif [ -n "$branch" ]; then
+        refuse "$branch has no upstream: push it first"
+    fi
+    dirty="$(git status --porcelain --untracked-files=no)"
+    if [ -n "$dirty" ]; then
+        refuse "uncommitted changes would be lost with this container:"
+        printf '%s\n' "$dirty" | capped "  " >&2
+    fi
+    [ "$bad" = 0 ] || exit 1
+
+    # What the fresh clone won't have, one `kind: item` per line.
+    report="$(
+        git ls-files --others --exclude-standard | sed 's/^/untracked: /'
+        git ls-files --others --ignored --exclude-standard --directory | sed 's/^/ignored: /'
+        git stash list | sed 's/^/stash: /'
+        # Full ref names: a short name can come out as `heads/<name>` when a tag shares it.
+        git for-each-ref --format='%(refname)' refs/heads | while IFS= read -r b; do
+            [ "$b" != "refs/heads/$branch" ] || continue
+            n="$(git rev-list --count "$b" --not --remotes --)"
+            [ "$n" = 0 ] || echo "branch: ${b#refs/heads/} ($n commit(s) on no remote)"
+        done
+        other_worktrees | while IFS= read -r wt; do
+            sha="$(wt_sha "$wt")"
+            printf 'worktree: %s at %s' "$wt" "$sha"
+            if [ "$sha" = "?" ]; then
+                printf ', not a checkout any more'
+            else
+                n="$(git -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+                [ "$n" = 0 ] || printf ', %s uncommitted' "$n"
+                n="$(git -C "$wt" rev-list --count HEAD --not --remotes -- 2>/dev/null || echo 0)"
+                [ "$n" = 0 ] || printf ', %s commit(s) on no remote' "$n"
+            fi
+            echo
+        done
+    )"
+    echo "source_url: $(clone_url "$origin")"
+    echo "branch: $branch"
+    echo "head: $(git rev-parse HEAD)"
+    if [ "$(git rev-parse --is-shallow-repository)" = true ]; then echo "shallow: yes"; else echo "shallow: no"; fi
+    echo "prompt: /handoff:pickup $note"
+    if [ -z "$report" ]; then
+        echo "left behind: 0"
+    else
+        echo "left behind: $(printf '%s\n' "$report" | wc -l | tr -d ' ')"
+        printf '%s\n' "$report" | capped "  "
+    fi
 }
 
 cmd_drop() {
@@ -215,6 +359,7 @@ case "$cmd" in
     open) cmd_open "$@" ;;
     remote) cmd_remote "$@" ;;
     commit) cmd_commit "$@" ;;
+    relay) cmd_relay "$@" ;;
     drop) cmd_drop "$@" ;;
     -h|--help|help) usage ;;
     *) usage ;;

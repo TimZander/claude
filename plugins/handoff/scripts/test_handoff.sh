@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Smoke test for handoff.sh: usage errors, note naming and the local exclude, open's order
 # and next actions, the state facts, commit's refusals and push, remote, and drop for a local
-# note, a pushed one, an unpushed one, and one on main. Uses real git repos with a bare origin, offline.
+# note, a pushed one, an unpushed one, and one on main; relay's refusals (after a fetch), its clone URL
+# and what it reports left behind. Uses real git repos with a bare origin, offline.
 #
 #   bash plugins/handoff/scripts/test_handoff.sh
 
@@ -12,7 +13,8 @@ H="$SCRIPT_DIR/handoff.sh"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok: $*"; }
 
-TMP_ROOT="$(mktemp -d)"
+# Resolved, so paths match what git reports (macOS's temp dir is behind a symlink).
+TMP_ROOT="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 expect_exit() {
@@ -132,5 +134,101 @@ grep -q 'first commit of the next work branch' "$TMP_ROOT/out" || fail "drop on 
 [ "$(git -C "$r" rev-parse HEAD)" = "$head_before" ] || fail "drop committed on main"
 [ "$(git -C "$r" diff --cached --name-status)" = "$(printf 'D\tdocs/handoffs/2026-03-01.md')" ] || fail "drop on main didn't stage the deletion"
 pass "drop pushes only a note the upstream has, and stages the deletion on main"
+
+# --- relay: refusals, then the facts for create_session --------------------------------------
+git -C "$r" checkout -q work && git -C "$r" stash pop -q
+rn="docs/handoffs/2026-04-01.md"
+printf '# Relay\n\n## Next action\nGo\n' > "$r/$rn"
+expect_exit 1 env CLAUDE_CODE_REMOTE= bash "$H" relay -C "$r" "$rn"
+grep -q 'not a cloud session' "$TMP_ROOT/out" || fail "relay outside a cloud session not refused"
+expect_exit 1 env CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn"
+grep -q 'is not committed' "$TMP_ROOT/out" || fail "relay with an uncommitted note not refused"
+grep -q 'uncommitted changes would be lost' "$TMP_ROOT/out" || fail "relay with uncommitted changes not refused"
+git -C "$r" commit -q -am "wip"
+git -C "$r" add -f "$rn" && git -C "$r" commit -q -m relay -- "$rn"
+expect_exit 1 env CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn"
+grep -q '[0-9] commit(s) not pushed' "$TMP_ROOT/out" || fail "relay with unpushed commits not refused"
+git -C "$r" push -q
+# Someone else pushes to origin/work: relay has to fetch to notice.
+other="$TMP_ROOT/other.$RANDOM"
+git clone -q "$(git -C "$r" remote get-url origin)" "$other" 2>/dev/null
+git -C "$other" checkout -q work && echo more > "$other/more.txt" && git -C "$other" add more.txt \
+    && git -C "$other" -c user.email=o@example.com -c user.name=O commit -q -m more && git -C "$other" push -q 2>/dev/null
+expect_exit 1 env CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn"
+grep -q '1 commit(s) this checkout lacks' "$TMP_ROOT/out" || fail "relay did not fetch before checking for unpulled commits"
+git -C "$r" pull -q --no-rebase 2>/dev/null
+# A branch tracking another name on origin: the new session would clone the wrong branch.
+git -C "$r" branch -q --set-upstream-to=origin/main
+expect_exit 1 env CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn"
+grep -q 'tracks origin/main, but the new session clones origin/work' "$TMP_ROOT/out" || fail "relay accepted a mismatched upstream"
+git -C "$r" branch -q --set-upstream-to=origin/work
+echo scratch > "$r/scratch.txt"
+wt="$TMP_ROOT/wt.$RANDOM"
+git -C "$r" worktree add -q --detach "$wt" HEAD
+echo dirty > "$wt/dirty.txt"
+out="$(CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn")" || { echo "$out"; fail "relay refused a pushed branch"; }
+printf '%s\n' "$out" | grep -qx 'branch: work' || { echo "$out"; fail "relay branch"; }
+printf '%s\n' "$out" | grep -qx "head: $(git -C "$r" rev-parse HEAD)" || fail "relay head"
+printf '%s\n' "$out" | grep -qx "prompt: /handoff:pickup $rn" || fail "relay prompt"
+printf '%s\n' "$out" | grep -qx 'shallow: no' || fail "relay shallow"
+printf '%s\n' "$out" | grep -qx 'left behind: 6' || { echo "$out"; fail "relay left-behind count"; }
+printf '%s\n' "$out" | grep -qx '  untracked: scratch.txt' || fail "relay did not report an untracked file"
+printf '%s\n' "$out" | grep -qx "  ignored: $note2" || { echo "$out"; fail "relay did not report another local note"; }
+printf '%s\n' "$out" | grep -qx '  branch: main (1 commit(s) on no remote)' || { echo "$out"; fail "relay did not report unpushed commits on another branch"; }
+printf '%s\n' "$out" | grep -qx "  worktree: $wt at $(git -C "$wt" rev-parse --short HEAD), 1 uncommitted" || { echo "$out"; fail "relay did not report a dirty worktree"; }
+for i in $(seq 1 25); do echo x > "$r/many.$i"; done
+out="$(CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn")"
+[ "$(printf '%s\n' "$out" | grep -c '^  ')" = 21 ] || { echo "$out"; fail "relay did not cap the left-behind list at 20"; }
+printf '%s\n' "$out" | grep -qx '  ... and 11 more' || { echo "$out"; fail "relay did not say how many more were left behind"; }
+rm -f "$r"/many.*
+printf '%s\n' "$out" | grep -q "untracked: $rn" && fail "relay reported the note as untracked"
+bare="$(git -C "$r" remote get-url origin)"
+for pair in "git@github.com:o/r.git|https://github.com/o/r" \
+            "ssh://git@github.com/o/r.git|https://github.com/o/r" \
+            "https://x-access-token:t@github.com/o/r.git|https://github.com/o/r" \
+            "http://local_proxy@127.0.0.1:41234/git/o/r|https://github.com/o/r" \
+            "http://localhost:3000/git/team/r|http://localhost:3000/git/team/r" \
+            "https://github.com/o/r|https://github.com/o/r"; do
+    git -C "$r" remote set-url origin "${pair%%|*}"
+    git -C "$r" config "url.$bare.insteadOf" "${pair%%|*}"
+    got="$(CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn" | sed -n 's/^source_url: //p')"
+    [ "$got" = "${pair##*|}" ] || fail "clone url for ${pair%%|*}: $got"
+done
+git -C "$r" remote set-url origin "$bare"
+# A branch named like a tracked file still gets its unpushed commits counted.
+git -C "$r" branch -q README.md main
+out="$(CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn" 2>&1)"
+printf '%s\n' "$out" | grep -qx '  branch: README.md (1 commit(s) on no remote)' || { echo "$out"; fail "relay miscounted a branch named like a file"; }
+git -C "$r" branch -q -D README.md
+# A branch that shares its name with a tag still gets its unpushed commits counted.
+git -C "$r" branch -q dup main && git -C "$r" tag dup main
+out="$(CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn" 2>&1)"
+printf '%s\n' "$out" | grep -qx '  branch: dup (1 commit(s) on no remote)' || { echo "$out"; fail "relay miscounted a branch that shares a tag's name"; }
+git -C "$r" branch -q -D dup && git -C "$r" tag -d dup >/dev/null
+# Run from the linked worktree: the main checkout is the one left behind, not this one.
+git -C "$wt" checkout -q -b wt-work && git -C "$wt" push -q -u origin wt-work 2>/dev/null
+git -C "$wt" add -f "$rn" 2>/dev/null || true
+out="$(CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$wt" "$rn" 2>&1)" || true
+printf '%s\n' "$out" | grep -q "worktree: $wt " && { echo "$out"; fail "relay from a linked worktree listed itself as left behind"; }
+printf '%s\n' "$out" | grep -q "^  worktree: $r at " || { echo "$out"; fail "relay from a linked worktree did not report the main checkout"; }
+git -C "$r" checkout -q main
+expect_exit 1 env CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn"
+grep -q 'on main' "$TMP_ROOT/out" || fail "relay on main not refused"
+grep -q 'cannot fetch' "$TMP_ROOT/out" && fail "relay fetched for a run it had already refused"
+# A bare repository with linked worktrees: the bare repository is no worktree to report.
+bare2="$TMP_ROOT/bare2.$RANDOM.git"
+git clone -q --bare "$bare" "$bare2" 2>/dev/null
+git -C "$bare2" worktree add -q "$TMP_ROOT/bw1.$RANDOM" work 2>/dev/null
+bw1="$(git -C "$bare2" worktree list --porcelain | awk '/^worktree / { p = substr($0, 10) } END { print p }')"
+out="$(CLAUDE_CODE_REMOTE= bash "$H" state -C "$bw1")"
+printf '%s\n' "$out" | grep -qx 'other worktrees: 0' || { echo "$out"; fail "state listed a bare repository as a worktree"; }
+out="$(CLAUDE_CODE_REMOTE= bash "$H" state -C "$r")"
+printf '%s\n' "$out" | grep -qx "  $wt $(git -C "$wt" rev-parse --short HEAD)" || { echo "$out"; fail "state dropped a worktree's sha"; }
+# A nested worktree that lost its .git file: no sha borrowed from the checkout around it.
+git -C "$r" worktree add -q -b nested "$r/wts/x" HEAD 2>/dev/null && rm -f "$r/wts/x/.git"
+out="$(CLAUDE_CODE_REMOTE= bash "$H" state -C "$r")"
+printf '%s\n' "$out" | grep -qx "  $r/wts/x ?" || { echo "$out"; fail "state gave a broken worktree the enclosing repository's sha"; }
+rm -rf "$r/wts" && git -C "$r" worktree prune
+pass "relay refuses outside the cloud, on main, and with unsaved work, and reports what stays behind"
 
 echo "all handoff tests passed"
