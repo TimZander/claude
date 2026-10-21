@@ -36,10 +36,13 @@ later work: it finds commits it doesn't recognize and decides another session ma
 1. refuses while background shells, subagents or workflows are still running, since archiving
    the session kills them;
 2. writes the note, with a fifth section, **Recreate the environment**: the commands a fresh
-   clone needs (worktrees, dependencies, deeper history), which `/pickup` runs first;
-3. commits and pushes it, then runs `handoff.sh relay`, which refuses unless everything is on
-   the remote (no uncommitted changes, nothing unpushed or unpulled, not on `main`) and lists
-   what the clone won't have (untracked files, stashes, other worktrees);
+   clone needs (worktrees, dependencies, deeper history), which `/pickup` runs before it checks
+   the note against the repository and deletes it;
+3. commits and pushes it, then runs `handoff.sh relay`, which fetches the branch and refuses
+   unless everything is on `origin/<branch>` (tracked under the same name, no uncommitted
+   changes, nothing unpushed or unpulled, not on `main`), and lists what the clone won't have:
+   untracked and ignored files, stashes, local branches with commits on no remote, and other
+   worktrees with their uncommitted and unpushed counts;
 4. starts a new cloud session on the same branch (`source_revision` and `outcome_branch`), with
    `/handoff:pickup <note>` as its only prompt;
 5. gives you its link, and archives this session once you confirm the new one has picked up.

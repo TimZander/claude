@@ -1,7 +1,7 @@
 ---
 description: Cloud sessions only. Hand the work to a new cloud session instead of using /clear - write and push a /handoff note, start a new session on the same branch that resumes it with /pickup, then archive this one. Use in a cloud session whenever you would otherwise /clear.
 argument-hint: "[optional: a note path in docs/handoffs/; defaults to docs/handoffs/<date>.md]"
-allowed-tools: Bash, Read, Write, Glob, ToolSearch
+allowed-tools: Bash, Read, Write, Glob, ToolSearch, mcp__claude-code-remote__create_session, mcp__claude-code-remote__get_session, mcp__claude-code-remote__archive_session
 ---
 
 # Relay: continue in a new cloud session
@@ -44,18 +44,26 @@ It is `${CLAUDE_PLUGIN_ROOT}/scripts/handoff.sh`. If that path still reads liter
    ```
 
    Say "none" if the clone needs nothing. Scratchpad files and anything outside the repository
-   don't travel: move what matters into the note or into a commit, or say it's gone.
+   don't travel: move what matters into the note or into a commit, or say it's gone. In
+   **Current state**, say what stays behind with this container, so `/pickup` in the new session
+   expects it to be missing instead of stopping over it.
 4. **Push it.** Run `<handoff> commit <note>`. If it refuses, stop and report why; nothing has
    been relayed.
-5. **Run the preflight.** Run `<handoff> relay <note>`. If it refuses (exit 1), report every
-   reason it gave and stop: the work isn't saved to the remote yet, so nothing is relayed. The
-   note is committed, so the user can fix what it named (commit or push the work) and run
-   `/handoff:relay` again, which replaces the note. On success it prints `source_url`,
-   `branch`, `head`, `shallow`, `prompt` and `left behind`.
-6. **Account for what stays behind.** Every `left behind` line (untracked files, stashes, other
-   worktrees) is lost with this container. Each one the work still needs must be in the note's
-   **Recreate the environment**, or committed. If you change the note, run
-   `<handoff> commit <note>` and the preflight again. Name the rest to the user as discarded.
+5. **Run the preflight.** Run `<handoff> relay <note>`. It fetches the branch first. If it
+   refuses (exit 1), report every reason it gave and stop: the work isn't all on
+   `origin/<branch>`, so nothing is relayed. The note is committed, so the user can fix what it
+   named (commit, push or pull the work, or track `origin/<branch>`) and run `/handoff:relay`
+   again, which replaces the note. On success it prints `source_url`, `branch`, `head`,
+   `shallow`, `prompt` and `left behind`.
+6. **Account for what stays behind.** Every `left behind` line is lost with this container:
+   `untracked` and `ignored` files (another local note, a `.env`), `stash`es, a local `branch`
+   with commits on no remote, and each other `worktree` with its uncommitted and unpushed
+   counts. When the list ends in `... and N more`, list the rest with `git status --ignored`
+   before deciding. Each item the work still needs must be in the note's **Recreate the
+   environment**, or committed and pushed; a worktree's recreate command needs a commit the
+   remote has. If you change the note, run `<handoff> commit <note>` and the preflight again.
+   Name the rest to the user as discarded, and ask before relaying when that includes commits
+   or uncommitted work.
 7. **Start the new session.** Call `create_session` with:
    - `source_url`: the preflight's `source_url`;
    - `source_revision` and `outcome_branch`: its `branch`, so the new session works on this

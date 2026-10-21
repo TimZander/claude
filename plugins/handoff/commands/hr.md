@@ -1,7 +1,7 @@
 ---
 description: Shortcut for /handoff:relay. Cloud sessions only - continue the work in a new cloud session instead of using /clear.
 argument-hint: "[optional: a note path in docs/handoffs/; defaults to docs/handoffs/<date>.md]"
-allowed-tools: Bash, Read, Write, Glob, ToolSearch
+allowed-tools: Bash, Read, Write, Glob, ToolSearch, mcp__claude-code-remote__create_session, mcp__claude-code-remote__get_session, mcp__claude-code-remote__archive_session
 ---
 
 # hr: shortcut for /handoff:relay

@@ -33,11 +33,13 @@
 #   bash handoff.sh relay  [-C <dir>] <note>
 #       Preflight for /handoff:relay, which moves the work to a new cloud session and archives
 #       this one. Refuses (exit 1, each reason on stderr) unless this is a cloud session, on a
-#       work branch, with the note committed, nothing uncommitted and nothing unpushed: a new
-#       session starts from a fresh clone of the remote branch, and archiving this one throws
-#       away its container. Then prints `key: value` lines for create_session: source_url,
-#       branch, head, shallow, prompt, and `left behind:` with what the clone won't have
-#       (untracked files, stashes, other worktrees), one per indented line.
+#       work branch that tracks origin/<the same name>, with the note committed, nothing
+#       uncommitted, and nothing unpushed or unpulled after a fresh fetch: a new session starts
+#       from a fresh clone of origin/<branch>, and archiving this one throws away its
+#       container. Then prints `key: value` lines for create_session: source_url, branch, head,
+#       shallow, prompt, and `left behind: <count>` with what the clone won't have, one
+#       indented `kind: item` line each (untracked, ignored, stash, branch with commits on no
+#       remote, worktree with its uncommitted and unpushed counts), the first 20 shown.
 #
 #   bash handoff.sh drop   [-C <dir>] <note>
 #       Deletes a note that has been picked up or replaced. If it was committed, also commits
@@ -112,24 +114,45 @@ note_rel() {
     printf '%s' "$n"
 }
 
+# True in a cloud session, whose container is thrown away after a period of inactivity.
+in_cloud() {
+    [ "${CLAUDE_CODE_REMOTE:-}" = "true" ]
+}
+
+# The upstream of a ref (`origin/work`); fails when it has none.
+upstream_of() {
+    git rev-parse --abbrev-ref --symbolic-full-name "$1@{upstream}" 2>/dev/null
+}
+
+# `<behind> <ahead>` of HEAD against an upstream, or `? ?` when git can't tell.
+ahead_behind() {
+    git rev-list --left-right --count "$1...HEAD" 2>/dev/null | tr -s '\t ' '  ' || echo "? ?"
+}
+
+# Copies stdin with a prefix on each line, up to 20 lines, then says how many more there were.
+capped() {
+    awk -v p="$1" 'NR <= 20 { print p $0 } END { if (NR > 20) printf "%s... and %d more\n", p, NR - 20 }'
+}
+
 cmd_state() {
-    local branch upstream counts
+    local branch upstream counts status
     branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "(detached at $(git rev-parse --short HEAD 2>/dev/null || echo none))")"
     echo "branch: $branch"
-    if upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)"; then
-        counts="$(git rev-list --left-right --count "$upstream...HEAD" 2>/dev/null || echo "? ?")"
+    if upstream="$(upstream_of HEAD)"; then
+        counts="$(ahead_behind "$upstream")"
         echo "upstream: $upstream"
-        echo "behind: ${counts%%[[:space:]]*}"
-        echo "ahead: ${counts##*[[:space:]]}"
+        echo "behind: ${counts%% *}"
+        echo "ahead: ${counts##* }"
     else
         echo "upstream: none (this branch exists only here)"
     fi
-    echo "uncommitted: $(git status --porcelain | wc -l | tr -d ' ')"
-    git status --porcelain | head -n 20 | sed 's/^/  /'
+    status="$(git status --porcelain)"
+    echo "uncommitted: $(printf '%s' "$status" | grep -c . || true)"
+    [ -z "$status" ] || printf '%s\n' "$status" | capped "  "
     echo "stashes: $(git stash list | wc -l | tr -d ' ')"
     echo "other worktrees: $(( $(git worktree list | wc -l | tr -d ' ') - 1 ))"
     git worktree list | sed 1d | sed 's/^/  /'
-    if [ "${CLAUDE_CODE_REMOTE:-}" = "true" ]; then echo "cloud: yes"; else echo "cloud: no"; fi
+    if in_cloud; then echo "cloud: yes"; else echo "cloud: no"; fi
 }
 
 cmd_new() {
@@ -203,10 +226,10 @@ clone_url() {
 
 cmd_relay() {
     [ $# -eq 1 ] || usage
-    local note branch="" upstream counts origin bad=0 untracked stashes worktrees
+    local note branch="" upstream counts origin dirty bad=0 report b n wt sha
     note="$(note_rel "$1")"
     refuse() { echo "handoff: relay: $*" >&2; bad=1; }
-    [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] || refuse "not a cloud session; outside one, use /handoff, /clear and /pickup"
+    in_cloud || refuse "not a cloud session; outside one, use /handoff, /clear and /pickup"
     if branch="$(git symbolic-ref --quiet --short HEAD)"; then
         case "$branch" in main|master) refuse "on $branch; the new session needs a work branch to continue on" ;; esac
     else
@@ -214,32 +237,61 @@ cmd_relay() {
         refuse "not on a branch: check out the work branch first"
     fi
     git cat-file -e "HEAD:$note" 2>/dev/null || refuse "$note is not committed: run \`handoff.sh commit $note\` first"
-    if upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)"; then
-        counts="$(git rev-list --left-right --count "$upstream...HEAD")"
-        [ "${counts##*[[:space:]]}" = 0 ] || refuse "${counts##*[[:space:]]} commit(s) not pushed to $upstream"
-        [ "${counts%%[[:space:]]*}" = 0 ] || refuse "$upstream has ${counts%%[[:space:]]*} commit(s) this checkout lacks: pull them, and update the note if they change it"
-    else
-        refuse "${branch:-HEAD} has no upstream: push it first"
+    # The URL as configured, before any local insteadOf rewrite, which the new session won't have.
+    origin="$(git config --get remote.origin.url)" || refuse "no origin remote to clone from"
+    if [ -n "$branch" ] && upstream="$(upstream_of HEAD)"; then
+        # The new session clones origin/<branch>, so that's the upstream that has to hold the work.
+        if [ "$upstream" != "origin/$branch" ]; then
+            refuse "$branch tracks $upstream, but the new session clones origin/$branch: push to origin/$branch and track it"
+        elif ! git fetch -q origin "$branch" 2>/dev/null; then
+            refuse "cannot fetch origin/$branch to check it holds the work"
+        else
+            counts="$(ahead_behind "$upstream")"
+            [ "${counts##* }" = 0 ] || refuse "${counts##* } commit(s) not pushed to $upstream"
+            [ "${counts%% *}" = 0 ] || refuse "$upstream has ${counts%% *} commit(s) this checkout lacks: pull them, and update the note if they change it"
+        fi
+    elif [ -n "$branch" ]; then
+        refuse "$branch has no upstream: push it first"
     fi
-    if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+    dirty="$(git status --porcelain --untracked-files=no)"
+    if [ -n "$dirty" ]; then
         refuse "uncommitted changes would be lost with this container:"
-        git status --porcelain --untracked-files=no | head -n 20 | sed 's/^/  /' >&2
+        printf '%s\n' "$dirty" | capped "  " >&2
     fi
-    origin="$(git remote get-url origin 2>/dev/null)" || refuse "no origin remote to clone from"
     [ "$bad" = 0 ] || exit 1
 
-    untracked="$(git ls-files --others --exclude-standard)"
-    stashes="$(git stash list)"
-    worktrees="$(git worktree list | sed 1d)"
+    # What the fresh clone won't have, one `kind: item` per line.
+    report="$(
+        git ls-files --others --exclude-standard | sed 's/^/untracked: /'
+        git ls-files --others --ignored --exclude-standard --directory | sed 's/^/ignored: /'
+        git stash list | sed 's/^/stash: /'
+        git for-each-ref --format='%(refname:short)' refs/heads | while IFS= read -r b; do
+            [ "$b" != "$branch" ] || continue
+            n="$(git rev-list --count "$b" --not --remotes)"
+            [ "$n" = 0 ] || echo "branch: $b ($n commit(s) on no remote)"
+        done
+        git worktree list --porcelain | awk '/^worktree / { sub(/^worktree /, ""); print }' | sed 1d \
+            | while IFS= read -r wt; do
+                sha="$(git -C "$wt" rev-parse --short HEAD 2>/dev/null || echo "?")"
+                printf 'worktree: %s at %s' "$wt" "$sha"
+                n="$(git -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+                [ "$n" = 0 ] || printf ', %s uncommitted' "$n"
+                n="$(git -C "$wt" rev-list --count HEAD --not --remotes 2>/dev/null || echo 0)"
+                [ "$n" = 0 ] || printf ', %s commit(s) on no remote' "$n"
+                echo
+            done
+    )"
     echo "source_url: $(clone_url "$origin")"
     echo "branch: $branch"
     echo "head: $(git rev-parse HEAD)"
     if [ "$(git rev-parse --is-shallow-repository)" = true ]; then echo "shallow: yes"; else echo "shallow: no"; fi
     echo "prompt: /handoff:pickup $note"
-    echo "left behind: $( { [ -z "$untracked" ] || printf '%s\n' "$untracked"; [ -z "$stashes" ] || printf '%s\n' "$stashes"; [ -z "$worktrees" ] || printf '%s\n' "$worktrees"; } | wc -l | tr -d ' ')"
-    [ -z "$untracked" ] || printf '%s\n' "$untracked" | head -n 20 | sed 's/^/  untracked: /'
-    [ -z "$stashes" ] || printf '%s\n' "$stashes" | sed 's/^/  stash: /'
-    [ -z "$worktrees" ] || printf '%s\n' "$worktrees" | sed 's/^/  worktree: /'
+    if [ -z "$report" ]; then
+        echo "left behind: 0"
+    else
+        echo "left behind: $(printf '%s\n' "$report" | wc -l | tr -d ' ')"
+        printf '%s\n' "$report" | capped "  "
+    fi
 }
 
 cmd_drop() {
