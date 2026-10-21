@@ -46,7 +46,8 @@ It is `${CLAUDE_PLUGIN_ROOT}/scripts/handoff.sh`. If that path still reads liter
    Say "none" if the clone needs nothing. Scratchpad files and anything outside the repository
    don't travel: move what matters into the note or into a commit, or say it's gone. In
    **Current state**, say what stays behind with this container, so `/pickup` in the new session
-   expects it to be missing instead of stopping over it.
+   expects it to be missing instead of stopping over it. `/pickup` shows these commands to the user and asks
+   before running them, so keep them few and plain.
 4. **Push it.** Run `<handoff> commit <note>`. If it refuses, stop and report why; nothing has
    been relayed.
 5. **Run the preflight.** Run `<handoff> relay <note>`. It fetches the branch first. If it

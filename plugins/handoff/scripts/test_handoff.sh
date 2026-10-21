@@ -186,15 +186,29 @@ for pair in "git@github.com:o/r.git|https://github.com/o/r" \
             "ssh://git@github.com/o/r.git|https://github.com/o/r" \
             "https://x-access-token:t@github.com/o/r.git|https://github.com/o/r" \
             "http://local_proxy@127.0.0.1:41234/git/o/r|https://github.com/o/r" \
+            "http://localhost:3000/git/team/r|http://localhost:3000/git/team/r" \
             "https://github.com/o/r|https://github.com/o/r"; do
     git -C "$r" remote set-url origin "${pair%%|*}"
     git -C "$r" config "url.$bare.insteadOf" "${pair%%|*}"
     got="$(CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn" | sed -n 's/^source_url: //p')"
     [ "$got" = "${pair##*|}" ] || fail "clone url for ${pair%%|*}: $got"
 done
+git -C "$r" remote set-url origin "$bare"
+# A branch named like a tracked file still gets its unpushed commits counted.
+git -C "$r" branch -q README.md main
+out="$(CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn" 2>&1)"
+printf '%s\n' "$out" | grep -qx '  branch: README.md (1 commit(s) on no remote)' || { echo "$out"; fail "relay miscounted a branch named like a file"; }
+git -C "$r" branch -q -D README.md
+# Run from the linked worktree: the main checkout is the one left behind, not this one.
+git -C "$wt" checkout -q -b wt-work && git -C "$wt" push -q -u origin wt-work 2>/dev/null
+git -C "$wt" add -f "$rn" 2>/dev/null || true
+out="$(CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$wt" "$rn" 2>&1)" || true
+printf '%s\n' "$out" | grep -q "worktree: $wt " && { echo "$out"; fail "relay from a linked worktree listed itself as left behind"; }
+printf '%s\n' "$out" | grep -q "^  worktree: $r at " || { echo "$out"; fail "relay from a linked worktree did not report the main checkout"; }
 git -C "$r" checkout -q main
 expect_exit 1 env CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn"
 grep -q 'on main' "$TMP_ROOT/out" || fail "relay on main not refused"
+grep -q 'cannot fetch' "$TMP_ROOT/out" && fail "relay fetched for a run it had already refused"
 pass "relay refuses outside the cloud, on main, and with unsaved work, and reports what stays behind"
 
 echo "all handoff tests passed"

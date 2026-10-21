@@ -129,13 +129,24 @@ ahead_behind() {
     git rev-list --left-right --count "$1...HEAD" 2>/dev/null | tr -s '\t ' '  ' || echo "? ?"
 }
 
+# The paths of the repository's other worktrees: every one but this checkout, which needn't be
+# the first `git worktree list` shows (relay can run from a linked worktree).
+other_worktrees() {
+    local here wt
+    here="$(pwd -P)"
+    git worktree list --porcelain | awk '/^worktree / { sub(/^worktree /, ""); print }' \
+        | while IFS= read -r wt; do
+            [ "$(cd "$wt" 2>/dev/null && pwd -P)" = "$here" ] || printf '%s\n' "$wt"
+        done
+}
+
 # Copies stdin with a prefix on each line, up to 20 lines, then says how many more there were.
 capped() {
     awk -v p="$1" 'NR <= 20 { print p $0 } END { if (NR > 20) printf "%s... and %d more\n", p, NR - 20 }'
 }
 
 cmd_state() {
-    local branch upstream counts status
+    local branch upstream counts status worktrees
     branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "(detached at $(git rev-parse --short HEAD 2>/dev/null || echo none))")"
     echo "branch: $branch"
     if upstream="$(upstream_of HEAD)"; then
@@ -150,8 +161,9 @@ cmd_state() {
     echo "uncommitted: $(printf '%s' "$status" | grep -c . || true)"
     [ -z "$status" ] || printf '%s\n' "$status" | capped "  "
     echo "stashes: $(git stash list | wc -l | tr -d ' ')"
-    echo "other worktrees: $(( $(git worktree list | wc -l | tr -d ' ') - 1 ))"
-    git worktree list | sed 1d | sed 's/^/  /'
+    worktrees="$(other_worktrees)"
+    echo "other worktrees: $(printf '%s' "$worktrees" | grep -c . || true)"
+    [ -z "$worktrees" ] || printf '%s\n' "$worktrees" | sed 's/^/  /'
     if in_cloud; then echo "cloud: yes"; else echo "cloud: no"; fi
 }
 
@@ -205,7 +217,7 @@ cmd_commit() {
     git add -f -- "$note"
     git commit -q -m "handoff: $(basename "$note" .md)" -- "$note" || die "nothing to commit"
     echo "committed $note on $branch"
-    if git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' >/dev/null 2>&1; then
+    if upstream_of HEAD >/dev/null; then
         git push -q || die "push failed; the handoff is committed but only on this machine"
     else
         git push -q -u origin "$branch" || die "push failed; the handoff is committed but only on this machine"
@@ -213,14 +225,16 @@ cmd_commit() {
     echo "pushed $branch"
 }
 
-# origin as a URL a new cloud session can clone: credentials stripped, an SSH remote or the
-# cloud git proxy (http://...@127.0.0.1:<port>/git/<owner>/<repo>) turned into https.
+# origin as a URL a new cloud session can clone: credentials stripped, an SSH remote turned
+# into https, and the cloud session's git proxy for GitHub
+# (http://local_proxy@127.0.0.1:<port>/git/<owner>/<repo>) turned back into the GitHub URL.
+# Any other local server is left as it is.
 clone_url() {
     printf '%s' "$1" | sed -E \
+        -e 's#^http://local_proxy@127\.0\.0\.1(:[0-9]+)?/git/#https://github.com/#' \
         -e 's#^git@([^:]+):#https://\1/#' \
         -e 's#^ssh://([^@/]+@)?([^/:]+)(:[0-9]+)?/#https://\2/#' \
         -e 's#^(https?://)[^@/]+@#\1#' \
-        -e 's#^https?://(127\.0\.0\.1|localhost)(:[0-9]+)?/git/#https://github.com/#' \
         -e 's#\.git$##'
 }
 
@@ -243,6 +257,8 @@ cmd_relay() {
         # The new session clones origin/<branch>, so that's the upstream that has to hold the work.
         if [ "$upstream" != "origin/$branch" ]; then
             refuse "$branch tracks $upstream, but the new session clones origin/$branch: push to origin/$branch and track it"
+        elif [ "$bad" != 0 ]; then
+            : # already refused: don't fetch for a run that fails anyway
         elif ! git fetch -q origin "$branch" 2>/dev/null; then
             refuse "cannot fetch origin/$branch to check it holds the work"
         else
@@ -267,19 +283,18 @@ cmd_relay() {
         git stash list | sed 's/^/stash: /'
         git for-each-ref --format='%(refname:short)' refs/heads | while IFS= read -r b; do
             [ "$b" != "$branch" ] || continue
-            n="$(git rev-list --count "$b" --not --remotes)"
+            n="$(git rev-list --count "refs/heads/$b" --not --remotes --)"
             [ "$n" = 0 ] || echo "branch: $b ($n commit(s) on no remote)"
         done
-        git worktree list --porcelain | awk '/^worktree / { sub(/^worktree /, ""); print }' | sed 1d \
-            | while IFS= read -r wt; do
-                sha="$(git -C "$wt" rev-parse --short HEAD 2>/dev/null || echo "?")"
-                printf 'worktree: %s at %s' "$wt" "$sha"
-                n="$(git -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
-                [ "$n" = 0 ] || printf ', %s uncommitted' "$n"
-                n="$(git -C "$wt" rev-list --count HEAD --not --remotes 2>/dev/null || echo 0)"
-                [ "$n" = 0 ] || printf ', %s commit(s) on no remote' "$n"
-                echo
-            done
+        other_worktrees | while IFS= read -r wt; do
+            sha="$(git -C "$wt" rev-parse --short HEAD 2>/dev/null || echo "?")"
+            printf 'worktree: %s at %s' "$wt" "$sha"
+            n="$(git -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+            [ "$n" = 0 ] || printf ', %s uncommitted' "$n"
+            n="$(git -C "$wt" rev-list --count HEAD --not --remotes -- 2>/dev/null || echo 0)"
+            [ "$n" = 0 ] || printf ', %s commit(s) on no remote' "$n"
+            echo
+        done
     )"
     echo "source_url: $(clone_url "$origin")"
     echo "branch: $branch"
