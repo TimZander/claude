@@ -224,6 +224,11 @@ out="$(CLAUDE_CODE_REMOTE= bash "$H" state -C "$bw1")"
 printf '%s\n' "$out" | grep -qx 'other worktrees: 0' || { echo "$out"; fail "state listed a bare repository as a worktree"; }
 out="$(CLAUDE_CODE_REMOTE= bash "$H" state -C "$r")"
 printf '%s\n' "$out" | grep -qx "  $wt $(git -C "$wt" rev-parse --short HEAD)" || { echo "$out"; fail "state dropped a worktree's sha"; }
+# A nested worktree that lost its .git file: no sha borrowed from the checkout around it.
+git -C "$r" worktree add -q -b nested "$r/wts/x" HEAD 2>/dev/null && rm -f "$r/wts/x/.git"
+out="$(CLAUDE_CODE_REMOTE= bash "$H" state -C "$r")"
+printf '%s\n' "$out" | grep -qx "  $r/wts/x ?" || { echo "$out"; fail "state gave a broken worktree the enclosing repository's sha"; }
+rm -rf "$r/wts" && git -C "$r" worktree prune
 pass "relay refuses outside the cloud, on main, and with unsaved work, and reports what stays behind"
 
 echo "all handoff tests passed"

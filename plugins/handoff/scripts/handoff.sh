@@ -143,6 +143,12 @@ other_worktrees() {
         done
 }
 
+# A worktree's short HEAD, or `?` when its directory is gone or no longer a checkout (git would
+# otherwise answer for whatever repository encloses it).
+wt_sha() {
+    if [ -e "$1/.git" ]; then git -C "$1" rev-parse --short HEAD 2>/dev/null || echo "?"; else echo "?"; fi
+}
+
 # Copies stdin with a prefix on each line, up to 20 lines, then says how many more there were.
 capped() {
     awk -v p="$1" 'NR <= 20 { print p $0 } END { if (NR > 20) printf "%s... and %d more\n", p, NR - 20 }'
@@ -167,7 +173,7 @@ cmd_state() {
     worktrees="$(other_worktrees)"
     echo "other worktrees: $(printf '%s' "$worktrees" | grep -c . || true)"
     [ -z "$worktrees" ] || printf '%s\n' "$worktrees" | while IFS= read -r wt; do
-        echo "  $wt $(git -C "$wt" rev-parse --short HEAD 2>/dev/null || echo "?")"
+        echo "  $wt $(wt_sha "$wt")"
     done
     if in_cloud; then echo "cloud: yes"; else echo "cloud: no"; fi
 }
@@ -293,12 +299,16 @@ cmd_relay() {
             [ "$n" = 0 ] || echo "branch: ${b#refs/heads/} ($n commit(s) on no remote)"
         done
         other_worktrees | while IFS= read -r wt; do
-            sha="$(git -C "$wt" rev-parse --short HEAD 2>/dev/null || echo "?")"
+            sha="$(wt_sha "$wt")"
             printf 'worktree: %s at %s' "$wt" "$sha"
-            n="$(git -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
-            [ "$n" = 0 ] || printf ', %s uncommitted' "$n"
-            n="$(git -C "$wt" rev-list --count HEAD --not --remotes -- 2>/dev/null || echo 0)"
-            [ "$n" = 0 ] || printf ', %s commit(s) on no remote' "$n"
+            if [ "$sha" = "?" ]; then
+                printf ', not a checkout any more'
+            else
+                n="$(git -C "$wt" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+                [ "$n" = 0 ] || printf ', %s uncommitted' "$n"
+                n="$(git -C "$wt" rev-list --count HEAD --not --remotes -- 2>/dev/null || echo 0)"
+                [ "$n" = 0 ] || printf ', %s commit(s) on no remote' "$n"
+            fi
             echo
         done
     )"
