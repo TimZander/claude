@@ -89,13 +89,14 @@ skills). Not every repository uses it, so check which kind this one is before ch
 - **An sdd repository: follow its workflow.** A repository with `.claude/sdd-workflow.md`
   (imported by its `CLAUDE.md`) is set up for sdd. Read that file before changing anything, and
   follow its flow for every change, including its rules for recording decisions as ADRs.
-- **An opted-out repository: work normally.** A repository whose `CLAUDE.md` says it doesn't use
-  spec-driven development has opted out. Work as you would anywhere, and don't bring sdd up.
+- **An opted-out repository: work normally.** A repository whose `CLAUDE.md` says it
+  doesn't use spec-driven development has opted out. Work as you would anywhere, and don't
+  bring sdd up.
 - **Neither: ask once, at the first change.** Don't ask for questions, reviews or other
   read-only work. Before the first change, tell the owner the repository isn't set up for
   spec-driven development and offer three answers: set it up (`/sdd:init`); not now (don't ask
-  again this session); or never (add `This repository doesn't use spec-driven development
-  (sdd).` to its `CLAUDE.md`, creating the file if needed, and commit that on its own).
+  again this session); or never (`/sdd:opt-out`, which adds `This repository doesn't use
+  spec-driven development (sdd).` to its `CLAUDE.md` and commits it).
   Never run `/sdd:init` unasked: setting up a repository is the owner's decision.
 - **Use the sdd reviews.** `/sdd:spec-review` for the spec, `/sdd:conformance-review` for the
   code, and what the workflow adds for high-risk changes.

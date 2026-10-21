@@ -704,6 +704,29 @@ if [ -n "${SDD_TEST_OPENSPEC:-}" ]; then
     pass "real OpenSpec CLI: pins, check-specs, and a stale pin at archive time"
 fi
 
+# --- sdd-optout.sh: adds the line once, creates CLAUDE.md, refuses an sdd repository --------
+OPT="$SCRIPT_DIR/sdd-optout.sh"
+optline="This repository doesn't use spec-driven development (sdd)."
+expect_exit 2 bash "$OPT" --bogus
+expect_exit 1 bash "$OPT" --repo "$TMP_ROOT"
+o="$(fresh_repo)"
+bash "$OPT" --repo "$o" | tail -n 1 | grep -qx 'sdd-optout: done' || fail "opt-out without a CLAUDE.md"
+[ "$(cat "$o/CLAUDE.md")" = "$(printf '# CLAUDE.md\n\n%s' "$optline")" ] || { cat "$o/CLAUDE.md"; fail "opt-out created the wrong CLAUDE.md"; }
+o2="$(fresh_repo)"
+printf '# Mine\n\nNo trailing newline' > "$o2/CLAUDE.md"
+bash "$OPT" --repo "$o2" >/dev/null
+[ "$(cat "$o2/CLAUDE.md")" = "$(printf '# Mine\n\nNo trailing newline\n\n%s' "$optline")" ] || { cat "$o2/CLAUDE.md"; fail "opt-out mangled an existing CLAUDE.md"; }
+before="$(cat "$o2/CLAUDE.md")"
+bash "$OPT" --repo "$o2" | tail -n 1 | grep -qx 'sdd-optout: already opted out' || fail "second opt-out"
+[ "$(cat "$o2/CLAUDE.md")" = "$before" ] || fail "second opt-out changed CLAUDE.md"
+[ -z "$(git -C "$o2" log --oneline -1 -- CLAUDE.md)" ] || fail "opt-out committed"
+o3="$(fresh_repo)"
+mkdir -p "$o3/.claude" && echo x > "$o3/.claude/sdd-workflow.md"
+expect_exit 1 bash "$OPT" --repo "$o3"
+grep -q 'set up for sdd' "$TMP_ROOT/out" || fail "opt-out of an sdd repository not refused"
+[ ! -e "$o3/CLAUDE.md" ] || fail "a refused opt-out wrote CLAUDE.md"
+pass "sdd-optout adds the line once, creates CLAUDE.md, commits nothing, and refuses an sdd repository"
+
 # --- cloud-setup.sh: sdd only, always exits 0, updates an existing marketplace ---------
 CS="$SCRIPT_DIR/../cloud-setup.sh"
 fake="$TMP_ROOT/fakebin"
@@ -740,6 +763,7 @@ grep -q 'sdd-workflow.md' "$md" || fail "CLAUDE.md does not point at the sdd wor
 grep -q 'Never run `/sdd:init` unasked' "$md" || fail "CLAUDE.md does not say to ask before /sdd:init"
 grep -q "doesn't use spec-driven development" "$md" || fail "CLAUDE.md does not describe the opt-out"
 grep -q 'Neither: ask once, at the first change' "$md" || fail "CLAUDE.md does not limit the ask to once"
+grep -q '`/sdd:opt-out`' "$md" || fail "CLAUDE.md does not name /sdd:opt-out"
 grep -q 'recording decisions as ADRs' "$md" || fail "CLAUDE.md does not point at the ADR rules"
 grep -q '`/handoff`' "$md" || fail "CLAUDE.md does not mention /handoff"
 pass "cloud-setup writes a CLAUDE.md that points at the workflow, honors an opt-out, and asks once before /sdd:init"
