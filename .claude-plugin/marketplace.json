@@ -146,7 +146,7 @@
     },
     {
       "name": "sdd",
-      "description": "Spec-driven development on OpenSpec: fresh-agent spec review, a light conformance review of code against its spec (with a mutation spot check), fixes routed through the spec, mechanical archive PRs, and /sdd:init to set a repo up for the flow",
+      "description": "Spec-driven development on OpenSpec: fresh-agent spec review, a light conformance review of code against its spec (with a mutation spot check), fixes routed through the spec, mechanical archive PRs, /sdd:init to set a repo up for the flow, and /sdd:opt-out to mark one that won't use it",
       "author": { "name": "Tim Zander" },
       "source": "./plugins/sdd",
       "category": "development",

@@ -20,6 +20,14 @@ the version each repo pins. This plugin is a layer on top of them, not a fork.
 `/sdd:init` sets up the current repository, or updates one set up earlier. Run it again after
 updating the plugin.
 
+`/sdd:opt-out` does the opposite for a repository that won't use sdd: it adds *This repository
+doesn't use spec-driven development (sdd).* to its `CLAUDE.md` (creating the file if needed) and
+commits it, so an sdd environment works there normally and never asks to set it up. It refuses
+a repository that is already set up for sdd, and a `CLAUDE.md` with uncommitted changes; a
+symlinked `CLAUDE.md` is followed to its target. The line is matched exactly, as written in
+[`scripts/optout-line.txt`](scripts/optout-line.txt) (a quote inside a code fence doesn't count),
+and running `/sdd:init` later removes it again.
+
 ### In cloud sessions
 
 Use one cloud environment for all sdd work: **Add cloud environment…**, then paste
@@ -27,7 +35,13 @@ Use one cloud environment for all sdd work: **Add cloud environment…**, then p
 plugins a repository enables in its `.claude/settings.json`, so the script does it. It adds the
 `tzander-skills` marketplace (or updates it), installs `sdd`, `handoff` and `gh`, and writes a short
 `~/.claude/CLAUDE.md` that points every session at the repository's sdd workflow. If a repository
-isn't set up yet, the session tells you and asks rather than running `/sdd:init` itself. It
+isn't set up yet, the session asks once, before its first change, rather than running
+`/sdd:init` itself: set it up, not now, or never. "Never" runs `/sdd:opt-out`, which adds one
+line to the repository's `CLAUDE.md`, *This repository doesn't use spec-driven development
+(sdd).*, and commits it. Every later session reads it, so the environment works for repositories
+that won't use sdd too; removing the line undoes it. An
+existing environment picks up a new version of this text only when you paste the updated script
+into its settings. It
 installs nothing else: no shared team standards and no other plugins. `handoff` adds `/handoff`
 and `/pickup`, for resuming work across a `/clear` or in a new session.
 

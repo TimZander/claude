@@ -188,8 +188,48 @@ pass "init sets up a fresh repo"
 out="$(bash "$INIT" --repo "$r" --no-install)"
 if printf '%s\n' "$out" | grep -Eq '^  (added|updated|set) '; then echo "$out"; fail "second run changed files"; fi
 [ "$(grep -c 'sdd-workflow.md' "$r/CLAUDE.md")" = 1 ] || fail "import line duplicated"
+
 [ "$(grep -o 'session-start.sh' "$r/.claude/settings.json" | wc -l | tr -d ' ')" = 1 ] || fail "session hook duplicated"
 pass "init is idempotent"
+
+# --- sdd-init: removes an earlier opt-out ------------------------------------------
+optline="$(cat "$SCRIPT_DIR/optout-line.txt")"
+ro="$(fresh_repo)"
+printf '# Mine\n\nKeep this.\n\n%s\n\nThe docs tree doesn'"'"'t use spec-driven development (sdd).\n\n%s\r\n' "$optline" "$optline" > "$ro/CLAUDE.md"
+out="$(bash "$INIT" --repo "$ro" --no-install)" || { echo "$out"; fail "init on an opted-out repo"; }
+printf '%s\n' "$out" | grep -q "removed the sdd opt-out from CLAUDE.md" || { echo "$out"; fail "init did not report removing the opt-out"; }
+grep -qxF "$optline" "$ro/CLAUDE.md" && fail "init left the opt-out line"
+[ "$(sed -n 1,6p "$ro/CLAUDE.md")" = "$(printf "# Mine\n\nKeep this.\n\nThe docs tree doesn't use spec-driven development (sdd).\n")" ] \
+    || { cat -A "$ro/CLAUDE.md"; fail "init removed more than the exact opt-out line, or left a stray blank line"; }
+[ "$(sed -n 7p "$ro/CLAUDE.md")" = "## Spec-driven workflow" ] || { cat -A "$ro/CLAUDE.md"; fail "init left a stray blank line where the opt-out ended the file"; }
+grep -qxF '@.claude/sdd-workflow.md' "$ro/CLAUDE.md" || fail "init on an opted-out repo did not add the import"
+# Round trip: what /sdd:opt-out writes, /sdd:init removes, through a symlinked CLAUDE.md.
+rs="$(fresh_repo)"
+printf '# Agents\n\nRules.\n' > "$rs/AGENTS.md" && ln -s AGENTS.md "$rs/CLAUDE.md"
+git -C "$rs" add -A && git -C "$rs" commit -q -m agents
+bash "$SCRIPT_DIR/sdd-optout.sh" --repo "$rs" >/dev/null
+grep -qxF "$optline" "$rs/AGENTS.md" || fail "opt-out did not write through the symlink"
+git -C "$rs" commit -q -am optout
+bash "$INIT" --repo "$rs" --no-install >/dev/null
+[ -L "$rs/CLAUDE.md" ] || fail "init replaced a symlinked CLAUDE.md with a file"
+grep -qxF "$optline" "$rs/AGENTS.md" && fail "init left the opt-out in the symlink's target"
+# A CLAUDE.md that was only the opt-out gets the full template.
+rt="$(fresh_repo)"
+bash "$SCRIPT_DIR/sdd-optout.sh" --repo "$rt" >/dev/null
+bash "$INIT" --repo "$rt" --no-install >/dev/null
+grep -q '^## Project' "$rt/CLAUDE.md" || { cat "$rt/CLAUDE.md"; fail "init did not give an opt-out-only CLAUDE.md the template"; }
+# CRLF: blank lines are "\r", and the cleanup still drops the one the line leaves at the end.
+rc="$(fresh_repo)"
+printf '# Mine\r\n\r\nKeep.\r\n\r\n%s\r\n' "$optline" > "$rc/CLAUDE.md"
+bash "$INIT" --repo "$rc" --no-install >/dev/null
+[ "$(sed -n 4p "$rc/CLAUDE.md")" = "" ] && [ "$(sed -n 5p "$rc/CLAUDE.md")" = "## Spec-driven workflow" ] \
+    || { cat -A "$rc/CLAUDE.md"; fail "init left a stray CRLF blank line"; }
+# A quoted copy inside a fenced block is the repository's own text, not an opt-out.
+rf="$(fresh_repo)"
+printf '# Mine\n\n```\n%s\n```\n' "$optline" > "$rf/CLAUDE.md"
+bash "$INIT" --repo "$rf" --no-install >/dev/null
+grep -qxF "$optline" "$rf/CLAUDE.md" || fail "init removed a quoted opt-out inside a code fence"
+pass "init removes exactly the opt-out line, CRLF or not, keeps symlinks and fenced quotes, and templates an opt-out-only CLAUDE.md"
 
 # --- sdd-init: keeps the repo's own values, restores owned files -------------------
 r2="$(fresh_repo)"
@@ -704,6 +744,126 @@ if [ -n "${SDD_TEST_OPENSPEC:-}" ]; then
     pass "real OpenSpec CLI: pins, check-specs, and a stale pin at archive time"
 fi
 
+# --- sdd-optout.sh: adds the line once, creates CLAUDE.md, refuses what it would sweep up ----
+OPT="$SCRIPT_DIR/sdd-optout.sh"
+optline="$(cat "$SCRIPT_DIR/optout-line.txt")"
+[ -x "$OPT" ] || fail "sdd-optout.sh is not executable"
+expect_exit 2 bash "$OPT" --bogus
+expect_exit 1 bash "$OPT" --repo "$TMP_ROOT"
+o="$(fresh_repo)"
+bash "$OPT" --repo "$o" | tail -n 1 | grep -qx 'sdd-optout: done' || fail "opt-out without a CLAUDE.md"
+[ "$(cat "$o/CLAUDE.md")" = "$(printf '# CLAUDE.md\n\n%s' "$optline")" ] || { cat "$o/CLAUDE.md"; fail "opt-out created the wrong CLAUDE.md"; }
+o2="$(fresh_repo)"
+printf '# Mine\n\nNo trailing newline' > "$o2/CLAUDE.md"
+expect_exit 1 bash "$OPT" --repo "$o2"
+grep -q 'uncommitted changes' "$TMP_ROOT/out" || fail "opt-out did not refuse an uncommitted CLAUDE.md"
+git -C "$o2" add CLAUDE.md && git -C "$o2" commit -q -m mine
+bash "$OPT" --repo "$o2" >/dev/null
+[ "$(cat "$o2/CLAUDE.md")" = "$(printf '# Mine\n\nNo trailing newline\n\n%s' "$optline")" ] || { cat "$o2/CLAUDE.md"; fail "opt-out mangled an existing CLAUDE.md"; }
+git -C "$o2" commit -q -am optout
+before="$(cat "$o2/CLAUDE.md")"
+bash "$OPT" --repo "$o2" | tail -n 1 | grep -qx 'sdd-optout: already opted out' || fail "second opt-out"
+[ "$(cat "$o2/CLAUDE.md")" = "$before" ] || fail "second opt-out changed CLAUDE.md"
+o4="$(fresh_repo)"
+printf "# Mine\n\nThis repository doesn’t use spec-driven development (sdd).\n" > "$o4/CLAUDE.md"
+git -C "$o4" add CLAUDE.md && git -C "$o4" commit -q -m curly
+bash "$OPT" --repo "$o4" | tail -n 1 | grep -qx 'sdd-optout: done' || fail "opt-out took a look-alike line for the exact one"
+[ -z "$(git -C "$o4" log --oneline -1 -- CLAUDE.md | grep -v curly)" ] || fail "opt-out committed"
+o3="$(fresh_repo)"
+mkdir -p "$o3/.claude" && echo x > "$o3/.claude/sdd-workflow.md"
+expect_exit 1 bash "$OPT" --repo "$o3"
+grep -q 'set up for sdd' "$TMP_ROOT/out" || fail "opt-out of an sdd repository not refused"
+[ ! -e "$o3/CLAUDE.md" ] || fail "a refused opt-out wrote CLAUDE.md"
+# A symlinked CLAUDE.md: the target is the file to check, edit and commit.
+o5="$(fresh_repo)"
+printf '# Agents\n' > "$o5/AGENTS.md" && ln -s AGENTS.md "$o5/CLAUDE.md"
+git -C "$o5" add -A && git -C "$o5" commit -q -m agents
+echo "wip" >> "$o5/AGENTS.md"
+expect_exit 1 bash "$OPT" --repo "$o5"
+grep -q 'AGENTS.md has uncommitted changes' "$TMP_ROOT/out" || fail "opt-out missed uncommitted changes in the symlink's target"
+git -C "$o5" checkout -q -- AGENTS.md
+out="$(bash "$OPT" --repo "$o5")"
+printf '%s\n' "$out" | grep -qx 'file: AGENTS.md' || { echo "$out"; fail "opt-out did not name the symlink's target as the file to commit"; }
+# Set up for sdd by its import alone, and a fenced quote that isn't an opt-out.
+o6="$(fresh_repo)"
+printf '# Mine\n\n@.claude/sdd-workflow.md\n' > "$o6/CLAUDE.md" && git -C "$o6" add -A && git -C "$o6" commit -q -m sdd
+expect_exit 1 bash "$OPT" --repo "$o6"
+grep -q 'imports .claude/sdd-workflow.md' "$TMP_ROOT/out" || fail "opt-out of a CLAUDE.md that imports the workflow not refused"
+o7="$(fresh_repo)"
+printf '# Mine\n\n```\n%s\n```\n' "$optline" > "$o7/CLAUDE.md" && git -C "$o7" add -A && git -C "$o7" commit -q -m quote
+bash "$OPT" --repo "$o7" | tail -n 1 | grep -qx 'sdd-optout: done' || fail "opt-out took a fenced quote for the line"
+# An optout-line.txt checked out with CRLF still matches.
+crlf="$TMP_ROOT/crlf.$RANDOM" && mkdir -p "$crlf"
+cp "$OPT" "$crlf/" && printf '%s\r\n' "$optline" > "$crlf/optout-line.txt"
+bash "$crlf/sdd-optout.sh" --repo "$o2" | tail -n 1 | grep -qx 'sdd-optout: already opted out' || fail "a CRLF optout-line.txt did not match"
+# A link can't reach outside the repository however it is spelled; only test files are targets.
+outside="$TMP_ROOT/outside.$RANDOM.md" && echo keep > "$outside"
+for spelling in ".//$outside" "sub/../../$(basename "$outside")" "$outside"; do
+    o8="$(fresh_repo)" && mkdir -p "$o8/sub" && ln -s "$spelling" "$o8/CLAUDE.md"
+    git -C "$o8" add -A && git -C "$o8" commit -q -m link
+    expect_exit 1 bash "$OPT" --repo "$o8"
+    [ "$(cat "$outside")" = keep ] || fail "opt-out wrote outside the repository through $spelling"
+done
+# An absolute link through a symlinked path to the repository still counts as inside it.
+o9="$(fresh_repo)" && printf '# Agents\n' > "$o9/AGENTS.md"
+ln -s "$o9" "$TMP_ROOT/via.$RANDOM" && via="$(ls -d "$TMP_ROOT"/via.* | tail -n 1)"
+ln -s "$via/AGENTS.md" "$o9/CLAUDE.md" && git -C "$o9" add -A && git -C "$o9" commit -q -m via
+bash "$OPT" --repo "$o9" | grep -qx 'file: AGENTS.md' || fail "opt-out refused an absolute link through a symlinked path"
+# An empty linked file gets just the line, not a CLAUDE.md heading.
+o10="$(fresh_repo)" && : > "$o10/AGENTS.md" && ln -s AGENTS.md "$o10/CLAUDE.md"
+git -C "$o10" add -A && git -C "$o10" commit -q -m empty
+bash "$OPT" --repo "$o10" >/dev/null
+[ "$(cat "$o10/AGENTS.md")" = "$optline" ] || { cat "$o10/AGENTS.md"; fail "opt-out headed an empty linked file"; }
+# A large file is still read to the end: no early-exit pipe to miss the line.
+o11="$(fresh_repo)"
+{ printf '# Big\n\n%s\n\n' "$optline"; awk 'BEGIN { for (i = 0; i < 40000; i++) print "filler line " i }'; } > "$o11/CLAUDE.md"
+git -C "$o11" add -A && git -C "$o11" commit -q -m big
+bash "$OPT" --repo "$o11" | tail -n 1 | grep -qx 'sdd-optout: already opted out' || fail "opt-out missed the line in a large file"
+# A ~~~ inside a ``` block doesn't close it: the line after the block is plain text.
+o12="$(fresh_repo)"
+printf '# Mine\n\n```md\n~~~\n```\n' > "$o12/CLAUDE.md" && git -C "$o12" add -A && git -C "$o12" commit -q -m fences
+bash "$OPT" --repo "$o12" >/dev/null && git -C "$o12" commit -q -am optout
+bash "$OPT" --repo "$o12" | tail -n 1 | grep -qx 'sdd-optout: already opted out' || fail "opt-out lost track of a fence and added the line twice"
+bash "$INIT" --repo "$o12" --no-install >/dev/null
+grep -qxF "$optline" "$o12/CLAUDE.md" && fail "init lost track of a fence and kept the opt-out"
+# `link/..` resolves the way the kernel does: through the link first.
+elsewhere="$TMP_ROOT/elsewhere.$RANDOM" && mkdir -p "$elsewhere/dir" && echo keep > "$elsewhere/AGENTS.md"
+o13="$(fresh_repo)" && printf '# Agents\n' > "$o13/AGENTS.md"
+ln -s "$elsewhere/dir" "$o13/lnk" && ln -s lnk/../AGENTS.md "$o13/CLAUDE.md"
+git -C "$o13" add -A && git -C "$o13" commit -q -m dotdot
+expect_exit 1 bash "$OPT" --repo "$o13"
+grep -qxF "$optline" "$o13/AGENTS.md" && fail "opt-out edited the repo's AGENTS.md for a link that leaves it"
+[ "$(cat "$elsewhere/AGENTS.md")" = keep ] || fail "opt-out wrote outside the repository through link/.."
+# CDPATH can't redirect the lookup.
+o14="$(fresh_repo)" && mkdir -p "$o14/docs" "$elsewhere/cd/docs" && printf '# Agents\n' > "$o14/docs/AGENTS.md"
+ln -s docs/AGENTS.md "$o14/CLAUDE.md" && git -C "$o14" add -A && git -C "$o14" commit -q -m docs
+CDPATH="$elsewhere/cd" bash "$OPT" --repo "$o14" | grep -qx 'file: docs/AGENTS.md' || fail "CDPATH redirected the link lookup"
+# A trailing slash, a name starting with -, and a glob that matches a committed file.
+o15="$(fresh_repo)" && printf '# Agents\n' > "$o15/AGENTS.md" && git -C "$o15" add -A && git -C "$o15" commit -q -m agents
+for spelling in "AGENTS.md/" "-/AGENTS.md" "A*.md"; do
+    rm -f "$o15/CLAUDE.md" && ln -s -- "$spelling" "$o15/CLAUDE.md"
+    mkdir -p "$o15/-" && echo x > "$o15/-/AGENTS.md" && echo x > "$o15/A*.md"
+    printf '/-/\n/A*.md\n/CLAUDE.md\n' > "$o15/.git/info/exclude"
+    expect_exit 1 bash "$OPT" --repo "$o15"
+    tail -n 1 "$TMP_ROOT/out" | grep -qx 'sdd-optout: failed' || { cat "$TMP_ROOT/out"; fail "opt-out through $spelling didn't end with its failed line"; }
+done
+grep -qxF "$optline" "$o15/AGENTS.md" "$o15/-/AGENTS.md" "$o15/A*.md" && fail "opt-out edited a file through a link it should refuse"
+# Fences: 4 spaces of indent is code, not a fence; a backtick info string with a backtick isn't
+# a fence; a fence left open at the end is refused.
+o16="$(fresh_repo)"
+printf '# Mine\n\n    ```\n' > "$o16/CLAUDE.md" && git -C "$o16" add -A && git -C "$o16" commit -q -m indented
+bash "$OPT" --repo "$o16" >/dev/null && git -C "$o16" commit -q -am optout
+bash "$OPT" --repo "$o16" | tail -n 1 | grep -qx 'sdd-optout: already opted out' || fail "opt-out took an indented code line for a fence"
+o17="$(fresh_repo)"
+printf '# Mine\n\n```a`b\n' > "$o17/CLAUDE.md" && git -C "$o17" add -A && git -C "$o17" commit -q -m infostring
+bash "$OPT" --repo "$o17" >/dev/null && git -C "$o17" commit -q -am optout
+bash "$OPT" --repo "$o17" | tail -n 1 | grep -qx 'sdd-optout: already opted out' || fail "opt-out took a backtick info string for a fence"
+o18="$(fresh_repo)"
+printf '# Mine\n\n```\nopen\n' > "$o18/CLAUDE.md" && git -C "$o18" add -A && git -C "$o18" commit -q -m open
+expect_exit 1 bash "$OPT" --repo "$o18"
+grep -q 'unclosed code fence' "$TMP_ROOT/out" || fail "opt-out appended after an unclosed fence"
+pass "sdd-optout adds the exact line once, follows a link only inside the repository, reads Markdown fences and large files right, and refuses an sdd repository or uncommitted changes"
+
 # --- cloud-setup.sh: sdd only, always exits 0, updates an existing marketplace ---------
 CS="$SCRIPT_DIR/../cloud-setup.sh"
 fake="$TMP_ROOT/fakebin"
@@ -738,9 +898,12 @@ md="$TMP_ROOT/cshome/.claude/CLAUDE.md"
 [ -f "$md" ] || fail "cloud-setup wrote no ~/.claude/CLAUDE.md"
 grep -q 'sdd-workflow.md' "$md" || fail "CLAUDE.md does not point at the sdd workflow"
 grep -q 'Never run `/sdd:init` unasked' "$md" || fail "CLAUDE.md does not say to ask before /sdd:init"
+grep -qF "$(cat "$SCRIPT_DIR/optout-line.txt")" "$md" || fail "CLAUDE.md does not name the exact opt-out line"
+grep -q 'Neither: ask once, at the first change' "$md" || fail "CLAUDE.md does not limit the ask to once"
+grep -q '`/sdd:opt-out`' "$md" || fail "CLAUDE.md does not name /sdd:opt-out"
 grep -q 'recording decisions as ADRs' "$md" || fail "CLAUDE.md does not point at the ADR rules"
 grep -q '`/handoff`' "$md" || fail "CLAUDE.md does not mention /handoff"
-pass "cloud-setup writes a CLAUDE.md that points at the workflow and asks before /sdd:init"
+pass "cloud-setup writes a CLAUDE.md that points at the workflow, honors an opt-out, and asks once before /sdd:init"
 
 FAKE_MARKETPLACE_EXISTS=1 cs_run
 grep -qx 'plugin marketplace update tzander-skills' "$FAKE_LOG" || { cat "$FAKE_LOG"; fail "cloud-setup did not update an existing marketplace"; }
