@@ -50,8 +50,10 @@ It is `${CLAUDE_PLUGIN_ROOT}/scripts/handoff.sh`. If that path still reads liter
    before running them, so keep them few and plain.
 4. **Push it.** Run `<handoff> commit <note>`. If it refuses, stop and report why; nothing has
    been relayed.
-5. **Run the preflight.** Run `<handoff> relay <note>`. It fetches the branch first. If it
-   refuses (exit 1), report every reason it gave and stop: the work isn't all on
+5. **Run the preflight.** Run `<handoff> relay <note>`. Once its first checks pass (a cloud
+   session, a work branch tracking `origin/<branch>`, a committed note), it fetches the branch
+   and checks for unpushed and unpulled commits, so fixing one refusal can reveal another. If
+   it refuses (exit 1), report every reason it gave and stop: the work isn't all on
    `origin/<branch>`, so nothing is relayed. The note is committed, so the user can fix what it
    named (commit, push or pull the work, or track `origin/<branch>`) and run `/handoff:relay`
    again, which replaces the note. On success it prints `source_url`, `branch`, `head`,

@@ -130,11 +130,14 @@ ahead_behind() {
 }
 
 # The paths of the repository's other worktrees: every one but this checkout, which needn't be
-# the first `git worktree list` shows (relay can run from a linked worktree).
+# the first `git worktree list` shows (relay can run from a linked worktree), and never a bare
+# repository's own entry, which has no checkout.
 other_worktrees() {
     local here wt
     here="$(pwd -P)"
-    git worktree list --porcelain | awk '/^worktree / { sub(/^worktree /, ""); print }' \
+    git worktree list --porcelain \
+        | awk '/^worktree / { p = substr($0, 10) } /^bare$/ { p = "" }
+               /^$/ { if (p != "") print p; p = "" } END { if (p != "") print p }' \
         | while IFS= read -r wt; do
             [ "$(cd "$wt" 2>/dev/null && pwd -P)" = "$here" ] || printf '%s\n' "$wt"
         done
@@ -146,7 +149,7 @@ capped() {
 }
 
 cmd_state() {
-    local branch upstream counts status worktrees
+    local branch upstream counts status worktrees wt
     branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "(detached at $(git rev-parse --short HEAD 2>/dev/null || echo none))")"
     echo "branch: $branch"
     if upstream="$(upstream_of HEAD)"; then
@@ -163,7 +166,9 @@ cmd_state() {
     echo "stashes: $(git stash list | wc -l | tr -d ' ')"
     worktrees="$(other_worktrees)"
     echo "other worktrees: $(printf '%s' "$worktrees" | grep -c . || true)"
-    [ -z "$worktrees" ] || printf '%s\n' "$worktrees" | sed 's/^/  /'
+    [ -z "$worktrees" ] || printf '%s\n' "$worktrees" | while IFS= read -r wt; do
+        echo "  $wt $(git -C "$wt" rev-parse --short HEAD 2>/dev/null || echo "?")"
+    done
     if in_cloud; then echo "cloud: yes"; else echo "cloud: no"; fi
 }
 
@@ -281,10 +286,11 @@ cmd_relay() {
         git ls-files --others --exclude-standard | sed 's/^/untracked: /'
         git ls-files --others --ignored --exclude-standard --directory | sed 's/^/ignored: /'
         git stash list | sed 's/^/stash: /'
-        git for-each-ref --format='%(refname:short)' refs/heads | while IFS= read -r b; do
-            [ "$b" != "$branch" ] || continue
-            n="$(git rev-list --count "refs/heads/$b" --not --remotes --)"
-            [ "$n" = 0 ] || echo "branch: $b ($n commit(s) on no remote)"
+        # Full ref names: a short name can come out as `heads/<name>` when a tag shares it.
+        git for-each-ref --format='%(refname)' refs/heads | while IFS= read -r b; do
+            [ "$b" != "refs/heads/$branch" ] || continue
+            n="$(git rev-list --count "$b" --not --remotes --)"
+            [ "$n" = 0 ] || echo "branch: ${b#refs/heads/} ($n commit(s) on no remote)"
         done
         other_worktrees | while IFS= read -r wt; do
             sha="$(git -C "$wt" rev-parse --short HEAD 2>/dev/null || echo "?")"

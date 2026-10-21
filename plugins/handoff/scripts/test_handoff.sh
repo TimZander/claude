@@ -200,6 +200,11 @@ git -C "$r" branch -q README.md main
 out="$(CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn" 2>&1)"
 printf '%s\n' "$out" | grep -qx '  branch: README.md (1 commit(s) on no remote)' || { echo "$out"; fail "relay miscounted a branch named like a file"; }
 git -C "$r" branch -q -D README.md
+# A branch that shares its name with a tag still gets its unpushed commits counted.
+git -C "$r" branch -q dup main && git -C "$r" tag dup main
+out="$(CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn" 2>&1)"
+printf '%s\n' "$out" | grep -qx '  branch: dup (1 commit(s) on no remote)' || { echo "$out"; fail "relay miscounted a branch that shares a tag's name"; }
+git -C "$r" branch -q -D dup && git -C "$r" tag -d dup >/dev/null
 # Run from the linked worktree: the main checkout is the one left behind, not this one.
 git -C "$wt" checkout -q -b wt-work && git -C "$wt" push -q -u origin wt-work 2>/dev/null
 git -C "$wt" add -f "$rn" 2>/dev/null || true
@@ -210,6 +215,15 @@ git -C "$r" checkout -q main
 expect_exit 1 env CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn"
 grep -q 'on main' "$TMP_ROOT/out" || fail "relay on main not refused"
 grep -q 'cannot fetch' "$TMP_ROOT/out" && fail "relay fetched for a run it had already refused"
+# A bare repository with linked worktrees: the bare repository is no worktree to report.
+bare2="$TMP_ROOT/bare2.$RANDOM.git"
+git clone -q --bare "$bare" "$bare2" 2>/dev/null
+git -C "$bare2" worktree add -q "$TMP_ROOT/bw1.$RANDOM" work 2>/dev/null
+bw1="$(git -C "$bare2" worktree list --porcelain | awk '/^worktree / { p = substr($0, 10) } END { print p }')"
+out="$(CLAUDE_CODE_REMOTE= bash "$H" state -C "$bw1")"
+printf '%s\n' "$out" | grep -qx 'other worktrees: 0' || { echo "$out"; fail "state listed a bare repository as a worktree"; }
+out="$(CLAUDE_CODE_REMOTE= bash "$H" state -C "$r")"
+printf '%s\n' "$out" | grep -qx "  $wt $(git -C "$wt" rev-parse --short HEAD)" || { echo "$out"; fail "state dropped a worktree's sha"; }
 pass "relay refuses outside the cloud, on main, and with unsaved work, and reports what stays behind"
 
 echo "all handoff tests passed"
