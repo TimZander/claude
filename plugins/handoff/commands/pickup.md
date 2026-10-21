@@ -31,7 +31,8 @@ It is `${CLAUDE_PLUGIN_ROOT}/scripts/handoff.sh`. If that path still reads liter
    - More than one note: name them all with their next actions, resume the newest, and say that
      the others are still waiting (the user can delete one with `<handoff> drop <note>`).
 2. **Read the note's four sections**: Current state, Next action, Remaining work, Decisions &
-   gotchas.
+   gotchas, and **Recreate the environment** when it has one (a `/handoff:relay` note, written
+   for a new cloud session).
 3. **Check it against reality first.** Run `<handoff> state` and compare it with **Current
    state**: the branch, uncommitted files, ahead/behind. If they disagree (another branch, work
    that is gone, commits the note doesn't mention), tell the user what differs and ask before
@@ -49,6 +50,7 @@ It is `${CLAUDE_PLUGIN_ROOT}/scripts/handoff.sh`. If that path still reads liter
    and the commit is pushed when the note was on the upstream, so `remote` can't find it again.
    On `main` or `master` (a note whose PR merged before pickup), `drop` only stages the
    deletion: make it the first commit of the next work branch. Report what `drop` printed.
-7. **Start from the literal Next action**, then work the Remaining work in order. Commit only as
+7. **Recreate the environment first**, if the note has that section: run its commands in order,
+   and report any that fail before going on. Then **start from the literal Next action**, then work the Remaining work in order. Commit only as
    the repository's own rules and the user say; apart from removing a committed note, resuming
    doesn't commit anything.

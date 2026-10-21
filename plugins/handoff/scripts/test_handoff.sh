@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Smoke test for handoff.sh: usage errors, note naming and the local exclude, open's order
 # and next actions, the state facts, commit's refusals and push, remote, and drop for a local
-# note, a pushed one, an unpushed one, and one on main. Uses real git repos with a bare origin, offline.
+# note, a pushed one, an unpushed one, and one on main; relay's refusals, its clone URL and what
+# it reports left behind. Uses real git repos with a bare origin, offline.
 #
 #   bash plugins/handoff/scripts/test_handoff.sh
 
@@ -132,5 +133,44 @@ grep -q 'first commit of the next work branch' "$TMP_ROOT/out" || fail "drop on 
 [ "$(git -C "$r" rev-parse HEAD)" = "$head_before" ] || fail "drop committed on main"
 [ "$(git -C "$r" diff --cached --name-status)" = "$(printf 'D\tdocs/handoffs/2026-03-01.md')" ] || fail "drop on main didn't stage the deletion"
 pass "drop pushes only a note the upstream has, and stages the deletion on main"
+
+# --- relay: refusals, then the facts for create_session --------------------------------------
+git -C "$r" checkout -q work && git -C "$r" stash pop -q
+rn="docs/handoffs/2026-04-01.md"
+printf '# Relay\n\n## Next action\nGo\n' > "$r/$rn"
+expect_exit 1 env CLAUDE_CODE_REMOTE= bash "$H" relay -C "$r" "$rn"
+grep -q 'not a cloud session' "$TMP_ROOT/out" || fail "relay outside a cloud session not refused"
+expect_exit 1 env CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn"
+grep -q 'is not committed' "$TMP_ROOT/out" || fail "relay with an uncommitted note not refused"
+grep -q 'uncommitted changes would be lost' "$TMP_ROOT/out" || fail "relay with uncommitted changes not refused"
+git -C "$r" commit -q -am "wip"
+git -C "$r" add -f "$rn" && git -C "$r" commit -q -m relay -- "$rn"
+expect_exit 1 env CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn"
+grep -q '[0-9] commit(s) not pushed' "$TMP_ROOT/out" || fail "relay with unpushed commits not refused"
+git -C "$r" push -q
+echo scratch > "$r/scratch.txt"
+git -C "$r" worktree add -q --detach "$TMP_ROOT/wt.$RANDOM" HEAD
+out="$(CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn")" || { echo "$out"; fail "relay refused a pushed branch"; }
+printf '%s\n' "$out" | grep -qx 'branch: work' || { echo "$out"; fail "relay branch"; }
+printf '%s\n' "$out" | grep -qx "head: $(git -C "$r" rev-parse HEAD)" || fail "relay head"
+printf '%s\n' "$out" | grep -qx "prompt: /handoff:pickup $rn" || fail "relay prompt"
+printf '%s\n' "$out" | grep -qx 'shallow: no' || fail "relay shallow"
+printf '%s\n' "$out" | grep -qx 'left behind: 2' || { echo "$out"; fail "relay left-behind count"; }
+printf '%s\n' "$out" | grep -qx '  untracked: scratch.txt' || fail "relay did not report an untracked file"
+printf '%s\n' "$out" | grep -q '^  worktree: ' || fail "relay did not report a worktree"
+printf '%s\n' "$out" | grep -q "untracked: $rn" && fail "relay reported the note as untracked"
+for pair in "git@github.com:o/r.git|https://github.com/o/r" \
+            "ssh://git@github.com/o/r.git|https://github.com/o/r" \
+            "https://x-access-token:t@github.com/o/r.git|https://github.com/o/r" \
+            "http://local_proxy@127.0.0.1:41234/git/o/r|https://github.com/o/r" \
+            "https://github.com/o/r|https://github.com/o/r"; do
+    git -C "$r" remote set-url origin "${pair%%|*}"
+    got="$(CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn" | sed -n 's/^source_url: //p')"
+    [ "$got" = "${pair##*|}" ] || fail "clone url for ${pair%%|*}: $got"
+done
+git -C "$r" checkout -q main
+expect_exit 1 env CLAUDE_CODE_REMOTE=true bash "$H" relay -C "$r" "$rn"
+grep -q 'on main' "$TMP_ROOT/out" || fail "relay on main not refused"
+pass "relay refuses outside the cloud, on main, and with unsaved work, and reports what stays behind"
 
 echo "all handoff tests passed"

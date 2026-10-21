@@ -30,6 +30,15 @@
 #       machine. Refuses on main or master, never forces, and leaves every other change
 #       uncommitted. `drop` takes the note back out once it is picked up.
 #
+#   bash handoff.sh relay  [-C <dir>] <note>
+#       Preflight for /handoff:relay, which moves the work to a new cloud session and archives
+#       this one. Refuses (exit 1, each reason on stderr) unless this is a cloud session, on a
+#       work branch, with the note committed, nothing uncommitted and nothing unpushed: a new
+#       session starts from a fresh clone of the remote branch, and archiving this one throws
+#       away its container. Then prints `key: value` lines for create_session: source_url,
+#       branch, head, shallow, prompt, and `left behind:` with what the clone won't have
+#       (untracked files, stashes, other worktrees), one per indented line.
+#
 #   bash handoff.sh drop   [-C <dir>] <note>
 #       Deletes a note that has been picked up or replaced. If it was committed, also commits
 #       the deletion (that path alone), so the note doesn't reach the base branch with the
@@ -181,6 +190,58 @@ cmd_commit() {
     echo "pushed $branch"
 }
 
+# origin as a URL a new cloud session can clone: credentials stripped, an SSH remote or the
+# cloud git proxy (http://...@127.0.0.1:<port>/git/<owner>/<repo>) turned into https.
+clone_url() {
+    printf '%s' "$1" | sed -E \
+        -e 's#^git@([^:]+):#https://\1/#' \
+        -e 's#^ssh://([^@/]+@)?([^/:]+)(:[0-9]+)?/#https://\2/#' \
+        -e 's#^(https?://)[^@/]+@#\1#' \
+        -e 's#^https?://(127\.0\.0\.1|localhost)(:[0-9]+)?/git/#https://github.com/#' \
+        -e 's#\.git$##'
+}
+
+cmd_relay() {
+    [ $# -eq 1 ] || usage
+    local note branch="" upstream counts origin bad=0 untracked stashes worktrees
+    note="$(note_rel "$1")"
+    refuse() { echo "handoff: relay: $*" >&2; bad=1; }
+    [ "${CLAUDE_CODE_REMOTE:-}" = "true" ] || refuse "not a cloud session; outside one, use /handoff, /clear and /pickup"
+    if branch="$(git symbolic-ref --quiet --short HEAD)"; then
+        case "$branch" in main|master) refuse "on $branch; the new session needs a work branch to continue on" ;; esac
+    else
+        branch=""
+        refuse "not on a branch: check out the work branch first"
+    fi
+    git cat-file -e "HEAD:$note" 2>/dev/null || refuse "$note is not committed: run \`handoff.sh commit $note\` first"
+    if upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)"; then
+        counts="$(git rev-list --left-right --count "$upstream...HEAD")"
+        [ "${counts##*[[:space:]]}" = 0 ] || refuse "${counts##*[[:space:]]} commit(s) not pushed to $upstream"
+        [ "${counts%%[[:space:]]*}" = 0 ] || refuse "$upstream has ${counts%%[[:space:]]*} commit(s) this checkout lacks: pull them, and update the note if they change it"
+    else
+        refuse "${branch:-HEAD} has no upstream: push it first"
+    fi
+    if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+        refuse "uncommitted changes would be lost with this container:"
+        git status --porcelain --untracked-files=no | head -n 20 | sed 's/^/  /' >&2
+    fi
+    origin="$(git remote get-url origin 2>/dev/null)" || refuse "no origin remote to clone from"
+    [ "$bad" = 0 ] || exit 1
+
+    untracked="$(git ls-files --others --exclude-standard)"
+    stashes="$(git stash list)"
+    worktrees="$(git worktree list | sed 1d)"
+    echo "source_url: $(clone_url "$origin")"
+    echo "branch: $branch"
+    echo "head: $(git rev-parse HEAD)"
+    if [ "$(git rev-parse --is-shallow-repository)" = true ]; then echo "shallow: yes"; else echo "shallow: no"; fi
+    echo "prompt: /handoff:pickup $note"
+    echo "left behind: $( { [ -z "$untracked" ] || printf '%s\n' "$untracked"; [ -z "$stashes" ] || printf '%s\n' "$stashes"; [ -z "$worktrees" ] || printf '%s\n' "$worktrees"; } | wc -l | tr -d ' ')"
+    [ -z "$untracked" ] || printf '%s\n' "$untracked" | head -n 20 | sed 's/^/  untracked: /'
+    [ -z "$stashes" ] || printf '%s\n' "$stashes" | sed 's/^/  stash: /'
+    [ -z "$worktrees" ] || printf '%s\n' "$worktrees" | sed 's/^/  worktree: /'
+}
+
 cmd_drop() {
     [ $# -eq 1 ] || usage
     local note branch pushed=""
@@ -215,6 +276,7 @@ case "$cmd" in
     open) cmd_open "$@" ;;
     remote) cmd_remote "$@" ;;
     commit) cmd_commit "$@" ;;
+    relay) cmd_relay "$@" ;;
     drop) cmd_drop "$@" ;;
     -h|--help|help) usage ;;
     *) usage ;;
