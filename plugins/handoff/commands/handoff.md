@@ -80,5 +80,9 @@ It is `${CLAUDE_PLUGIN_ROOT}/scripts/handoff.sh`. If that path still reads liter
    up is still on the branch: `/craft-pr` refuses to describe a branch that adds one, and
    `<handoff> drop <note>` removes it.
 7. **Tell the user** the note's path, whether it was committed, and how to resume: `/clear`, then
-   `/pickup` or `/hp` (in a new session: check out the branch first). In a cloud session, suggest
-   `/handoff:relay` instead of `/clear`.
+   `/pickup` or `/hp` (in a new session: check out the branch first). In a cloud session
+   (`cloud: yes`), don't suggest `/clear`; warn against it instead: a worker restart after an
+   idle spell can bring back the context from before a `/clear`, which doesn't remember its own
+   later work. Give the safe ways on: `/handoff:relay` (`/hr`) to continue in a new session now,
+   `/pickup` in a session started later, or simply carrying on here, since without a `/clear`
+   there is no older context to come back.

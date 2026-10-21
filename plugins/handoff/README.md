@@ -44,6 +44,10 @@ later work: it finds commits it doesn't recognize and decides another session ma
    `/handoff:pickup <note>` as its only prompt;
 5. gives you its link, and archives this session once you confirm the new one has picked up.
 
+`/handoff` still works in a cloud session, for a pause or when relay isn't available, but it
+never suggests `/clear` there: it warns against it and points to relay, a later `/pickup` in a
+new session, or carrying on in this one.
+
 The new session may ask for tool approvals again: it inherits this session's permission mode,
 never a wider one.
 
