@@ -1,6 +1,6 @@
 {
   "name": "sdd",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Spec-driven development on OpenSpec: spec review, conformance review, fixes through the spec, archive PRs with base pins, CI checks that requirements change only through a change, an installer that sets a repo up for the flow, and /sdd:opt-out to mark a repo that won't use it",
   "author": {
     "name": "Tim Zander"

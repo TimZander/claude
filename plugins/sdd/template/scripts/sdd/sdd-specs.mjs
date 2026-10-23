@@ -23,7 +23,8 @@
 //       archive order, so a change archived earlier in the same PR counts.
 //
 //   node sdd-specs.mjs requirements [-C <repo>] --base <rev> --result <rev>
-//       Do the main specs change only through a change? Last line
+//       Do the main specs change only through a change? An active change on <base> may not be
+//       edited, except to tick its open tasks. Last line
 //       `requirements-through-change: success|failure`.
 //
 //   node sdd-specs.mjs spec-diff [-C <repo>] --base <rev> --result <rev> --out <file>
@@ -718,6 +719,48 @@ function loadPair(env, baseRev, resultRev) {
 const MAIN_SPEC = /^openspec\/specs\/(.+)\/spec\.md$/
 
 /**
+ * Is `after` the open task line `before`, ticked? OpenSpec must read `before` as an open task,
+ * and only the checkbox's inside may differ, becoming exactly `x` (which OpenSpec reads as done):
+ * every open form the archive gate counts (`[ ]`, `[]`, `[~]`) can be ticked, and nothing else.
+ * @param {Parser} parser
+ * @param {string} before
+ * @param {string} after
+ */
+function isTick(parser, before, after) {
+  if (parser.parseTaskLines(before.replace(/\r$/, ''))[0]?.done !== false) {
+    return false
+  }
+  const open = before.indexOf('[')
+  const close = before.indexOf(']', open)
+  return open >= 0 && close > open && after === `${before.slice(0, open)}[x]${before.slice(close + 1)}`
+}
+
+/**
+ * Does the edit to an active change only tick its open tasks? Then a change merged with a task
+ * left open can still be finished and archived. Only its tasks.md may differ, and only by open
+ * tasks on the base becoming ticked (isTick): every other line the same.
+ * @param {Parser} parser
+ * @param {Tree} base
+ * @param {Tree} result
+ * @param {string[]} files
+ * @param {string} change
+ */
+function onlyTicks(parser, base, result, files, change) {
+  const path = `${CHANGES_DIR}/${change}/tasks.md`
+  if (files.some(x => x.startsWith(`${CHANGES_DIR}/${change}/`) && x !== path)) {
+    return false
+  }
+  const before = base.text(path)
+  const after = result.text(path)
+  if (before === null || after === null) {
+    return false
+  }
+  const a = before.split('\n')
+  const b = after.split('\n')
+  return a.length === b.length && a.every((line, i) => line === b[i] || isTick(parser, line, b[i]))
+}
+
+/**
  * @param {Env} env
  * @param {string} baseRev
  * @param {string} resultRev
@@ -783,7 +826,7 @@ async function cmdRequirements(env, baseRev, resultRev) {
       if (!archived.has(name)) {
         items.push(`${name}: deleted instead of archived`)
       }
-    } else if (p.files.some(x => x.startsWith(`${CHANGES_DIR}/${name}/`))) {
+    } else if (p.files.some(x => x.startsWith(`${CHANGES_DIR}/${name}/`)) && !onlyTicks(parser, p.base, p.result, p.files, name)) {
       items.push(`${name}: an active change on the base was edited`)
     }
   }
