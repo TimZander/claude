@@ -605,6 +605,18 @@ printf -- '- [x] 1.1 done\n1. [x] 1.2 not yet\nA note.' > "$rp/openspec/changes/
 git -C "$rp" commit -q -am noeol-append
 expect_exit 1 node "$SPECS" requirements -C "$rp" --base "$nbase" --result HEAD
 grep -qx -- '- a-menu: an active change on the base was edited' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a line appended without a final newline not refused"; }
+# Only an open task can be ticked: not a line that merely holds brackets, nor a done task.
+git -C "$rp" checkout -q -b tick-notask "$tbase"
+printf -- '- [x] 1.1 done\n1. [ ] 1.2 not yet\nSee [ref] here.\n- [X] 1.3 done\n' > "$rp/openspec/changes/a-menu/tasks.md"
+git -C "$rp" commit -q -am notask-base
+xbase="$(git -C "$rp" rev-parse HEAD)"
+for after in 'See [x] here.\n- [X] 1.3 done' 'See [ref] here.\n- [x] 1.3 done'; do
+    git -C "$rp" checkout -q -B tick-notask-edit "$xbase"
+    printf -- "- [x] 1.1 done\n1. [x] 1.2 not yet\n$after\n" > "$rp/openspec/changes/a-menu/tasks.md"
+    git -C "$rp" commit -q -am notask-edit
+    expect_exit 1 node "$SPECS" requirements -C "$rp" --base "$xbase" --result HEAD
+    grep -qx -- '- a-menu: an active change on the base was edited' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a tick of a non-open line not refused: $after"; }
+done
 git -C "$rp" checkout -q tasks
 pass "requirements-through-change lets a change PR tick an active change's tasks, and nothing more"
 
@@ -789,7 +801,19 @@ if [ -n "${SDD_TEST_OPENSPEC:-}" ]; then
     expect_exit 1 bash "$rr/scripts/sdd/sdd-archive.sh" verify -C "$rr" --base "$rbase" --result HEAD
     grep -q '^- b-real: nav / NAV-1 Menu changed since the delta was written' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "real: stale pin"; }
     out="$(node "$rr/scripts/sdd/sdd-specs.mjs" requirements -C "$rr" --base "$rbase" --result HEAD)" || { echo "$out"; fail "real: requirements"; }
-    pass "real OpenSpec CLI: pins, check-specs, and a stale pin at archive time"
+    # Every open form the real parser counts can be ticked, so none is left stuck.
+    git -C "$rr" checkout -q -b odd "$rbase"
+    printf -- '- [ ] 1.1 a\n- [] 1.2 b\n- [~] 1.3 c\n-[ ] 1.4 d\n- [  ] 1.5 e\r\n' > "$rr/openspec/changes/a-real/tasks.md"
+    git -C "$rr" commit -q -am odd-open
+    obase="$(git -C "$rr" rev-parse HEAD)"
+    printf -- '- [x] 1.1 a\n- [x] 1.2 b\n- [x] 1.3 c\n-[x] 1.4 d\n- [x] 1.5 e\r\n' > "$rr/openspec/changes/a-real/tasks.md"
+    git -C "$rr" commit -q -am odd-ticked
+    out="$(node "$rr/scripts/sdd/sdd-specs.mjs" requirements -C "$rr" --base "$obase" --result HEAD)" || { echo "$out"; fail "real: ticking every open form"; }
+    printf -- '- [x] 1.1 a\n- [x] 1.2 b\n- [x] 1.3 c\n-[x] 1.4 d!\n- [x] 1.5 e\r\n' > "$rr/openspec/changes/a-real/tasks.md"
+    git -C "$rr" commit -q -am odd-text
+    expect_exit 1 node "$rr/scripts/sdd/sdd-specs.mjs" requirements -C "$rr" --base "$obase" --result HEAD
+    grep -qx -- '- a-real: an active change on the base was edited' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "real: a tick with text not refused"; }
+    pass "real OpenSpec CLI: pins, check-specs, a stale pin at archive time, and ticking every open form"
 fi
 
 # --- sdd-optout.sh: adds the line once, creates CLAUDE.md, refuses what it would sweep up ----
