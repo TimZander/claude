@@ -560,6 +560,54 @@ expect_exit 1 bash "$ARC" verify -C "$rp" --base "$tbase" --result HEAD
 grep -qx -- '- a-menu: 1 unfinished task in tasks.md' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "open task not reported"; }
 pass "verify fails an archive with an unfinished task"
 
+# A change PR may tick an active change's open tasks on the base, and do nothing else to it:
+# its tasks.md may differ only by `[ ]` becoming `[x]` on lines that were already tasks.
+tick_edit() {
+    local name="$1" body="$2"
+    git -C "$rp" checkout -q -b "$name" "$tbase"
+    printf -- "$body" > "$rp/openspec/changes/a-menu/tasks.md"
+    git -C "$rp" add -A && git -C "$rp" commit -q -m "$name"
+}
+tick_edit tick-ok '- [x] 1.1 done\n1. [x] 1.2 not yet\n'
+out="$(node "$SPECS" requirements -C "$rp" --base "$tbase" --result HEAD)" || { echo "$out"; fail "a tick-only edit was refused"; }
+[ "$(printf '%s\n' "$out" | tail -n 1)" = 'requirements-through-change: success' ] || fail "tick-only verdict"
+for bad in \
+    'tick-text|- [x] 1.1 done\n1. [x] 1.2 not yet, and more\n' \
+    'untick|- [ ] 1.1 done\n1. [x] 1.2 not yet\n' \
+    'new-task|- [x] 1.1 done\n1. [x] 1.2 not yet\n- [x] 1.3 added\n' \
+    'new-line|- [x] 1.1 done\n1. [x] 1.2 not yet\nA note.\n' \
+    'reword|- [x] 1.1 done\n1. [ ] 1.2 later\n' \
+    'rebullet|- [x] 1.1 done\n- [x] 1.2 not yet\n' \
+    'no-eol|- [x] 1.1 done\n1. [x] 1.2 not yet' \
+    'upper-x|- [x] 1.1 done\n1. [X] 1.2 not yet\n'; do
+    tick_edit "${bad%%|*}" "${bad#*|}"
+    expect_exit 1 node "$SPECS" requirements -C "$rp" --base "$tbase" --result HEAD
+    grep -qx -- '- a-menu: an active change on the base was edited' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "${bad%%|*} not refused"; }
+done
+# A tick that comes with any other edit to the change is still refused.
+tick_edit tick-plus '- [x] 1.1 done\n1. [x] 1.2 not yet\n'
+echo '# a-menu, reworded' > "$rp/openspec/changes/a-menu/proposal.md"
+git -C "$rp" commit -q -am tick-plus
+expect_exit 1 node "$SPECS" requirements -C "$rp" --base "$tbase" --result HEAD
+grep -qx -- '- a-menu: an active change on the base was edited' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "tick plus another edit not refused"; }
+# A tasks.md the base lacks is not a tick.
+git -C "$rp" checkout -q -b tick-new "$tbase~1"
+printf -- '1. [x] 1.1 done\n' > "$rp/openspec/changes/b-menu/tasks.md"
+git -C "$rp" add -A && git -C "$rp" commit -q -m tick-new
+expect_exit 1 node "$SPECS" requirements -C "$rp" --base "$tbase~1" --result HEAD
+grep -qx -- '- b-menu: an active change on the base was edited' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a new tasks.md not refused"; }
+# Nor is a line appended after a base tasks.md that has no final newline.
+git -C "$rp" checkout -q -b tick-noeol "$tbase"
+printf -- '- [x] 1.1 done\n1. [ ] 1.2 not yet' > "$rp/openspec/changes/a-menu/tasks.md"
+git -C "$rp" commit -q -am noeol-base
+nbase="$(git -C "$rp" rev-parse HEAD)"
+printf -- '- [x] 1.1 done\n1. [x] 1.2 not yet\nA note.' > "$rp/openspec/changes/a-menu/tasks.md"
+git -C "$rp" commit -q -am noeol-append
+expect_exit 1 node "$SPECS" requirements -C "$rp" --base "$nbase" --result HEAD
+grep -qx -- '- a-menu: an active change on the base was edited' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a line appended without a final newline not refused"; }
+git -C "$rp" checkout -q tasks
+pass "requirements-through-change lets a change PR tick an active change's tasks, and nothing more"
+
 # A change PR whose pins went stale on the base: c-menu is pinned on main, then a-menu's
 # archive lands first.
 git -C "$rp" checkout -q -b archive-a main

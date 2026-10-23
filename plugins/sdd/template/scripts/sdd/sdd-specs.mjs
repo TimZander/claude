@@ -23,7 +23,8 @@
 //       archive order, so a change archived earlier in the same PR counts.
 //
 //   node sdd-specs.mjs requirements [-C <repo>] --base <rev> --result <rev>
-//       Do the main specs change only through a change? Last line
+//       Do the main specs change only through a change? An active change on <base> may not be
+//       edited, except to tick its open tasks. Last line
 //       `requirements-through-change: success|failure`.
 //
 //   node sdd-specs.mjs spec-diff [-C <repo>] --base <rev> --result <rev> --out <file>
@@ -717,6 +718,33 @@ function loadPair(env, baseRev, resultRev) {
 
 const MAIN_SPEC = /^openspec\/specs\/(.+)\/spec\.md$/
 
+/** An open task line: a list marker, then `[ ]`. */
+const OPEN_TASK = /^(\s*(?:[-*+]|\d+[.)])\s+)\[ \]/
+
+/**
+ * Does the edit to an active change only tick its open tasks? Then a change merged with a task
+ * left open can still be finished and archived. Only its tasks.md may differ, and only by
+ * `[ ]` becoming `[x]` on lines that were open tasks on the base: every other byte the same.
+ * @param {Tree} base
+ * @param {Tree} result
+ * @param {string[]} files
+ * @param {string} change
+ */
+function onlyTicks(base, result, files, change) {
+  const path = `${CHANGES_DIR}/${change}/tasks.md`
+  if (files.some(x => x.startsWith(`${CHANGES_DIR}/${change}/`) && x !== path)) {
+    return false
+  }
+  const before = base.text(path)
+  const after = result.text(path)
+  if (before === null || after === null) {
+    return false
+  }
+  const a = before.split('\n')
+  const b = after.split('\n')
+  return a.length === b.length && a.every((line, i) => line === b[i] || (OPEN_TASK.test(line) && line.replace(OPEN_TASK, '$1[x]') === b[i]))
+}
+
 /**
  * @param {Env} env
  * @param {string} baseRev
@@ -783,7 +811,7 @@ async function cmdRequirements(env, baseRev, resultRev) {
       if (!archived.has(name)) {
         items.push(`${name}: deleted instead of archived`)
       }
-    } else if (p.files.some(x => x.startsWith(`${CHANGES_DIR}/${name}/`))) {
+    } else if (p.files.some(x => x.startsWith(`${CHANGES_DIR}/${name}/`)) && !onlyTicks(p.base, p.result, p.files, name)) {
       items.push(`${name}: an active change on the base was edited`)
     }
   }
