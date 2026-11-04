@@ -47,8 +47,13 @@ If the command fails, the settings are invalid: report its message and don't mer
    `archive-mechanical: success`. A failure naming a stale pin means two changes edited the same
    requirement: the second one's delta was written against older text. Don't hand-merge it in
    the archive PR silently; report it, because that PR then needs the owner's review.
+   Unfinished tasks don't fail it: each change with any gets a `- note: ` line. Never tick them
+   in the archive PR, which must hold only `openspec archive` output; the change is archived as
+   it merged.
 5. Push and open the PR against the default branch, titled `Archive <changes>`, its body listing
-   the changes and saying it holds only `openspec archive` output.
+   the changes and saying it holds only `openspec archive` output. If verify printed any
+   `- note: ` lines, add them under **Unfinished tasks**, verbatim, so the record shows what was
+   left undone.
 
 ## Step 3: Wait for the verdicts, then merge
 
@@ -86,6 +91,6 @@ If the command fails, the settings are invalid: report its message and don't mer
 
 ## Step 4: Report
 
-The PR link, the changes archived, each verdict and the base it was compared against, your own
-re-run's result, and whether it merged. Then the next work can branch from the updated default
+The PR link, the changes archived, any unfinished tasks noted, each verdict and the base it was
+compared against, your own re-run's result, and whether it merged. Then the next work can branch from the updated default
 branch.

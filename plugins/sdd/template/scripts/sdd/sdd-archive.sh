@@ -23,7 +23,9 @@
 #       <result>'s openspec/ tree exactly, and nothing outside openspec/ changed.
 #       Right before each archive, in that order, the change's base pins must
 #       match the main specs as they are at that moment (unless pins are off in
-#       package.json), and its tasks.md must have no unfinished task.
+#       package.json). Unfinished tasks don't fail it: the change is archived as
+#       it merged, and each change with any gets a `- note: ` line, printed
+#       before the problems (copy them into the archive PR's body).
 #       Last line, on every exit path: `archive-mechanical: success|failure|
 #       not-an-archive-pr`, preceded by `- compared base <sha> with result <sha>`
 #       when a comparison ran. Every other line starts with `- ` or `  | `, so
@@ -56,6 +58,7 @@ usage() {
 
 VERIFYING=0
 VERDICT_PRINTED=0
+NOTES=
 NAME_RE='^[A-Za-z0-9][A-Za-z0-9._-]*$'
 LOWER_RE='^[a-z0-9][a-z0-9-]*$'
 DATE_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}-'
@@ -92,6 +95,7 @@ verdict_line() {
 # verify always ends with a verdict line, whatever stops it.
 on_exit() {
     local code=$?
+    [ -z "$NOTES" ] || rm -f "$NOTES"
     if [ $VERIFYING -eq 1 ] && [ $VERDICT_PRINTED -eq 0 ]; then
         echo "archive-mechanical: failure"
         [ $code -ne 0 ] || code=3
@@ -224,7 +228,11 @@ EOF
         if [ ! -f "$root/node_modules/@fission-ai/openspec/bin/openspec.js" ]; then
             internal "OpenSpec is not installed: run \`npm ci --ignore-scripts\` first"
         fi
-        problems="$(reproduce "$root" "$base" "$result" "$names")" || true
+        # The gate's notes (unfinished tasks) come back through their own file, never
+        # through the problems, so no line in them can hide or stand in for a problem.
+        NOTES="$(mktemp)"
+        problems="$(reproduce "$root" "$base" "$result" "$names" "$NOTES")" || true
+        sed -n 's/^- note: /- note: /p' "$NOTES" | neutralise
     fi
 
     echo "${problems%$'\n'}" | sed '/^$/d' | neutralise
@@ -239,7 +247,7 @@ EOF
 # Re-runs the archives on a checkout of $2 and compares its openspec/ tree with
 # $3's. Prints a problem line for each difference; prints nothing on a match.
 reproduce() {
-    local root="$1" base="$2" result="$3" names="$4"
+    local root="$1" base="$2" result="$3" names="$4" notes="$5"
     local scratch checkout status=0
     scratch="$(mktemp -d)"
     checkout="$scratch/base"
@@ -251,8 +259,11 @@ reproduce() {
     local change folder made before out
     while IFS=' ' read -r change folder; do
         [ -n "$change" ] || continue
-        # Pins and tasks, against the main specs as the archives before it left them.
-        if ! out="$(node "$SCRIPT_DIR/sdd-specs.mjs" gate --cli-root "$root" --dir "$checkout" --change "$change" 2>&1)"; then
+        # Pins, against the main specs as the archives before it left them. A passing
+        # gate prints only notes (unfinished tasks): those go to the notes file.
+        if out="$(node "$SCRIPT_DIR/sdd-specs.mjs" gate --cli-root "$root" --dir "$checkout" --change "$change" 2>&1)"; then
+            printf '%s\n' "$out" | sed '/^$/d' >> "$notes"
+        else
             printf '%s\n' "$out" | sed '/^$/d' | sed 's/^sdd-specs: /- /'
             status=1
         fi

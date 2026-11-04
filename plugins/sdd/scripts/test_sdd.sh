@@ -548,7 +548,8 @@ out="$(bash "$ARC" verify -C "$rp" --base "$base" --result HEAD)" || { echo "$ou
 git -C "$rp" checkout -q package.json
 pass "pins can be turned off in package.json"
 
-# Open tasks block a mechanical archive.
+# Open tasks don't block a mechanical archive: the change is archived as it merged, and
+# verify notes them, before the problems and the `- compared base` line.
 git -C "$rp" checkout -q main
 git -C "$rp" checkout -q -b tasks
 printf -- '- [x] 1.1 done\n1. [ ] 1.2 not yet\n' > "$rp/openspec/changes/a-menu/tasks.md"
@@ -556,9 +557,49 @@ git -C "$rp" add -A && git -C "$rp" commit -q -m tasks
 tbase="$(git -C "$rp" rev-parse HEAD)"
 STUB_DATE=2026-03-04 bash "$ARC" run -C "$rp" >/dev/null
 git -C "$rp" add -A && git -C "$rp" commit -q -m archive
+tarchive="$(git -C "$rp" rev-parse HEAD)"
+# b-menu's pins are stale on this base (above); turn pins off to see the tasks alone.
+node -e 'const f=process.argv[1],p=require(f);p.sdd={pins:false};require("fs").writeFileSync(f,JSON.stringify(p,null,2))' "$rp/package.json"
+expect_exit 0 bash "$ARC" verify -C "$rp" --base "$tbase" --result HEAD
+grep -qx -- '- note: a-menu: 1 unfinished task (1.2) in tasks.md (archived as merged)' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "open task not noted"; }
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: success' ] || { cat "$TMP_ROOT/out"; fail "open task verdict"; }
+[ "$(bash "$ARC" verdict "$TMP_ROOT/out" | head -n 1)" = 'verdict=success' ] || fail "the note broke the verdict line"
+# The gate notes them too, and passes.
+gate_dir="$TMP_ROOT/gate-tasks"
+git -C "$rp" worktree add -q --detach "$gate_dir" "$tbase"
+expect_exit 0 node "$SPECS" gate --cli-root "$rp" --dir "$gate_dir" --change a-menu
+grep -qx -- '- note: a-menu: 1 unfinished task (1.2) in tasks.md (archived as merged)' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "gate note"; }
+git -C "$rp" worktree remove --force "$gate_dir"
+git -C "$rp" checkout -q package.json
+# Anything besides the archive output still fails, notes or not.
+echo extra >> "$rp/README.md"
+git -C "$rp" commit -q -am extra
 expect_exit 1 bash "$ARC" verify -C "$rp" --base "$tbase" --result HEAD
-grep -qx -- '- a-menu: 1 unfinished task in tasks.md' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "open task not reported"; }
-pass "verify fails an archive with an unfinished task"
+grep -qx -- '- changed outside openspec/: README.md' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "outside change with open tasks"; }
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || fail "outside change verdict"
+# And so does a stale pin (b-menu's, with pins back on).
+git -C "$rp" reset -q --hard "$tarchive"
+expect_exit 1 bash "$ARC" verify -C "$rp" --base "$tbase" --result HEAD
+grep -q -- '^- b-menu: nav / NAV-1 Menu changed since the delta was written' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "stale pin with open tasks"; }
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || fail "stale pin verdict with open tasks"
+git -C "$rp" reset -q --hard "$tarchive"
+pass "verify notes an archived change's unfinished tasks and doesn't fail on them"
+
+# A change PR with unfinished tasks: spec-diff lists them, in its log and in the comment,
+# and still succeeds. Only digits and dots are taken from a task's text.
+git -C "$rp" checkout -q -b open-tasks "$tbase"
+delta_change "$rp" d-menu "a side menu"
+(cd "$rp" && node scripts/sdd/sdd-specs.mjs pin d-menu) >/dev/null
+printf -- '- [x] 1.1 done\n- [ ] 2.1 later — not done: out of scope\n- [ ] tidy ::up\n- [ ] 4.1. checks\n' > "$rp/openspec/changes/d-menu/tasks.md"
+git -C "$rp" add -A && git -C "$rp" commit -q -m d-menu
+out="$(node "$SPECS" spec-diff -C "$rp" --base "$tbase" --result HEAD --out "$TMP_ROOT/diff-tasks.md")" || { echo "$out"; fail "spec-diff with open tasks"; }
+printf '%s\n' "$out" | grep -qx -- '- tasks-open: d-menu: 3 (2.1, 4.1, 1 without a number)' || { echo "$out"; fail "tasks-open line"; }
+printf '%s\n' "$out" | grep -q -- 'a-menu' && { echo "$out"; fail "tasks-open lists a change already on the base"; }
+[ "$(printf '%s\n' "$out" | tail -n 1)" = 'main-spec-diff: success' ] || { echo "$out"; fail "open tasks changed the verdict"; }
+grep -qF -- '- `d-menu`: 3 unfinished tasks (2.1, 4.1, 1 without a number)' "$TMP_ROOT/diff-tasks.md" || { cat "$TMP_ROOT/diff-tasks.md"; fail "open tasks in the comment"; }
+out="$(node "$SPECS" requirements -C "$rp" --base "$tbase" --result HEAD)" || { echo "$out"; fail "requirements with open tasks"; }
+git -C "$rp" checkout -q tasks
+pass "spec-diff lists a change PR's unfinished tasks without failing"
 
 # A change PR may tick an active change's open tasks on the base, and do nothing else to it:
 # its tasks.md may differ only by `[ ]` becoming `[x]` on lines that were already tasks.

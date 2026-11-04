@@ -18,9 +18,11 @@
 //
 //   node sdd-specs.mjs gate --dir <checkout> --change <name>
 //       May <name> be archived mechanically in <checkout>, as it is now? Its pins must be
-//       complete and match the main specs, and its tasks.md must have no unfinished task.
-//       Prints a `- ` line per problem; exit 1 if any. Run it right before each archive, in
-//       archive order, so a change archived earlier in the same PR counts.
+//       complete and match the main specs. Prints a `- ` line per problem; exit 1 if any.
+//       Unfinished tasks in its tasks.md are not a problem: the change is archived as it was
+//       merged, and each is reported on a `- note: ` line, with exit 0 if nothing else is
+//       wrong. Run it right before each archive, in archive order, so a change archived
+//       earlier in the same PR counts.
 //
 //   node sdd-specs.mjs requirements [-C <repo>] --base <rev> --result <rev>
 //       Do the main specs change only through a change? An active change on <base> may not be
@@ -29,7 +31,9 @@
 //
 //   node sdd-specs.mjs spec-diff [-C <repo>] --base <rev> --result <rev> --out <file>
 //       Archives every active change of <result> in a scratch checkout and writes a Markdown
-//       comment with the main specs' unified diff to <file>. Last line
+//       comment with the main specs' unified diff to <file>. For each change the PR adds or
+//       edits that has unfinished tasks, prints `- tasks-open: <change>: <n> (<ids>)` and lists
+//       it in the comment: information only, it never changes the verdict. Last line
 //       `main-spec-diff: success|failure|no-active-change`.
 //
 // Pins can be turned off with "sdd": { "pins": false } in package.json (sdd-config.mjs).
@@ -81,7 +85,7 @@ function item(text) {
  * @typedef {{
  *   extractRequirementsSection: (content: string) => { bodyBlocks: Block[] },
  *   parseDeltaSpec: (content: string) => { added: Block[], modified: Block[], removed: string[], renamed: { from: string, to: string }[] },
- *   parseTaskLines: (content: string) => { done: boolean }[],
+ *   parseTaskLines: (content: string) => { done: boolean, description?: string }[],
  * }} Parser
  */
 
@@ -529,15 +533,43 @@ function touched(parser, deltas) {
   return keys
 }
 
+const TASK_ID = /^(\d{1,9}(?:\.\d{1,9}){0,5})\.?(?=\s|$)/
+const MAX_TASK_IDS = 20
+
 /**
- * Unfinished tasks in a change's tasks.md, counted as OpenSpec counts them.
+ * Unfinished tasks in a change's tasks.md, counted as OpenSpec counts them, with the numbers
+ * of those that start with one (`4.1`, `2.3.1`). Only digits and dots are ever taken from a
+ * task's text, so the ids are safe to print anywhere.
  * @param {Parser} parser
  * @param {Tree} tree
  * @param {string} change
+ * @returns {{ count: number, ids: string[] }}
  */
 function openTasks(parser, tree, change) {
   const text = tree.text(`${CHANGES_DIR}/${change}/tasks.md`)
-  return text === null ? 0 : parser.parseTaskLines(text.replace(/\r\n?/g, '\n')).filter(x => !x.done).length
+  if (text === null) {
+    return { count: 0, ids: [] }
+  }
+  const open = parser.parseTaskLines(text.replace(/\r\n?/g, '\n')).filter(x => !x.done)
+  const ids = open.map(x => TASK_ID.exec(String(x.description ?? '').trim())?.[1]).filter(x => x !== undefined)
+  return { count: open.length, ids: /** @type {string[]} */ (ids) }
+}
+
+/**
+ * `1 unfinished task (4.1)`, `3 unfinished tasks (1.2, 4.1, 1 without a number)`.
+ * @param {{ count: number, ids: string[] }} open
+ */
+function describeOpenTasks(open) {
+  const parts = open.ids.slice(0, MAX_TASK_IDS)
+  if (open.ids.length > MAX_TASK_IDS) {
+    parts.push(`${open.ids.length - MAX_TASK_IDS} more`)
+  }
+  const unnumbered = open.count - open.ids.length
+  if (unnumbered > 0 && parts.length > 0) {
+    parts.push(`${unnumbered} without a number`)
+  }
+  const list = parts.length > 0 ? ` (${parts.join(', ')})` : ''
+  return `${open.count} unfinished task${open.count === 1 ? '' : 's'}${list}`
 }
 
 // --- running the CLI ---------------------------------------------------------------------------
@@ -676,9 +708,11 @@ async function cmdGate(env, dir, change) {
   if (env.config.pins) {
     problems.push(...pinsAgainst(parser, tree, tree, change, 'merge the newer text into the delta, re-pin, and have the archive reviewed'))
   }
+  // Unfinished tasks are a fact about the change as it merged, not about the archive: some
+  // are left undone on purpose. Report them; don't fail on them.
   const open = openTasks(parser, tree, change)
-  if (open > 0) {
-    problems.push(`${change}: ${open} unfinished task${open === 1 ? '' : 's'} in tasks.md`)
+  if (open.count > 0) {
+    item(`note: ${change}: ${describeOpenTasks(open)} in tasks.md (archived as merged)`)
   }
   problems.forEach(item)
   return problems.length === 0 ? 0 : 1
@@ -856,7 +890,8 @@ function listNames(names) {
 }
 
 /**
- * @typedef {{ fromPr: string[], onBase: string[], shared: string[], diff: string | null, error: { change: string, output: string } | null }} DiffInput
+ * @typedef {{ change: string, count: number, ids: string[] }} OpenTasks
+ * @typedef {{ fromPr: string[], onBase: string[], shared: string[], open?: OpenTasks[], diff: string | null, error: { change: string, output: string } | null }} DiffInput
  */
 
 /**
@@ -889,6 +924,14 @@ function assembleComment(input, limit) {
     parts.push('> ⚠️ The base already has active changes. Archive them in their own PR (`/sdd:archive-pr`) before new work.')
     if (input.shared.length > 0) {
       parts.push(`> They touch the same requirements as this PR: ${listNames(input.shared)}.`)
+    }
+  }
+  const open = (input.open ?? []).slice(0, MAX_NAMES)
+  if (open.length > 0) {
+    parts.push('', '**Unfinished tasks** (not a failure: a forgotten tick can still be fixed on this branch, a task left undone on purpose can merge as it is):')
+    parts.push(...open.map(x => `- ${listNames([x.change])}: ${describeOpenTasks(x)}`))
+    if ((input.open ?? []).length > MAX_NAMES) {
+      parts.push(`- and ${(input.open ?? []).length - MAX_NAMES} more changes`)
     }
   }
   parts.push('')
@@ -968,6 +1011,9 @@ async function cmdSpecDiff(env, baseRev, resultRev, out) {
   const onBase = active.filter(x => p.baseActive.has(x))
   const prTouched = new Set(fromPr.flatMap(x => [...touched(parser, p.result.deltas(x))]))
   const shared = [...new Set(onBase.flatMap(x => [...touched(parser, p.result.deltas(x))]))].filter(x => prTouched.has(x)).sort()
+  // Information only: unfinished tasks never fail a change PR, but they are seen before merge.
+  const open = fromPr.map(change => ({ change, ...openTasks(parser, p.result, change) })).filter(x => x.count > 0)
+  const openItems = open.map(x => `tasks-open: ${x.change}: ${describeOpenTasks(x).replace(/ unfinished tasks?/, '')}`)
 
   const scratch = mkdtempSync(join(tmpdir(), 'sdd-diff-'))
   try {
@@ -980,12 +1026,12 @@ async function cmdSpecDiff(env, baseRev, resultRev, out) {
       for (const name of active) {
         const run = openspec(env.cliRoot, dir, ['archive', name, '--yes'])
         if (!run.ok) {
-          return done('failure', diffComment({ fromPr, onBase, shared, diff: null, error: { change: name, output: run.output } }),
-            [`\`openspec archive ${name}\` failed; the PR comment shows why`])
+          return done('failure', diffComment({ fromPr, onBase, shared, open, diff: null, error: { change: name, output: run.output } }),
+            [...openItems, `\`openspec archive ${name}\` failed; the PR comment shows why`])
         }
       }
       copySpecs('after')
-      return done('success', diffComment({ fromPr, onBase, shared, diff: diffFolders(scratch), error: null }))
+      return done('success', diffComment({ fromPr, onBase, shared, open, diff: diffFolders(scratch), error: null }), openItems)
     })
   } finally {
     rmSync(scratch, { recursive: true, force: true })
