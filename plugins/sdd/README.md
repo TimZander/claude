@@ -160,7 +160,15 @@ mechanical. Pins catch it:
 | `spec-checks` | the specs don't validate now, or once every active change is archived, or an active change isn't pinned |
 | `requirements-through-change` | a main spec's requirement is added, edited or removed outside an archive; an active change on the base is edited (other than ticking its open tasks: `[ ]` to `[x]` in its `tasks.md`, nothing else), or deleted instead of archived; a file in an existing archive folder changes; a main spec has two requirements with one name; a new change's pins are stale |
 | `main-spec-diff` | archiving the PR's active changes fails. Otherwise it keeps the PR comment up to date |
-| `archive-mechanical` | an archive PR isn't exactly `openspec archive` output on the default branch's tip, a pin is stale when its change is archived, or an archived change has unfinished tasks. `not-an-archive-pr` otherwise |
+| `archive-mechanical` | an archive PR isn't exactly `openspec archive` output on the default branch's tip, or a pin is stale when its change is archived. `not-an-archive-pr` otherwise |
+
+Unfinished tasks never fail a check. A task can be left undone on purpose, and a change is
+archived exactly as it merged. They are made visible instead: on a change PR, `main-spec-diff`
+prints `- tasks-open: <change>: <n> (<task numbers>)` and lists them in its comment, so a
+forgotten tick can still be fixed on the branch; on an archive PR, `archive-mechanical` prints a
+`- note:` line per change with any, and `/sdd:archive-pr` copies them into the PR's body. A
+forgotten tick found after merge can still be fixed in a PR that only ticks it
+(`requirements-through-change` allows that).
 
 The job fails when any check does. It works in private repositories: the merge commit is
 fetched with the job's token, given to that one `git fetch` as an HTTP header in its own

@@ -27,6 +27,8 @@ How specs are written in this repository. Read this before writing or changing a
 
 - A change carries `proposal.md` (why and scope), its deltas, `design.md` when there are
   decisions or open questions, and `tasks.md`.
+- A task left undone on purpose stays unticked and says why on its line:
+  `- [ ] 4.1 … — not done: <reason>`. The archive keeps it as it is.
 - A `MODIFIED` requirement holds the requirement's full text, with every scenario it keeps.
 - `base-pins.json` records the main-spec text each delta was written against
   (`npm run spec:pin -- <change>`). Re-pin after every delta edit; never hand-edit it.

@@ -55,6 +55,11 @@ its proposal says so.
   options rejected, and a lesson in `docs/lessons.md` whenever something surprised you or went
   wrong, with what to do differently.
 - **Never archive inside a change's own PR.** Archive after merge, in its own PR.
+- **Unticked tasks don't block.** A task may be left undone on purpose; say why on its line
+  (`- [ ] 4.1 … — not done: <reason>`). Nothing enforces that. CI lists a change PR's open tasks
+  (`tasks-open`) so a forgotten tick is fixed on the branch; the change archives as it merged,
+  and the archive PR notes them. Never tick a task in an archive PR, and never tick one for work
+  that wasn't done.
 - **Requirements change only through a change.** Never edit `openspec/specs/` by hand: CI's
   `requirements-through-change` check fails a PR that does, outside an archive.
 - **A stale pin means another change got there first.** When CI says a requirement "changed
