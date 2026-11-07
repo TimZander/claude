@@ -46,6 +46,9 @@ jobs:
 EOF
 echo x > "$SRC/actions/pages-preview/action.yml"
 echo x > "$SRC/actions/pages-teardown/action.yml"
+mkdir -p "$SRC/.github/workflows"
+echo x > "$SRC/.github/workflows/pages-preview.yml"
+echo x > "$SRC/.github/workflows/pages-teardown.yml"
 git -C "$SRC" add -A && git -C "$SRC" commit -q -m v1
 V1="$(git -C "$SRC" rev-parse HEAD)"
 echo y >> "$SRC/actions/pages-preview/action.yml"
@@ -188,6 +191,25 @@ echo "      - uses: TimZander/ci-recipes/actions/pages-preview@$V1" > ".github/w
 expect_exit 0 bash "$CI" update --sha "$V1B"
 grep -q "pages-preview@$V1B" ".github/workflows/my preview.yml" || fail "update skipped a file name with a space"
 pass "update handles a file name with a space"
+
+# --- update moves pins on calls to the reusable workflows too (ci-recipes decision 0005)
+R8="$(repo)"; cd "$R8"; mkdir -p .github/workflows
+printf '%s\n' "jobs:" "  preview:" "    uses: TimZander/ci-recipes/.github/workflows/pages-preview.yml@$V1" > .github/workflows/preview.yml
+printf '%s\n' "jobs:" "  teardown:" "    uses: TimZander/ci-recipes/.github/workflows/pages-teardown.yml@$V1" > .github/workflows/preview-teardown.yml
+expect_exit 0 bash "$CI" update --sha "$V1B"
+grep -q "pages-preview.yml@$V1B" .github/workflows/preview.yml || fail "update did not move a workflow pin"
+grep -q "pages-teardown.yml@$V1B" .github/workflows/preview-teardown.yml || fail "update did not move a workflow pin"
+pass "update moves pins on reusable-workflow calls"
+
+# a commit that no longer has a workflow the repository calls is refused, changing nothing
+git -C "$SRC" checkout -q "$V1B" && git -C "$SRC" checkout -q -b no-teardown-workflow
+git -C "$SRC" rm -q .github/workflows/pages-teardown.yml && git -C "$SRC" commit -qm "no teardown workflow"
+NOWF="$(git -C "$SRC" rev-parse HEAD)"; git -C "$SRC" checkout -q main
+cp .github/workflows/preview.yml "$TMP_ROOT/wf-before"
+expect_exit 3 bash "$CI" update --sha "$NOWF"
+grep -q "no .github/workflows/pages-teardown.yml" "$TMP_ROOT/out" || fail "the refusal does not name the missing workflow"
+cmp -s .github/workflows/preview.yml "$TMP_ROOT/wf-before" || fail "a refused update changed a file"
+pass "update refuses a commit missing a called workflow, changing nothing"
 
 # --- no temp dirs left behind, by successes or by refusals and failures
 cd "$R"

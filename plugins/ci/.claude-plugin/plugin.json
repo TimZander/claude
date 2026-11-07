@@ -1,6 +1,6 @@
 {
   "name": "ci",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Shared CI from TimZander/ci-recipes: /ci:init writes a repo's Cloudflare Pages preview and teardown workflows pinned to a ci-recipes commit, /ci:update moves that pin forward, /ci:minutes reports a pull request's billed Actions minutes",
   "author": {
     "name": "Tim Zander"
