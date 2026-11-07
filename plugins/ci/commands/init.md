@@ -38,12 +38,17 @@ Run it from the repository's root.
 3. **Write the workflows.** Run `<ci> init --project <name> --wrangler <version> --directory <dir>`.
    Exit 3 means it refused and wrote nothing: report its reason and stop, unless the reason is
    an old preview deploy you were asked to replace (step 1). Exit 1 also wrote nothing.
-4. **Fit the build.** Replace the template's `npm ci` / `npm run build` steps in
-   `preview.yml` with this repository's real build, copied from its existing deploy
-   (setup-node or setup-uv, staging steps, build-time env). Keep `if:`, `concurrency`,
-   `permissions` and the ci-recipes step as written. Narrow `on.pull_request.paths` only when
-   the site is a part of the repository, and say that a path filter re-fires on every later
-   push of a PR that matched it once.
+4. **Fit the build, as inputs.** `preview.yml` is one call to ci-recipes' `pages-preview.yml`;
+   the build is its inputs, not steps. Set `build-command` to this repository's build as one
+   bash command (build-time env inline, `VAR=x npm run build`, or a repository script for
+   anything longer), `node-version` and `node-cache` (or `node-version: ''` for none),
+   `cache-dependency-path` when the lockfile is not at the root, `working-directory` (the folder
+   holding a Pages `functions/` directory, if any) and `directory`. Never add `concurrency`,
+   `if:` or steps: the shared workflow owns those, and a copy is the drift ci-recipes exists to
+   remove. A build that needs a toolchain the inputs can't set up (Python, uv) needs a new input
+   in ci-recipes first: say so and stop. Narrow `on.pull_request.paths` only when the site is a
+   part of the repository, and say that a path filter matches the PR's whole diff, so it
+   re-fires on every later push of a PR that matched it once.
 5. **Gate production, not the preview.** If the production deploy does not wait for the tests,
    or the old preview job ran the tests first, say so and fix it: production `needs` the test
    jobs; the preview needs nothing.

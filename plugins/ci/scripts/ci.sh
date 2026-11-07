@@ -127,7 +127,7 @@ cmd_init() {
         echo "wrote $WORKFLOWS/$f"
     done
     echo "pinned ci-recipes $sha"
-    echo "next: replace the template's build steps in $WORKFLOWS/preview.yml with this repository's build"
+    echo "next: set the build inputs in $WORKFLOWS/preview.yml (build-command, node-version, working-directory, directory)"
 }
 
 cmd_update() {
