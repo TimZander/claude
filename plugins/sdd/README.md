@@ -33,8 +33,10 @@ and running `/sdd:init` later removes it again.
 Use one cloud environment for all sdd work: **Add cloud environment…**, then paste
 [`cloud-setup.sh`](cloud-setup.sh) into its setup script. A cloud session doesn't install the
 plugins a repository enables in its `.claude/settings.json`, so the script does it. It adds the
-`tzander-skills` marketplace (or updates it), installs `sdd`, `handoff` and `gh`, and writes a short
-`~/.claude/CLAUDE.md` that points every session at the repository's sdd workflow. If a repository
+`tzander-skills` marketplace (or updates it), installs `sdd`, `handoff`, `ci` and `gh`, and writes a
+short `~/.claude/CLAUDE.md` that points every session at the repository's sdd workflow and carries
+the session rules every repository shares: relay a long orchestrator past 300k tokens, count CI
+minutes beside model spend, and take shared CI from TimZander/ci-recipes. If a repository
 isn't set up yet, the session asks once, before its first change, rather than running
 `/sdd:init` itself: set it up, not now, or never. "Never" runs `/sdd:opt-out`, which adds one
 line to the repository's `CLAUDE.md`, *This repository doesn't use spec-driven development
@@ -43,7 +45,8 @@ that won't use sdd too; removing the line undoes it. An
 existing environment picks up a new version of this text only when you paste the updated script
 into its settings. It
 installs nothing else: no shared team standards and no other plugins. `handoff` adds `/handoff`
-and `/pickup`, for resuming work across a `/clear` or in a new session.
+and `/pickup`, for resuming work across a `/clear` or in a new session; `ci` adds `/ci:init`,
+`/ci:update` and `/ci:minutes`.
 
 Every step is non-fatal and it always exits 0, because a failing setup script fails the session;
 problems show as `WARNING` lines in `/root/setup-script.log`. The default "Trusted" network level

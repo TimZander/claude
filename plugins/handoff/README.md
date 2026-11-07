@@ -55,6 +55,19 @@ new session, or carrying on in this one.
 The new session may ask for tool approvals again: it inherits this session's permission mode,
 never a wider one.
 
+### When to relay: past 300k tokens
+
+Every request re-reads the whole context, so each round of a long session costs more than the
+last. A session that orchestrates others (dispatching lanes, merging their PRs) reads its
+`context_usage` from `get_session` at each natural break (a PR merged, a lane reported, a wait
+on CI) and relays once `used_tokens` passes **300,000**, at that break, never mid-edit or
+mid-verification. Lanes are exempt for now.
+
+The number is provisional: it came from TimZander/AudioClassifier (its ADR 0243) and stands
+until three relays have been measured there. The rule reaches cloud sessions through the
+`~/.claude/CLAUDE.md` that `plugins/sdd/cloud-setup.sh` writes, because a command's text is
+read only when the command runs.
+
 ### Notes stay off the base branch
 
 A note is disposable task state, so it should never merge into `main` with the work:
