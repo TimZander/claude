@@ -102,7 +102,7 @@ cmd_init() {
     local others
     others="$(grep -lE 'pages deploy.*--branch[= ].*(pull_request|head_ref|pr-)' \
         "$WORKFLOWS"/*.yml "$WORKFLOWS"/*.yaml 2>/dev/null || true)"
-    [ -z "$others" ] || refuse "these already deploy previews, nothing written: $(printf '%s' "$others" | tr '\n' ' ')(remove the preview deploy from them, or split it out, first)"
+    [ -z "$others" ] || refuse "these already deploy previews, nothing written: $(printf '%s' "$others" | tr '\n' ' ') (remove the preview deploy from them, or split it out, first)"
 
     # Render both into the temp dir and move them only when both are whole, so a failure
     # never leaves one half of the setup behind.
