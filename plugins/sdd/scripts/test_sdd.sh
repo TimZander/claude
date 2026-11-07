@@ -977,7 +977,7 @@ expect_exit 1 bash "$OPT" --repo "$o18"
 grep -q 'unclosed code fence' "$TMP_ROOT/out" || fail "opt-out appended after an unclosed fence"
 pass "sdd-optout adds the exact line once, follows a link only inside the repository, reads Markdown fences and large files right, and refuses an sdd repository or uncommitted changes"
 
-# --- cloud-setup.sh: sdd only, always exits 0, updates an existing marketplace ---------
+# --- cloud-setup.sh: sdd, handoff and ci only, always exits 0, updates an existing marketplace ---------
 CS="$SCRIPT_DIR/../cloud-setup.sh"
 fake="$TMP_ROOT/fakebin"
 mkdir -p "$fake"
@@ -1004,9 +1004,10 @@ cs_run
 grep -qx 'plugin marketplace add TimZander/claude' "$FAKE_LOG" || { cat "$FAKE_LOG"; fail "cloud-setup did not add the marketplace"; }
 grep -qx 'plugin install sdd@tzander-skills' "$FAKE_LOG" || fail "cloud-setup did not install sdd"
 grep -qx 'plugin install handoff@tzander-skills' "$FAKE_LOG" || fail "cloud-setup did not install handoff"
-[ "$(grep -c '^plugin install ' "$FAKE_LOG")" = 2 ] || fail "cloud-setup installed more than sdd and handoff"
+grep -qx 'plugin install ci@tzander-skills' "$FAKE_LOG" || fail "cloud-setup did not install ci"
+[ "$(grep -c '^plugin install ' "$FAKE_LOG")" = 3 ] || fail "cloud-setup installed more than sdd, handoff and ci"
 grep -q '=== sdd setup finished' "$TMP_ROOT/cshome/setup-script.log" || fail "cloud-setup wrote no log"
-pass "cloud-setup installs sdd and handoff and nothing else, and logs it"
+pass "cloud-setup installs sdd, handoff and ci and nothing else, and logs it"
 md="$TMP_ROOT/cshome/.claude/CLAUDE.md"
 [ -f "$md" ] || fail "cloud-setup wrote no ~/.claude/CLAUDE.md"
 grep -q 'sdd-workflow.md' "$md" || fail "CLAUDE.md does not point at the sdd workflow"
@@ -1016,7 +1017,11 @@ grep -q 'Neither: ask once, at the first change' "$md" || fail "CLAUDE.md does n
 grep -q '`/sdd:opt-out`' "$md" || fail "CLAUDE.md does not name /sdd:opt-out"
 grep -q 'recording decisions as ADRs' "$md" || fail "CLAUDE.md does not point at the ADR rules"
 grep -q '`/handoff`' "$md" || fail "CLAUDE.md does not mention /handoff"
-pass "cloud-setup writes a CLAUDE.md that points at the workflow, honors an opt-out, and asks once before /sdd:init"
+grep -q 'passes 300,000 it runs `/handoff:relay`' "$md" || fail "CLAUDE.md does not carry the 300k relay rule"
+grep -q '`/ci:minutes <pr>`' "$md" || fail "CLAUDE.md does not say to count CI minutes"
+grep -q 'TimZander/ci-recipes' "$md" || fail "CLAUDE.md does not point at ci-recipes"
+grep -q 'never run `/ci:init`' "$md" || fail "CLAUDE.md does not say to ask before /ci:init"
+pass "cloud-setup writes a CLAUDE.md that points at the workflow, honors an opt-out, asks once before /sdd:init, and carries the relay and CI-minutes rules"
 
 FAKE_MARKETPLACE_EXISTS=1 cs_run
 grep -qx 'plugin marketplace update tzander-skills' "$FAKE_LOG" || { cat "$FAKE_LOG"; fail "cloud-setup did not update an existing marketplace"; }
