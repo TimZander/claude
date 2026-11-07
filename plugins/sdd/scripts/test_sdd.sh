@@ -1020,6 +1020,7 @@ grep -q '`/handoff`' "$md" || fail "CLAUDE.md does not mention /handoff"
 grep -q 'passes 300,000 it runs `/handoff:relay`' "$md" || fail "CLAUDE.md does not carry the 300k relay rule"
 grep -q '`/ci:minutes <pr>`' "$md" || fail "CLAUDE.md does not say to count CI minutes"
 grep -q 'TimZander/ci-recipes' "$md" || fail "CLAUDE.md does not point at ci-recipes"
+grep -q 'never run `/ci:init`' "$md" || fail "CLAUDE.md does not say to ask before /ci:init"
 pass "cloud-setup writes a CLAUDE.md that points at the workflow, honors an opt-out, asks once before /sdd:init, and carries the relay and CI-minutes rules"
 
 FAKE_MARKETPLACE_EXISTS=1 cs_run

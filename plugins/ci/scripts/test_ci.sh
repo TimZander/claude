@@ -55,6 +55,8 @@ git -C "$SRC" rm -q -r actions/pages-teardown && git -C "$SRC" commit -qm v2
 V2="$(git -C "$SRC" rev-parse HEAD)"
 git -C "$SRC" config uploadpack.allowAnySHA1InWant true
 export CI_RECIPES_URL="$SRC"
+# ci.sh's temp dirs go here, so the end of the test can check none were left behind.
+export TMPDIR="$TMP_ROOT/tmpdir"; mkdir -p "$TMPDIR"
 
 repo() {
     local d="$TMP_ROOT/repo.$RANDOM$RANDOM"
@@ -90,7 +92,7 @@ grep -q "wrangler-version: '4.142.0'" .github/workflows/preview.yml || fail "wra
 pass "init writes both workflows, substituted and pinned"
 
 expect_exit 3 bash "$CI" init --project my-site --wrangler 4.142.0 --sha "$V1"
-grep -q "Refused\|already exists" "$TMP_ROOT/out" || fail "no reason given"
+grep -q "already exists" "$TMP_ROOT/out" || fail "no reason given"
 pass "init refuses to overwrite"
 
 mkdir sub && cd sub
@@ -131,7 +133,6 @@ pass "update refuses a repository with no pin"
 # --- positive control: the overwrite guard must be what refuses
 NEUTERED="$TMP_ROOT/ci-neutered.sh"
 sed 's/\[ -z "\$existing" \] || refuse/true || refuse/' "$CI" > "$NEUTERED"
-cp "$SCRIPT_DIR/ci-recipes.pin" "$TMP_ROOT/ci-recipes.pin"
 cd "$R"
 got=0; bash "$NEUTERED" init --project my-site --wrangler 4.142.0 --sha "$V1" >/dev/null 2>&1 || got=$?
 [ "$got" = 0 ] || fail "the neutered script still refused: the test is not testing the guard"
@@ -141,5 +142,59 @@ pass "positive control: with the overwrite guard removed, init overwrites"
 pin="$(bash "$CI" pin)"
 printf '%s' "$pin" | grep -Eq '^[0-9a-f]{40}$' || fail "pin is not a SHA: $pin"
 pass "pin prints the default commit"
+
+# --- init writes nothing when the pinned commit lacks a template (finding: half-written setup)
+git -C "$SRC" checkout -q "$V1"
+git -C "$SRC" checkout -q -b no-teardown-template
+git -C "$SRC" rm -q templates/preview-teardown.yml && git -C "$SRC" commit -qm "no teardown template"
+NOTPL="$(git -C "$SRC" rev-parse HEAD)"
+git -C "$SRC" checkout -q main
+R4="$(repo)"; cd "$R4"
+expect_exit 1 bash "$CI" init --project site --wrangler 4.1.0 --sha "$NOTPL"
+[ ! -e .github/workflows/preview.yml ] || fail "init left a half-written setup"
+expect_exit 0 bash "$CI" init --project site --wrangler 4.1.0 --sha "$V1"
+pass "init writes both workflows or neither"
+
+# --- init refuses a repository that already deploys previews under another file name
+R5="$(repo)"; cd "$R5"; mkdir -p .github/workflows
+printf '%s\n' "on: pull_request" "jobs:" "  p:" "    steps:" \
+  '      - run: wrangler pages deploy dist --project-name=x --branch="${{ github.head_ref }}"' > .github/workflows/preview-web.yml
+expect_exit 3 bash "$CI" init --project site --wrangler 4.1.0 --sha "$V1"
+grep -q "preview-web.yml" "$TMP_ROOT/out" || fail "the refusal does not name the existing preview workflow"
+[ ! -e .github/workflows/preview.yml ] || fail "a refused init wrote preview.yml"
+printf '%s\n' "on: push" '      - run: wrangler pages deploy dist --project-name=x --branch=main' > .github/workflows/preview-web.yml
+expect_exit 0 bash "$CI" init --project site --wrangler 4.1.0 --sha "$V1"
+pass "init refuses beside an existing preview deploy, not beside a production-only one"
+
+# --- init at the root when git and pwd spell the path differently, as on Git Bash for Windows
+# (git: C:/Users/..., pwd: /c/Users/...). A wrapper git prints a Windows-style toplevel.
+winbin="$TMP_ROOT/winbin"; mkdir -p "$winbin"
+REAL_GIT="$(command -v git)"
+cat > "$winbin/git" <<EOF2
+#!/bin/bash
+for a in "\$@"; do [ "\$a" = --show-toplevel ] && { echo "C:/Users/test/repo"; exit 0; }; done
+exec "$REAL_GIT" "\$@"
+EOF2
+chmod +x "$winbin/git"
+R7="$(repo)"; cd "$R7"
+expect_exit 0 env PATH="$winbin:$PATH" bash "$CI" init --project site --wrangler 4.1.0 --sha "$V1"
+mkdir -p deeper && cd deeper
+expect_exit 3 env PATH="$winbin:$PATH" bash "$CI" init --project site --wrangler 4.1.0 --sha "$V1"
+pass "init finds the root by git's prefix, not by comparing path spellings"
+
+# --- update handles a workflow file name with a space
+R6="$(repo)"; cd "$R6"; mkdir -p .github/workflows
+echo "      - uses: TimZander/ci-recipes/actions/pages-preview@$V1" > ".github/workflows/my preview.yml"
+expect_exit 0 bash "$CI" update --sha "$V1B"
+grep -q "pages-preview@$V1B" ".github/workflows/my preview.yml" || fail "update skipped a file name with a space"
+pass "update handles a file name with a space"
+
+# --- no temp dirs left behind, by successes or by refusals and failures
+cd "$R"
+expect_exit 1 bash "$CI" update --sha 0000000000000000000000000000000000000000   # fetch fails
+expect_exit 3 bash "$CI" update --sha "$V2"                                       # refused after a fetch
+left="$(ls -A "$TMPDIR")"
+[ -z "$left" ] || fail "ci.sh left temp dirs behind: $left"
+pass "no temp dirs left behind"
 
 echo "all ci.sh tests passed"

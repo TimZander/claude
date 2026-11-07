@@ -114,8 +114,10 @@ skills). Not every repository uses it, so check which kind this one is before ch
 - **Count CI minutes beside model spend.** When a PR merges, report its billed Actions minutes
   (`/ci:minutes <pr>`) with the session's model spend. Prefer fewer billed minutes over a
   shorter wait, except for previews: a preview never waits for the tests.
-- **Shared CI comes from TimZander/ci-recipes.** A repository that deploys Cloudflare Pages
-  previews uses it (`/ci:init`; `/ci:update` to move its pin). Its `STANDARD.md` is the rule.
+- **Shared CI comes from TimZander/ci-recipes.** Its `STANDARD.md` is the rule for a repository
+  that uses it (`.github/workflows/` pins `TimZander/ci-recipes`); keep its pins moving with
+  `/ci:update`. Moving a repository onto it is the owner's decision: never run `/ci:init`
+  unasked. If a change touches a repository's CI and it doesn't use ci-recipes yet, say so once.
 MD
 echo "sdd instructions written: ${SETUP_HOME}/.claude/CLAUDE.md"
 

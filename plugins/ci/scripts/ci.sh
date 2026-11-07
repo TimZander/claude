@@ -28,6 +28,16 @@ usage() {
     exit 2
 }
 die() { echo "ci.sh: $*" >&2; exit 1; }
+
+# One temp dir per run, removed on every exit: die and refuse leave through `exit`, which a
+# RETURN trap never sees.
+TMP=""
+trap '[ -z "$TMP" ] || rm -rf "$TMP"' EXIT
+# Call as a plain command, never as $(make_tmp): a subshell would set TMP only in itself, and
+# the trap would have nothing to remove.
+make_tmp() {
+    [ -n "$TMP" ] || TMP="$(mktemp -d)"
+}
 refuse() { echo "ci.sh: $*" >&2; exit 3; }
 
 default_pin() {
@@ -76,7 +86,9 @@ cmd_init() {
     is_sha "$sha" || { echo "ci.sh: --sha must be a full 40-character commit SHA" >&2; exit 2; }
 
     git rev-parse --show-toplevel >/dev/null 2>&1 || refuse "not inside a git repository"
-    [ "$(git rev-parse --show-toplevel)" = "$(pwd -P)" ] || refuse "run from the repository's root"
+    # An empty prefix means the root. Comparing paths would fail on Git Bash for Windows,
+    # where git prints C:/... and pwd prints /c/... for the same directory.
+    [ -z "$(git rev-parse --show-prefix)" ] || refuse "run from the repository's root"
 
     local existing=""
     for f in preview.yml preview-teardown.yml; do
@@ -84,19 +96,32 @@ cmd_init() {
     done
     [ -z "$existing" ] || refuse "already exists, nothing written:$existing (edit them, or move them aside first)"
 
+    # A preview deployed by another workflow would deploy every PR twice and race two
+    # teardowns. A preview deploy names a PR-derived --branch; a production-only deploy
+    # (--branch=main, or no --branch) does not count.
+    local others
+    others="$(grep -lE 'pages deploy.*--branch[= ].*(pull_request|head_ref|pr-)' \
+        "$WORKFLOWS"/*.yml "$WORKFLOWS"/*.yaml 2>/dev/null || true)"
+    [ -z "$others" ] || refuse "these already deploy previews, nothing written: $(printf '%s' "$others" | tr '\n' ' ')(remove the preview deploy from them, or split it out, first)"
+
+    # Render both into the temp dir and move them only when both are whole, so a failure
+    # never leaves one half of the setup behind.
     local tmp
-    tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' RETURN
+    make_tmp; tmp="$TMP"
     fetch_at "$sha" "$tmp/src"
-    mkdir -p "$WORKFLOWS"
+    mkdir -p "$tmp/out"
     for f in preview.yml preview-teardown.yml; do
-        [ -f "$tmp/src/templates/$f" ] || die "ci-recipes at $sha has no templates/$f"
+        [ -f "$tmp/src/templates/$f" ] || die "ci-recipes at $sha has no templates/$f; nothing written"
         sed -e "s|__PROJECT__|$project|g" -e "s|__SHA__|$sha|g" -e "s|__WRANGLER__|$wrangler|g" \
             -e "s|directory: dist\$|directory: $directory|" \
-            "$tmp/src/templates/$f" > "$WORKFLOWS/$f"
-        if grep -q '__[A-Z]*__' "$WORKFLOWS/$f"; then
-            die "$WORKFLOWS/$f still has a placeholder: $(grep -o '__[A-Z]*__' "$WORKFLOWS/$f" | head -1)"
+            "$tmp/src/templates/$f" > "$tmp/out/$f"
+        if grep -q '__[A-Z]*__' "$tmp/out/$f"; then
+            die "templates/$f still has a placeholder: $(grep -o '__[A-Z]*__' "$tmp/out/$f" | head -1); nothing written"
         fi
+    done
+    mkdir -p "$WORKFLOWS"
+    for f in preview.yml preview-teardown.yml; do
+        mv "$tmp/out/$f" "$WORKFLOWS/$f"
         echo "wrote $WORKFLOWS/$f"
     done
     echo "pinned ci-recipes $sha"
@@ -115,22 +140,26 @@ cmd_update() {
     is_sha "$sha" || { echo "ci.sh: --sha must be a full 40-character commit SHA" >&2; exit 2; }
     [ -d "$WORKFLOWS" ] || refuse "no $WORKFLOWS directory here"
 
-    local files
-    files="$(grep -l "$PIN_PATTERN" "$WORKFLOWS"/*.yml "$WORKFLOWS"/*.yaml 2>/dev/null || true)"
-    [ -n "$files" ] || refuse "no TimZander/ci-recipes pin in $WORKFLOWS (run /ci:init first)"
+    # An array, so a file name with a space stays one file (bash 3.2 has indexed arrays).
+    local files=() f
+    for f in "$WORKFLOWS"/*.yml "$WORKFLOWS"/*.yaml; do
+        [ -f "$f" ] && grep -q "$PIN_PATTERN" "$f" && files+=("$f")
+    done
+    [ "${#files[@]}" -gt 0 ] || refuse "no TimZander/ci-recipes pin in $WORKFLOWS (run /ci:init first)"
 
     # The new commit must exist and still carry every action the repository uses.
     local tmp
-    tmp="$(mktemp -d)"
-    trap 'rm -rf "$tmp"' RETURN
+    make_tmp; tmp="$TMP"
     fetch_at "$sha" "$tmp/src"
     local action
-    for action in $(grep -ho "$PIN_PATTERN" $files | sed 's|^TimZander/ci-recipes/||; s|@.*||' | sort -u); do
+    while IFS= read -r action; do
         [ -f "$tmp/src/$action/action.yml" ] || refuse "ci-recipes at $sha has no $action; nothing changed"
-    done
+    done <<EOF2
+$(grep -ho "$PIN_PATTERN" "${files[@]}" | sed 's|^TimZander/ci-recipes/||; s|@.*||' | sort -u)
+EOF2
 
-    local f old changed=0
-    for f in $files; do
+    local old changed=0
+    for f in "${files[@]}"; do
         old="$(grep -o "$PIN_PATTERN" "$f" | sed 's/.*@//' | sort -u | tr '\n' ' ')"
         if [ "$old" = "$sha " ]; then
             echo "$f: already at $sha"
@@ -149,11 +178,10 @@ cmd_update() {
 cmd_minutes() {
     command -v python3 >/dev/null || die "python3 is needed"
     local tmp code=0
-    tmp="$(mktemp -d)"
+    make_tmp; tmp="$TMP"
     fetch_at "$(default_pin)" "$tmp/src"
     # -I: isolated, so nothing in the current directory is imported in place of the stdlib.
     python3 -I "$tmp/src/scripts/ci_minutes.py" "$@" || code=$?
-    rm -rf "$tmp"
     return "$code"
 }
 
