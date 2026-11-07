@@ -21,7 +21,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 URL="${CI_RECIPES_URL:-https://github.com/TimZander/ci-recipes}"
 WORKFLOWS=".github/workflows"
-PIN_PATTERN='TimZander/ci-recipes/actions/[A-Za-z0-9_./-]*@[0-9a-f]\{40\}'
+# A pin on an action (TimZander/ci-recipes/actions/<name>@<sha>) or on a reusable workflow
+# (TimZander/ci-recipes/.github/workflows/<file>.yml@<sha>, ci-recipes decision 0005).
+PIN_PATTERN='TimZander/ci-recipes/[A-Za-z0-9_./-]*@[0-9a-f]\{40\}'
 
 usage() {
     sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2
@@ -153,7 +155,10 @@ cmd_update() {
     fetch_at "$sha" "$tmp/src"
     local action
     while IFS= read -r action; do
-        [ -f "$tmp/src/$action/action.yml" ] || refuse "ci-recipes at $sha has no $action; nothing changed"
+        case "$action" in
+            *.yml|*.yaml) [ -f "$tmp/src/$action" ] || refuse "ci-recipes at $sha has no $action; nothing changed" ;;
+            *) [ -f "$tmp/src/$action/action.yml" ] || refuse "ci-recipes at $sha has no $action; nothing changed" ;;
+        esac
     done <<EOF2
 $(grep -ho "$PIN_PATTERN" "${files[@]}" | sed 's|^TimZander/ci-recipes/||; s|@.*||' | sort -u)
 EOF2
@@ -165,7 +170,7 @@ EOF2
             echo "$f: already at $sha"
             continue
         fi
-        sed "s|\(TimZander/ci-recipes/actions/[A-Za-z0-9_./-]*@\)[0-9a-f]\{40\}|\1$sha|g" "$f" > "$tmp/new"
+        sed "s|\(TimZander/ci-recipes/[A-Za-z0-9_./-]*@\)[0-9a-f]\{40\}|\1$sha|g" "$f" > "$tmp/new"
         cat "$tmp/new" > "$f"
         echo "$f: ${old% } -> $sha"
         changed=1
