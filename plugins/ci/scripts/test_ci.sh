@@ -147,6 +147,7 @@ V3="$(git -C "$SRC" rev-parse HEAD)"
 expect_exit 0 bash "$CI" update
 grep -q "pages-preview@$V3" .github/workflows/preview.yml || fail "update did not read main"
 grep -q "pages-teardown@$V3" .github/workflows/preview-teardown.yml || fail "update did not read main"
+grep -q "pages-branch-preview.yml@$V3" .github/workflows/branch-preview.yml || fail "update did not read main"
 pass "update with no --sha moves to ci-recipes' main"
 
 R2="$(repo)"; cd "$R2"; mkdir -p .github/workflows; echo 'on: push' > .github/workflows/x.yml
@@ -174,7 +175,7 @@ NOTPL="$(git -C "$SRC" rev-parse HEAD)"
 git -C "$SRC" checkout -q main
 R4="$(repo)"; cd "$R4"
 expect_exit 1 bash "$CI" init --project site --wrangler 4.1.0 --sha "$NOTPL"
-[ ! -e .github/workflows/preview.yml ] || fail "init left a half-written setup"
+[ ! -e .github ] || fail "init left a half-written setup"
 expect_exit 0 bash "$CI" init --project site --wrangler 4.1.0 --sha "$V1"
 git -C "$SRC" checkout -q "$V1"
 git -C "$SRC" checkout -q -b no-branch-preview-template
