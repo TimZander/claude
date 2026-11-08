@@ -7,8 +7,10 @@ allowed-tools: Bash, Read, Glob
 # Update shared CI
 
 Moves every `TimZander/ci-recipes/actions/...@<sha>` pin in `.github/workflows/` to one
-commit, so the preview and the teardown always come from the same ci-recipes. Pins move only
-when someone runs this; there is no Dependabot (ci-recipes decision 0004: every bump PR spends
+commit, so the preview, the branch preview and the teardown always come from the same
+ci-recipes. It never adds a caller: a setup older than `branch-preview.yml` stays without
+one, so say so, and point at ci-recipes' `templates/branch-preview.yml`. Pins move only when
+someone runs this; there is no Dependabot (ci-recipes decision 0004: every bump PR spends
 CI minutes).
 
 ## Find the script

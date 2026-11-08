@@ -161,7 +161,7 @@
     },
     {
       "name": "ci",
-      "description": "Shared CI from TimZander/ci-recipes: /ci:init writes a repository's Cloudflare Pages preview and teardown workflows (previews deploy alongside the tests, as pr-<number>, with one comment), pinned to a ci-recipes commit; /ci:update moves the pin forward; /ci:minutes reports a pull request's billed Actions minutes",
+      "description": "Shared CI from TimZander/ci-recipes: /ci:init writes a repository's Cloudflare Pages preview, branch-preview and teardown workflows (previews deploy alongside the tests, as pr-<number>, with one comment; a push to preview/** deploys one with no PR), pinned to a ci-recipes commit; /ci:update moves the pin forward; /ci:minutes reports a pull request's billed Actions minutes",
       "author": { "name": "Tim Zander" },
       "source": "./plugins/ci",
       "category": "deployment"
