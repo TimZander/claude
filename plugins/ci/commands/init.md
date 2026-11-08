@@ -30,9 +30,11 @@ Run it from the repository's root.
    them: this is an adoption, not a fresh setup. The script refuses while another workflow
    still deploys a preview, so take the preview deploy out first: delete a preview-only
    workflow and its old teardown, or split the preview job out of a workflow that also
-   deploys production (keep production gated on the tests). In an sdd repository, an
-   adoption is a change like any other: propose it first, then run these steps from
-   `/opsx:apply`.
+   deploys production (keep production gated on the tests). In an sdd repository whose specs
+   cover CI, an adoption is a change like any other: propose it first, then run these steps
+   from `/opsx:apply`. Where they don't (CI's behaviour is ci-recipes' `STANDARD.md`), it is an
+   ADR plus the repository's guard tests, and still gets `/code-review` before merging. If you
+   can't tell which, ask the owner before you start.
 2. **Gather the three values.** The Pages project name (**$ARGUMENTS**, else from an
    existing `--project-name`, else ask). The build's output directory (from the existing
    deploy or the build config). The **exact** wrangler version: from a lockfile or an
