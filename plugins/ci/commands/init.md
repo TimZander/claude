@@ -30,9 +30,13 @@ Run it from the repository's root.
    them: this is an adoption, not a fresh setup. The script refuses while another workflow
    still deploys a preview, so take the preview deploy out first: delete a preview-only
    workflow and its old teardown, or split the preview job out of a workflow that also
-   deploys production (keep production gated on the tests). In an sdd repository, an
-   adoption is a change like any other: propose it first, then run these steps from
-   `/opsx:apply`.
+   deploys production (keep production gated on the tests). CI is never specified in a
+   repository's OpenSpec specs, sdd or not: the shared behaviour lives once, in ci-recipes'
+   `STANDARD.md`, and a repository's own wiring lives in its workflows, the guard tests that
+   pin them, and its decision records. So an adoption is an ADR plus guard tests, put the
+   owner's choices to them before you build, and get `/code-review` before merging. In a
+   repository whose specs still describe CI, say so: retiring those requirements is a
+   change of its own.
 2. **Gather the three values.** The Pages project name (**$ARGUMENTS**, else from an
    existing `--project-name`, else ask). The build's output directory (from the existing
    deploy or the build config). The **exact** wrangler version: from a lockfile or an
