@@ -35,6 +35,15 @@ correct spec as a bug fix. Read `openspec/conventions.md` before writing or chan
 A copy-only change (wording, typos, links; no requirement's meaning changes) may skip step 3;
 its proposal says so.
 
+**A prototype comes before the change, never inside it.** When the owner wants to see an idea
+before there is a spec (mockups, then a throwaway prototype to try on a phone), and this
+repository has `.github/workflows/branch-preview.yml` (TimZander/ci-recipes' preview-only
+route), push the prototype to a `preview/<n>-<slug>` branch (`<n>` the issue's number) and
+never open a PR for it: the push deploys a preview with no tests, and deleting the branch
+removes it. Without that workflow, say so rather than opening a do-not-merge PR. Once the
+owner has chosen, the change starts at step 0 from the default branch; the prototype's code
+doesn't carry over.
+
 ## Rules
 
 - **Fixes go through the spec.** A review finding, UAT remark or bug that changes what the
