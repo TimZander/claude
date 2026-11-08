@@ -921,7 +921,10 @@ done
 o9="$(fresh_repo)" && printf '# Agents\n' > "$o9/AGENTS.md"
 ln -s "$o9" "$TMP_ROOT/via.$RANDOM" && via="$(ls -d "$TMP_ROOT"/via.* | tail -n 1)"
 ln -s "$via/AGENTS.md" "$o9/CLAUDE.md" && git -C "$o9" add -A && git -C "$o9" commit -q -m via
-bash "$OPT" --repo "$o9" | grep -qx 'file: AGENTS.md' || fail "opt-out refused an absolute link through a symlinked path"
+# Capture first: grep -q exits on its match, and the script's later echo would hit a closed
+# pipe and fail the pipeline under pipefail, now and then (seen on macOS).
+out="$(bash "$OPT" --repo "$o9")"
+printf '%s\n' "$out" | grep -qx 'file: AGENTS.md' || fail "opt-out refused an absolute link through a symlinked path"
 # An empty linked file gets just the line, not a CLAUDE.md heading.
 o10="$(fresh_repo)" && : > "$o10/AGENTS.md" && ln -s AGENTS.md "$o10/CLAUDE.md"
 git -C "$o10" add -A && git -C "$o10" commit -q -m empty
@@ -950,7 +953,8 @@ grep -qxF "$optline" "$o13/AGENTS.md" && fail "opt-out edited the repo's AGENTS.
 # CDPATH can't redirect the lookup.
 o14="$(fresh_repo)" && mkdir -p "$o14/docs" "$elsewhere/cd/docs" && printf '# Agents\n' > "$o14/docs/AGENTS.md"
 ln -s docs/AGENTS.md "$o14/CLAUDE.md" && git -C "$o14" add -A && git -C "$o14" commit -q -m docs
-CDPATH="$elsewhere/cd" bash "$OPT" --repo "$o14" | grep -qx 'file: docs/AGENTS.md' || fail "CDPATH redirected the link lookup"
+out="$(CDPATH="$elsewhere/cd" bash "$OPT" --repo "$o14")"
+printf '%s\n' "$out" | grep -qx 'file: docs/AGENTS.md' || fail "CDPATH redirected the link lookup"
 # A trailing slash, a name starting with -, and a glob that matches a committed file.
 o15="$(fresh_repo)" && printf '# Agents\n' > "$o15/AGENTS.md" && git -C "$o15" add -A && git -C "$o15" commit -q -m agents
 for spelling in "AGENTS.md/" "-/AGENTS.md" "A*.md"; do
