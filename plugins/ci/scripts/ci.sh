@@ -3,8 +3,9 @@
 #
 #   ci.sh pin                              the ci-recipes commit this plugin pins by default
 #   ci.sh init --project NAME --wrangler VERSION [--directory DIR] [--sha SHA]
-#                                          write .github/workflows/preview.yml and
-#                                          preview-teardown.yml from ci-recipes' templates
+#                                          write .github/workflows/preview.yml,
+#                                          preview-teardown.yml and branch-preview.yml from
+#                                          ci-recipes' templates
 #   ci.sh update [--sha SHA]               move every ci-recipes pin in .github/workflows/ to
 #                                          SHA (default: ci-recipes' main)
 #   ci.sh minutes [--repo OWNER/NAME] PR...
@@ -21,12 +22,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 URL="${CI_RECIPES_URL:-https://github.com/TimZander/ci-recipes}"
 WORKFLOWS=".github/workflows"
+# The callers init writes, one per ci-recipes template: the PR preview, the teardown, and the
+# preview-only route (a push to preview/** deploys a preview with no PR).
+TEMPLATES="preview.yml preview-teardown.yml branch-preview.yml"
 # A pin on an action (TimZander/ci-recipes/actions/<name>@<sha>) or on a reusable workflow
 # (TimZander/ci-recipes/.github/workflows/<file>.yml@<sha>, ci-recipes decision 0005).
 PIN_PATTERN='TimZander/ci-recipes/[A-Za-z0-9_./-]*@[0-9a-f]\{40\}'
 
 usage() {
-    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' >&2
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' >&2
     exit 2
 }
 die() { echo "ci.sh: $*" >&2; exit 1; }
@@ -93,7 +97,7 @@ cmd_init() {
     [ -z "$(git rev-parse --show-prefix)" ] || refuse "run from the repository's root"
 
     local existing=""
-    for f in preview.yml preview-teardown.yml; do
+    for f in $TEMPLATES; do
         [ -e "$WORKFLOWS/$f" ] && existing="$existing $WORKFLOWS/$f"
     done
     [ -z "$existing" ] || refuse "already exists, nothing written:$existing (edit them, or move them aside first)"
@@ -106,13 +110,13 @@ cmd_init() {
         "$WORKFLOWS"/*.yml "$WORKFLOWS"/*.yaml 2>/dev/null || true)"
     [ -z "$others" ] || refuse "these already deploy previews, nothing written: $(printf '%s' "$others" | tr '\n' ' ') (remove the preview deploy from them, or split it out, first)"
 
-    # Render both into the temp dir and move them only when both are whole, so a failure
+    # Render them all into the temp dir and move them only when all are whole, so a failure
     # never leaves one half of the setup behind.
     local tmp
     make_tmp; tmp="$TMP"
     fetch_at "$sha" "$tmp/src"
     mkdir -p "$tmp/out"
-    for f in preview.yml preview-teardown.yml; do
+    for f in $TEMPLATES; do
         [ -f "$tmp/src/templates/$f" ] || die "ci-recipes at $sha has no templates/$f; nothing written"
         sed -e "s|__PROJECT__|$project|g" -e "s|__SHA__|$sha|g" -e "s|__WRANGLER__|$wrangler|g" \
             -e "s|directory: dist\$|directory: $directory|" \
@@ -122,12 +126,12 @@ cmd_init() {
         fi
     done
     mkdir -p "$WORKFLOWS"
-    for f in preview.yml preview-teardown.yml; do
+    for f in $TEMPLATES; do
         mv "$tmp/out/$f" "$WORKFLOWS/$f"
         echo "wrote $WORKFLOWS/$f"
     done
     echo "pinned ci-recipes $sha"
-    echo "next: set the build inputs in $WORKFLOWS/preview.yml (build-command, node-version, working-directory, directory)"
+    echo "next: set the build inputs in $WORKFLOWS/preview.yml and $WORKFLOWS/branch-preview.yml, the same in both (build-command, node-version, working-directory, directory)"
 }
 
 cmd_update() {

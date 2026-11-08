@@ -36,6 +36,15 @@ jobs:
           directory: dist
           wrangler-version: '__WRANGLER__'
 EOF
+cat > "$SRC/templates/branch-preview.yml" <<'EOF'
+jobs:
+  preview:
+    uses: TimZander/ci-recipes/.github/workflows/pages-branch-preview.yml@__SHA__
+    with:
+      project-name: __PROJECT__
+      directory: dist
+      wrangler-version: '__WRANGLER__'
+EOF
 cat > "$SRC/templates/preview-teardown.yml" <<'EOF'
 jobs:
   teardown:
@@ -49,6 +58,7 @@ echo x > "$SRC/actions/pages-teardown/action.yml"
 mkdir -p "$SRC/.github/workflows"
 echo x > "$SRC/.github/workflows/pages-preview.yml"
 echo x > "$SRC/.github/workflows/pages-teardown.yml"
+echo x > "$SRC/.github/workflows/pages-branch-preview.yml"
 git -C "$SRC" add -A && git -C "$SRC" commit -q -m v1
 V1="$(git -C "$SRC" rev-parse HEAD)"
 echo y >> "$SRC/actions/pages-preview/action.yml"
@@ -84,19 +94,28 @@ expect_exit 2 bash "$CI" init --project site --wrangler 4.1.0 --directory 'a|b' 
 [ ! -e .github ] || fail "a refused init wrote something"
 pass "init refuses bad project, ranges, branch pins and odd directories, writing nothing"
 
-# --- init writes both, substituted and pinned
+# --- init writes all three, substituted and pinned
 expect_exit 0 bash "$CI" init --project my-site --wrangler 4.142.0 --directory web/dist --sha "$V1"
 grep -q "pages-preview@$V1" .github/workflows/preview.yml || fail "preview not pinned"
 grep -q "pages-teardown@$V1" .github/workflows/preview-teardown.yml || fail "teardown not pinned"
+grep -q "pages-branch-preview.yml@$V1" .github/workflows/branch-preview.yml || fail "branch preview not pinned"
+grep -q "project-name: my-site" .github/workflows/branch-preview.yml || fail "branch preview's project not substituted"
+grep -q "directory: web/dist" .github/workflows/branch-preview.yml || fail "branch preview's directory not substituted"
 grep -q "project-name: my-site" .github/workflows/preview.yml || fail "project not substituted"
 grep -q "directory: web/dist" .github/workflows/preview.yml || fail "directory not substituted"
 grep -q "wrangler-version: '4.142.0'" .github/workflows/preview.yml || fail "wrangler not substituted"
 ! grep -q '__[A-Z]*__' .github/workflows/*.yml || fail "a placeholder survived"
-pass "init writes both workflows, substituted and pinned"
+pass "init writes all three workflows, substituted and pinned"
 
 expect_exit 3 bash "$CI" init --project my-site --wrangler 4.142.0 --sha "$V1"
 grep -q "already exists" "$TMP_ROOT/out" || fail "no reason given"
-pass "init refuses to overwrite"
+R3="$(repo)"; cd "$R3"; mkdir -p .github/workflows; echo keep > .github/workflows/branch-preview.yml
+expect_exit 3 bash "$CI" init --project my-site --wrangler 4.142.0 --sha "$V1"
+grep -q "branch-preview.yml" "$TMP_ROOT/out" || fail "the refusal does not name branch-preview.yml"
+[ ! -e .github/workflows/preview.yml ] || fail "a refused init wrote preview.yml"
+[ "$(cat .github/workflows/branch-preview.yml)" = keep ] || fail "a refused init overwrote branch-preview.yml"
+cd "$R"
+pass "init refuses to overwrite, branch-preview.yml included"
 
 mkdir sub && cd sub
 expect_exit 3 bash "$CI" init --project x --wrangler 1.0.0 --sha "$V1"
@@ -107,6 +126,7 @@ pass "init refuses outside the repository root"
 expect_exit 0 bash "$CI" update --sha "$V1B"
 grep -q "pages-preview@$V1B" .github/workflows/preview.yml || fail "preview pin not moved"
 grep -q "pages-teardown@$V1B" .github/workflows/preview-teardown.yml || fail "teardown pin not moved"
+grep -q "pages-branch-preview.yml@$V1B" .github/workflows/branch-preview.yml || fail "branch preview pin not moved"
 ! grep -q "$V1" .github/workflows/*.yml || fail "an old pin survived"
 pass "update moves every pin"
 
@@ -127,6 +147,7 @@ V3="$(git -C "$SRC" rev-parse HEAD)"
 expect_exit 0 bash "$CI" update
 grep -q "pages-preview@$V3" .github/workflows/preview.yml || fail "update did not read main"
 grep -q "pages-teardown@$V3" .github/workflows/preview-teardown.yml || fail "update did not read main"
+grep -q "pages-branch-preview.yml@$V3" .github/workflows/branch-preview.yml || fail "update did not read main"
 pass "update with no --sha moves to ci-recipes' main"
 
 R2="$(repo)"; cd "$R2"; mkdir -p .github/workflows; echo 'on: push' > .github/workflows/x.yml
@@ -154,9 +175,18 @@ NOTPL="$(git -C "$SRC" rev-parse HEAD)"
 git -C "$SRC" checkout -q main
 R4="$(repo)"; cd "$R4"
 expect_exit 1 bash "$CI" init --project site --wrangler 4.1.0 --sha "$NOTPL"
-[ ! -e .github/workflows/preview.yml ] || fail "init left a half-written setup"
+[ ! -e .github ] || fail "init left a half-written setup"
 expect_exit 0 bash "$CI" init --project site --wrangler 4.1.0 --sha "$V1"
-pass "init writes both workflows or neither"
+git -C "$SRC" checkout -q "$V1"
+git -C "$SRC" checkout -q -b no-branch-preview-template
+git -C "$SRC" rm -q templates/branch-preview.yml && git -C "$SRC" commit -qm "no branch preview template"
+NOBPT="$(git -C "$SRC" rev-parse HEAD)"
+git -C "$SRC" checkout -q main
+R4B="$(repo)"; cd "$R4B"
+expect_exit 1 bash "$CI" init --project site --wrangler 4.1.0 --sha "$NOBPT"
+grep -q "no templates/branch-preview.yml" "$TMP_ROOT/out" || fail "the failure does not name the missing template"
+[ ! -e .github ] || fail "init wrote something from a commit without the branch preview template"
+pass "init writes all three workflows or none"
 
 # --- init refuses a repository that already deploys previews under another file name
 R5="$(repo)"; cd "$R5"; mkdir -p .github/workflows
