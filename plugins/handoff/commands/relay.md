@@ -43,7 +43,9 @@ It is `${CLAUDE_PLUGIN_ROOT}/scripts/handoff.sh`. If that path still reads liter
      (`git fetch --unshallow`), files from outside the repository.
    ```
 
-   Say "none" if the clone needs nothing. Start **Current state** with
+   Write each as one plain command, with no `cd`, `&&`, pipes or quotes (`npm --prefix pwa ci`,
+   not `cd pwa && npm ci`): `/pickup` runs a plain command the repository already allows without
+   asking, and asks about anything else. Say "none" if the clone needs nothing. Start **Current state** with
    `Relayed from: <this session's id>` (from `get_session` with no `session_id`), so the new
    session knows which session to tell once it has picked up. Scratchpad files and anything outside the repository
    don't travel: move what matters into the note or into a commit, or say it's gone. In
