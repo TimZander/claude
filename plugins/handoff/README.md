@@ -36,9 +36,10 @@ later work: it finds commits it doesn't recognize and decides another session ma
 1. refuses while background shells, subagents or workflows are still running, since archiving
    the session kills them;
 2. writes the note, with a fifth section, **Recreate the environment**: the commands a fresh
-   clone needs (worktrees, dependencies, deeper history). `/pickup` shows them and asks before
-   running them, once it has checked the branch, and only then checks the rest of the note
-   against the repository and deletes it;
+   clone needs (worktrees, dependencies, deeper history). `/pickup` runs without asking the ones
+   the repository's default branch allows in `.claude/settings.json` (`handoff.sh allowed`), and
+   shows the rest and asks before running them, once it has checked the branch; only then does it
+   check the rest of the note against the repository and delete it;
 3. commits and pushes it, then runs `handoff.sh relay`, which fetches the branch and refuses
    unless everything is on `origin/<branch>` (tracked under the same name, no uncommitted
    changes, nothing unpushed or unpulled, not on `main`), and lists what the clone won't have:

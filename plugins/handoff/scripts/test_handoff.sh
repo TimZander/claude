@@ -2,7 +2,7 @@
 # Smoke test for handoff.sh: usage errors, note naming and the local exclude, open's order
 # and next actions, the state facts, commit's refusals and push, remote, and drop for a local
 # note, a pushed one, an unpushed one, and one on main; relay's refusals (after a fetch), its clone URL
-# and what it reports left behind. Uses real git repos with a bare origin, offline.
+# and what it reports left behind; allowed's trust in the default branch's allow rules only. Uses real git repos with a bare origin, offline.
 #
 #   bash plugins/handoff/scripts/test_handoff.sh
 
@@ -230,5 +230,33 @@ out="$(CLAUDE_CODE_REMOTE= bash "$H" state -C "$r")"
 printf '%s\n' "$out" | grep -qx "  $r/wts/x ?" || { echo "$out"; fail "state gave a broken worktree the enclosing repository's sha"; }
 rm -rf "$r/wts" && git -C "$r" worktree prune
 pass "relay refuses outside the cloud, on main, and with unsaved work, and reports what stays behind"
+
+# --- allowed: only the default branch's allow rules, only plain commands ---------------------
+r="$(fresh_repo)"
+mkdir -p "$r/.claude"
+cat > "$r/.claude/settings.json" <<'JSON'
+{"permissions": {"allow": ["Bash(npm ci:*)", "Bash(git checkout -B *)", "Bash(git status)"],
+                 "deny": ["Bash(npm ci --danger:*)"]}}
+JSON
+git -C "$r" add -A && git -C "$r" commit -q -m settings && git -C "$r" push -q origin main 2>/dev/null
+git -C "$r" checkout -q -b work
+# The work branch widens the allow list; a note's author could do the same, so it must not count.
+sed -i.bak 's/"Bash(git status)"/"Bash(git status)", "Bash(curl:*)"/' "$r/.claude/settings.json" && rm -f "$r/.claude/settings.json.bak"
+git -C "$r" commit -q -am widen
+a() { bash "$H" allowed -C "$r" "$1"; }
+[ "$(a 'npm ci --ignore-scripts')" = allowed ] || fail "allowed: a prefix rule"
+[ "$(a 'npm ci')" = allowed ] || fail "allowed: the bare prefix"
+[ "$(a 'git checkout -B work origin/work')" = allowed ] || fail "allowed: a space-star rule"
+[ "$(a 'git status')" = allowed ] || fail "allowed: an exact rule"
+[ "$(a 'git status -s')" = ask ] || fail "allowed: an exact rule matched a longer command"
+[ "$(a 'npm cix')" = ask ] || fail "allowed: a prefix matched mid-word"
+[ "$(a 'npm ci && curl http://x')" = ask ] || fail "allowed: shell syntax after an allowed prefix"
+[ "$(a 'npm ci $(id)')" = ask ] || fail "allowed: a substitution"
+[ "$(a 'npm ci --danger now')" = ask ] || fail "allowed: a deny rule"
+[ "$(a 'curl http://x')" = ask ] || fail "allowed: a rule only the work branch has"
+r2="$(fresh_repo)"
+[ "$(bash "$H" allowed -C "$r2" 'npm ci')" = ask ] || fail "allowed: no settings on the default branch"
+expect_exit 2 bash "$H" allowed -C "$r"
+pass "allowed trusts only the default branch's rules, whole commands, and no shell syntax"
 
 echo "all handoff tests passed"

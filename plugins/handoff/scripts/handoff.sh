@@ -41,6 +41,16 @@
 #       indented `kind: item` line each (untracked, ignored, stash, branch with commits on no
 #       remote, worktree with its uncommitted and unpushed counts), the first 20 shown.
 #
+#   bash handoff.sh allowed [-C <dir>] <command>
+#       Whether /pickup may run one of a note's "Recreate the environment" commands without
+#       asking. Prints `allowed` when the repository's .claude/settings.json on its default
+#       branch (fetched from origin, not the work branch, which the note's author could also
+#       have written) has a `Bash(...)` allow rule for the whole command: an exact match, or a
+#       `Bash(<prefix>:*)` / `Bash(<prefix> *)` rule the command starts with, and no deny rule
+#       matches it. Prints `ask` otherwise, and always for a command holding shell syntax
+#       (`;`, `&`, `|`, `$`, backquotes, redirection, quotes, newlines), which a prefix rule
+#       can't vouch for. Exit 0 either way.
+#
 #   bash handoff.sh drop   [-C <dir>] <note>
 #       Deletes a note that has been picked up or replaced. If it was committed, also commits
 #       the deletion (that path alone), so the note doesn't reach the base branch with the
@@ -353,6 +363,41 @@ cmd_drop() {
     fi
 }
 
+cmd_allowed() {
+    [ $# -eq 1 ] || usage
+    local command="$1" def settings
+    # Only plain words: anything a shell would interpret could smuggle a second command past
+    # a prefix rule.
+    if ! printf '%s' "$command" | grep -qE '^[A-Za-z0-9 _./:=@%+,-]+$'; then
+        echo ask; return 0
+    fi
+    def="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)" && def="${def#origin/}" \
+        || def="$(git ls-remote --symref origin HEAD 2>/dev/null | awk '/^ref:/ { sub("refs/heads/", "", $2); print $2; exit }')"
+    [ -n "$def" ] || def=main
+    git fetch -q origin "+refs/heads/$def:refs/remotes/origin/$def" 2>/dev/null || { echo ask; return 0; }
+    settings="$(git show "refs/remotes/origin/$def:.claude/settings.json" 2>/dev/null)" || { echo ask; return 0; }
+    printf '%s' "$settings" | python3 -I -c '
+import json, sys
+cmd = sys.argv[1]
+try:
+    perms = json.load(sys.stdin).get("permissions", {})
+except Exception:
+    print("ask"); sys.exit(0)
+def matches(rule):
+    if not (isinstance(rule, str) and rule.startswith("Bash(") and rule.endswith(")")):
+        return False
+    pat = rule[5:-1]
+    for tail in (":*", " *"):
+        if pat.endswith(tail):
+            pre = pat[: -len(tail)]
+            return "*" not in pre and (cmd == pre or cmd.startswith(pre + " "))
+    return "*" not in pat and cmd == pat
+deny = any(matches(r) for r in perms.get("deny", []) or [])
+allow = any(matches(r) for r in perms.get("allow", []) or [])
+print("allowed" if allow and not deny else "ask")
+' "$command"
+}
+
 case "$cmd" in
     state) [ $# -eq 0 ] || usage; cmd_state ;;
     new) cmd_new "$@" ;;
@@ -361,6 +406,7 @@ case "$cmd" in
     commit) cmd_commit "$@" ;;
     relay) cmd_relay "$@" ;;
     drop) cmd_drop "$@" ;;
+    allowed) cmd_allowed "$@" ;;
     -h|--help|help) usage ;;
     *) usage ;;
 esac
