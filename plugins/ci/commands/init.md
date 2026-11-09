@@ -36,7 +36,10 @@ Run it from the repository's root.
    pin them, and its decision records. So an adoption is an ADR plus guard tests, put the
    owner's choices to them before you build, and get `/code-review` before merging. In a
    repository whose specs still describe CI, say so: retiring those requirements is a
-   change of its own.
+   change of its own. The rule covers the plumbing that builds, tests, previews and deploys
+   the repository. A workflow that *is* the product, one whose output is what the repository
+   delivers (a scheduled data extract, say), stays in that product's spec: if deleting it
+   would stop the repository delivering what it is for, it isn't CI.
 2. **Gather the three values.** The Pages project name (**$ARGUMENTS**, else from an
    existing `--project-name`, else ask). The build's output directory (from the existing
    deploy or the build config). The **exact** wrangler version: from a lockfile or an
