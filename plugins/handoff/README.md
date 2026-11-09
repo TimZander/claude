@@ -21,7 +21,7 @@ It works the same in a terminal, the desktop app and a cloud session. In a cloud
 |---|---|
 | `/handoff [note]` | Writes `docs/handoffs/<date>.md` with four sections (Current state, Next action, Remaining work, Decisions & gotchas), lists anything left stranded (uncommitted or unpushed work, debug probes, background processes, worktrees), and deletes an older note it replaces |
 | `/pickup [note]` | Takes the newest note, checks it against `git status` before trusting it, carries the decisions forward, deletes the note, and starts on the next action |
-| `/handoff:relay [note]` | Cloud sessions only: writes and pushes a note, starts a new cloud session on the same branch that runs `/pickup` on it, and archives this one once you confirm |
+| `/handoff:relay [note]` | Cloud sessions only: writes and pushes a note, starts a new cloud session on the same branch that runs `/pickup` on it, and archives this one once the new session reports its pickup |
 | `/hh [note]`, `/hp [note]`, `/hr [note]` | Shortcuts for `/handoff`, `/pickup` and `/handoff:relay` |
 
 ### Cloud sessions: relay instead of `/clear`
@@ -46,7 +46,8 @@ later work: it finds commits it doesn't recognize and decides another session ma
    worktrees with their uncommitted and unpushed counts;
 4. starts a new cloud session on the same branch (`source_revision` and `outcome_branch`), with
    `/handoff:pickup <note>` as its only prompt;
-5. gives you its link, and archives this session once you confirm the new one has picked up.
+5. gives you its link, and archives this session once the new one has picked up: `/pickup`
+   messages the old session when it's done, so you don't have to confirm (you still can).
 
 `/handoff` still works in a cloud session, for a pause or when relay isn't available, but it
 never suggests `/clear` there: it warns against it and points to relay, a later `/pickup` in a

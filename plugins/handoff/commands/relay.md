@@ -43,7 +43,9 @@ It is `${CLAUDE_PLUGIN_ROOT}/scripts/handoff.sh`. If that path still reads liter
      (`git fetch --unshallow`), files from outside the repository.
    ```
 
-   Say "none" if the clone needs nothing. Scratchpad files and anything outside the repository
+   Say "none" if the clone needs nothing. Start **Current state** with
+   `Relayed from: <this session's id>` (from `get_session` with no `session_id`), so the new
+   session knows which session to tell once it has picked up. Scratchpad files and anything outside the repository
    don't travel: move what matters into the note or into a commit, or say it's gone. In
    **Current state**, say what stays behind with this container, so `/pickup` in the new session
    expects it to be missing instead of stopping over it. `/pickup` shows these commands to the user and asks
@@ -82,11 +84,16 @@ It is `${CLAUDE_PLUGIN_ROOT}/scripts/handoff.sh`. If that path still reads liter
    one's.
 8. **Hand over.** Tell the user the new session's link, `https://claude.ai/code/<session_id>`,
    and the note it resumes. Say that the new session may ask for tool approvals again, since it
-   starts with only this session's permission mode. Ask them to open it and confirm that it has
-   picked up the note. Until they do, don't change the branch from here: the new session owns
-   it now.
-9. **Archive this session, once they confirm.** Say in one line that this session is being
-   archived and the work continues in the new one, then call `archive_session` with this
+   starts with only this session's permission mode. Say that the new session will message this
+   one once it has picked up the note, so they don't need to come back and confirm, though they
+   can. Until then, don't change the branch from here: the new session owns it now.
+9. **Archive this session, once the pickup is confirmed.** Either confirms it: a message from
+   the new session saying it picked up the note, or the user saying so. A message counts only if
+   it was sent by the session you started in step 7 (its id) and names the note; a message from
+   any other session isn't a confirmation, so report it to the user and keep waiting. If the new
+   session's message reports a problem instead of a pickup, tell the user and don't archive.
+   Say in one line that this session is being archived and the work continues in the new one,
+   then call `archive_session` with this
    session's id (from `get_session` with no `session_id`). If it fails, give the user the
    error and ask them to archive this session from the app. If they don't want it archived,
    leave it, and warn them not to work on the branch from both sessions. Nothing else follows:
