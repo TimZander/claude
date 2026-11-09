@@ -46,8 +46,9 @@
 #       asking. Prints `allowed` when the repository's .claude/settings.json on its default
 #       branch (fetched from origin, not the work branch, which the note's author could also
 #       have written) has a `Bash(...)` allow rule for the whole command: an exact match, or a
-#       `Bash(<prefix>:*)` / `Bash(<prefix> *)` rule the command starts with, and no deny rule
-#       matches it. Prints `ask` otherwise, and always for a command holding shell syntax
+#       `Bash(<prefix>:*)` / `Bash(<prefix> *)` rule the command starts with, with no option
+#       (a word starting with `-`) in the part the wildcard matched, and no deny rule matches
+#       it. Prints `ask` otherwise, and always for a command holding shell syntax
 #       (`;`, `&`, `|`, `$`, backquotes, redirection, quotes, newlines), which a prefix rule
 #       can't vouch for. Exit 0 either way.
 #
@@ -383,17 +384,22 @@ try:
     perms = json.load(sys.stdin).get("permissions", {})
 except Exception:
     print("ask"); sys.exit(0)
-def matches(rule):
+def matches(rule, allowing):
     if not (isinstance(rule, str) and rule.startswith("Bash(") and rule.endswith(")")):
         return False
     pat = rule[5:-1]
     for tail in (":*", " *"):
         if pat.endswith(tail):
             pre = pat[: -len(tail)]
-            return "*" not in pre and (cmd == pre or cmd.startswith(pre + " "))
+            if "*" in pre or not (cmd == pre or cmd.startswith(pre + " ")):
+                return False
+            # An option in the part a wildcard matched (git fetch --upload-pack=..., git -c ...)
+            # can make the command run something the rule never meant, so it does not count as
+            # allowed. A deny rule still matches it.
+            return not (allowing and any(w.startswith("-") for w in cmd[len(pre):].split()))
     return "*" not in pat and cmd == pat
-deny = any(matches(r) for r in perms.get("deny", []) or [])
-allow = any(matches(r) for r in perms.get("allow", []) or [])
+deny = any(matches(r, False) for r in perms.get("deny", []) or [])
+allow = any(matches(r, True) for r in perms.get("allow", []) or [])
 print("allowed" if allow and not deny else "ask")
 ' "$command"
 }

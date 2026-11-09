@@ -244,7 +244,8 @@ git -C "$r" checkout -q -b work
 sed -i.bak 's/"Bash(git status)"/"Bash(git status)", "Bash(curl:*)"/' "$r/.claude/settings.json" && rm -f "$r/.claude/settings.json.bak"
 git -C "$r" commit -q -am widen
 a() { bash "$H" allowed -C "$r" "$1"; }
-[ "$(a 'npm ci --ignore-scripts')" = allowed ] || fail "allowed: a prefix rule"
+[ "$(a 'npm ci --ignore-scripts')" = ask ] || fail "allowed: an option in the wildcard part"
+[ "$(a 'git checkout -B work --orphan')" = ask ] || fail "allowed: an option after a space-star prefix"
 [ "$(a 'npm ci')" = allowed ] || fail "allowed: the bare prefix"
 [ "$(a 'git checkout -B work origin/work')" = allowed ] || fail "allowed: a space-star rule"
 [ "$(a 'git status')" = allowed ] || fail "allowed: an exact rule"
@@ -253,6 +254,7 @@ a() { bash "$H" allowed -C "$r" "$1"; }
 [ "$(a 'npm ci && curl http://x')" = ask ] || fail "allowed: shell syntax after an allowed prefix"
 [ "$(a 'npm ci $(id)')" = ask ] || fail "allowed: a substitution"
 [ "$(a 'npm ci --danger now')" = ask ] || fail "allowed: a deny rule"
+[ "$(a 'npm ci pwa')" = allowed ] || fail "allowed: a plain argument in the wildcard part"
 [ "$(a 'curl http://x')" = ask ] || fail "allowed: a rule only the work branch has"
 r2="$(fresh_repo)"
 [ "$(bash "$H" allowed -C "$r2" 'npm ci')" = ask ] || fail "allowed: no settings on the default branch"

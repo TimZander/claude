@@ -42,6 +42,8 @@ It is `${CLAUDE_PLUGIN_ROOT}/scripts/handoff.sh`. If that path still reads liter
    any of them: a note is a file on a branch, and anyone who can push one can write it. Run the
    commands in the note's order: the `allowed` ones without asking, the rest once the user
    agrees. If the user declines, or one fails, report it and stop; keep the note.
+   An `allowed` command still runs this branch's hooks and scripts, so the check vouches for the
+   command's text, not for the branch it runs on.
 4. **Check it against reality.** Run `<handoff> state` and compare it with **Current state**:
    the branch, uncommitted files, ahead/behind. If they disagree (another branch, work that is
    gone, commits the note doesn't mention), tell the user what differs and ask before acting on
