@@ -991,6 +991,7 @@ echo "$*" >> "$FAKE_LOG"
 case "$*" in
     "plugin marketplace add "*) [ -z "${FAKE_MARKETPLACE_EXISTS:-}" ] || exit 1 ;;
     "plugin install "*) [ -z "${FAKE_INSTALL_FAILS:-}" ] || exit 1 ;;
+    "plugin update "*) [ -z "${FAKE_UPDATE_FAILS:-}" ] || exit 1 ;;
 esac
 exit 0
 EOF2
@@ -1011,7 +1012,11 @@ grep -qx 'plugin install handoff@tzander-skills' "$FAKE_LOG" || fail "cloud-setu
 grep -qx 'plugin install ci@tzander-skills' "$FAKE_LOG" || fail "cloud-setup did not install ci"
 [ "$(grep -c '^plugin install ' "$FAKE_LOG")" = 3 ] || fail "cloud-setup installed more than sdd, handoff and ci"
 grep -q '=== sdd setup finished' "$TMP_ROOT/cshome/setup-script.log" || fail "cloud-setup wrote no log"
-pass "cloud-setup installs sdd, handoff and ci and nothing else, and logs it"
+for p in sdd handoff ci; do
+    # `plugin install` leaves an installed plugin at its old version, so each is updated too.
+    grep -qx "plugin update $p@tzander-skills" "$FAKE_LOG" || { cat "$FAKE_LOG"; fail "cloud-setup did not update $p"; }
+done
+pass "cloud-setup installs sdd, handoff and ci and nothing else, updates them, and logs it"
 md="$TMP_ROOT/cshome/.claude/CLAUDE.md"
 [ -f "$md" ] || fail "cloud-setup wrote no ~/.claude/CLAUDE.md"
 grep -q 'sdd-workflow.md' "$md" || fail "CLAUDE.md does not point at the sdd workflow"
@@ -1036,5 +1041,11 @@ FAKE_INSTALL_FAILS=1 cs_run
 printf '%s\n' "$cs_out" | grep -q 'WARNING: the sdd plugin did not install' || fail "failed install not reported"
 grep -qx 'plugin install handoff@tzander-skills' "$FAKE_LOG" || fail "a failed sdd install stopped the handoff install"
 pass "cloud-setup reports a failed install, still installs the rest, and exits 0"
+
+FAKE_UPDATE_FAILS=1 cs_run
+[ "$cs_status" -eq 0 ] || fail "cloud-setup exited $cs_status when an update failed"
+printf '%s\n' "$cs_out" | grep -q 'WARNING: the sdd plugin did not update' || fail "failed update not reported"
+grep -qx 'plugin update ci@tzander-skills' "$FAKE_LOG" || fail "a failed sdd update stopped the ci update"
+pass "cloud-setup reports a failed update, still updates the rest, and exits 0"
 
 echo "all sdd tests passed"

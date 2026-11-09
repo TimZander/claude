@@ -65,9 +65,16 @@ if [ -n "$CLAUDE_BIN" ]; then
     # On a re-run the marketplace is already there; refresh it instead.
     "$CLAUDE_BIN" plugin marketplace add "$MARKETPLACE_SOURCE" \
         || "$CLAUDE_BIN" plugin marketplace update "$MARKETPLACE_NAME" || true
+    # `plugin install` leaves a plugin that is already installed at its old version, which an
+    # environment rebuilt over an older cache would keep, so each is also updated to the
+    # marketplace's version.
     for plugin in sdd handoff ci; do
-        "$CLAUDE_BIN" plugin install "${plugin}@${MARKETPLACE_NAME}" \
-            || echo "WARNING: the ${plugin} plugin did not install"
+        if "$CLAUDE_BIN" plugin install "${plugin}@${MARKETPLACE_NAME}"; then
+            "$CLAUDE_BIN" plugin update "${plugin}@${MARKETPLACE_NAME}" \
+                || echo "WARNING: the ${plugin} plugin did not update"
+        else
+            echo "WARNING: the ${plugin} plugin did not install"
+        fi
     done
     echo "--- plugins after install ---"
     "$CLAUDE_BIN" plugin list || true
