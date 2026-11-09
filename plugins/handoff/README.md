@@ -64,8 +64,10 @@ last. A session that orchestrates others (dispatching lanes, merging their PRs) 
 on CI) and relays once `used_tokens` passes **300,000**, at that break, never mid-edit or
 mid-verification. Lanes are exempt for now.
 
-The number is provisional: it came from TimZander/AudioClassifier (its ADR 0243) and stands
-until three relays have been measured there. The rule reaches cloud sessions through the
+The number came from TimZander/AudioClassifier, where five measured relays kept it (its ADR 0703,
+superseding 0243): 300k is within 4–11% of the cheapest point, while relaying late cost 55–76%
+more, so keeping to it matters more than its exact value. A relay chain is at most 8 sessions deep
+(`lineage.limit` in `get_session`). The rule reaches cloud sessions through the
 `~/.claude/CLAUDE.md` that `plugins/sdd/cloud-setup.sh` writes, because a command's text is
 read only when the command runs.
 
