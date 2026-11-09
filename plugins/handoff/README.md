@@ -21,7 +21,7 @@ It works the same in a terminal, the desktop app and a cloud session. In a cloud
 |---|---|
 | `/handoff [note]` | Writes `docs/handoffs/<date>.md` with four sections (Current state, Next action, Remaining work, Decisions & gotchas), lists anything left stranded (uncommitted or unpushed work, debug probes, background processes, worktrees), and deletes an older note it replaces |
 | `/pickup [note]` | Takes the newest note, checks it against `git status` before trusting it, carries the decisions forward, deletes the note, and starts on the next action |
-| `/handoff:relay [note]` | Cloud sessions only: writes and pushes a note, starts a new cloud session on the same branch that runs `/pickup` on it, and archives this one once you confirm |
+| `/handoff:relay [note]` | Cloud sessions only: writes and pushes a note, starts a new cloud session on the same branch that runs `/pickup` on it, and archives this one once the new session reports its pickup |
 | `/hh [note]`, `/hp [note]`, `/hr [note]` | Shortcuts for `/handoff`, `/pickup` and `/handoff:relay` |
 
 ### Cloud sessions: relay instead of `/clear`
@@ -36,9 +36,10 @@ later work: it finds commits it doesn't recognize and decides another session ma
 1. refuses while background shells, subagents or workflows are still running, since archiving
    the session kills them;
 2. writes the note, with a fifth section, **Recreate the environment**: the commands a fresh
-   clone needs (worktrees, dependencies, deeper history). `/pickup` shows them and asks before
-   running them, once it has checked the branch, and only then checks the rest of the note
-   against the repository and deletes it;
+   clone needs (worktrees, dependencies, deeper history). `/pickup` runs without asking the ones
+   the repository's default branch allows in `.claude/settings.json` (`handoff.sh allowed`), and
+   shows the rest and asks before running them, once it has checked the branch; only then does it
+   check the rest of the note against the repository and delete it;
 3. commits and pushes it, then runs `handoff.sh relay`, which fetches the branch and refuses
    unless everything is on `origin/<branch>` (tracked under the same name, no uncommitted
    changes, nothing unpushed or unpulled, not on `main`), and lists what the clone won't have:
@@ -46,7 +47,8 @@ later work: it finds commits it doesn't recognize and decides another session ma
    worktrees with their uncommitted and unpushed counts;
 4. starts a new cloud session on the same branch (`source_revision` and `outcome_branch`), with
    `/handoff:pickup <note>` as its only prompt;
-5. gives you its link, and archives this session once you confirm the new one has picked up.
+5. gives you its link, and archives this session once the new one has picked up: `/pickup`
+   messages the old session when it's done, so you don't have to confirm (you still can).
 
 `/handoff` still works in a cloud session, for a pause or when relay isn't available, but it
 never suggests `/clear` there: it warns against it and points to relay, a later `/pickup` in a
@@ -63,8 +65,10 @@ last. A session that orchestrates others (dispatching lanes, merging their PRs) 
 on CI) and relays once `used_tokens` passes **300,000**, at that break, never mid-edit or
 mid-verification. Lanes are exempt for now.
 
-The number is provisional: it came from TimZander/AudioClassifier (its ADR 0243) and stands
-until three relays have been measured there. The rule reaches cloud sessions through the
+The number came from TimZander/AudioClassifier, where five measured relays kept it (its ADR 0703,
+superseding 0243): 300k is within 4–11% of the cheapest point, while relaying late cost 55–76%
+more, so keeping to it matters more than its exact value. A relay chain is at most 8 sessions deep
+(`lineage.limit` in `get_session`). The rule reaches cloud sessions through the
 `~/.claude/CLAUDE.md` that `plugins/sdd/cloud-setup.sh` writes, because a command's text is
 read only when the command runs.
 

@@ -110,7 +110,8 @@ skills). Not every repository uses it, so check which kind this one is before ch
   merges their PRs reads `context_usage` from `get_session` at each natural break (a PR merged,
   a lane reported, a wait on CI). Once `used_tokens` passes 300,000 it runs `/handoff:relay` at
   that break, never mid-edit or mid-verification: every request re-reads the whole context, so
-  each round costs more as it grows. Lanes are exempt. The number is provisional.
+  each round costs more as it grows. Lanes are exempt. Five measured relays kept the number
+  (AudioClassifier ADR 0703).
 - **Count CI minutes beside model spend.** When a PR merges, report its billed Actions minutes
   (`/ci:minutes <pr>`) with the session's model spend. Prefer fewer billed minutes over a
   shorter wait, except for previews: a preview never waits for the tests.
