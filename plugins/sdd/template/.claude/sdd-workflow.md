@@ -85,6 +85,11 @@ doesn't carry over.
   pinned OpenSpec CLI from the default branch, and reads the PR only as data. A PR that changes
   `scripts/sdd/`, `.github/workflows/` or the OpenSpec pin in `package.json` is checked with the
   old ones until it merges, so run `bash scripts/sdd/check-specs.sh` locally on such a PR.
+- **On Azure DevOps (`"sdd": { "host": "azure-devops" }`), the checks are advisory.** The
+  `sdd-checks` pipeline (`.azure-pipelines/sdd-checks.yml`) prints the same verdict lines, but a
+  PR build runs the PR's own YAML and scripts, so a PR can change what judges it. Treat a red
+  build as a real failure and a green one as a hint; the rules it checks rest on review there,
+  and `/sdd:archive-pr` verifies an archive itself with the default branch's scripts.
 - **The conformance review is the code review.** Every change gets `/sdd:conformance-review`,
   not a general code review: the spec was already reviewed for intent, so the code is checked
   against it.

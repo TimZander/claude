@@ -1,6 +1,6 @@
 ---
 description: Set up or update spec-driven development (OpenSpec + the sdd flow) in the current repository
-argument-hint: "[--openspec-version <x.y.z>] [--no-ci] [--no-install]"
+argument-hint: "[--openspec-version <x.y.z>] [--host github|azure-devops] [--no-ci] [--no-install]"
 allowed-tools: Bash, Read, Glob
 ---
 
@@ -17,7 +17,9 @@ The installer script does the work; you run it, then report.
    Its last line is `sdd-init: done` (possibly with a warning count) or `sdd-init: failed`.
 3. On failure, report the error line and stop.
 4. On success, summarise what it added or updated, grouped as plugin files, repo files and
-   settings. For each `warning:` line, say what the repo has, what sdd expects, and what the
+   settings, and name the host from its first line (`host: …, from …`): it decides which CI
+   template was installed. If the host came from "the default" but the repository is on Azure
+   DevOps (or the other way round), say so and offer to re-run with `--host`. For each `warning:` line, say what the repo has, what sdd expects, and what the
    owner should decide. In particular:
    - a CLAUDE.md that already describes an OpenSpec workflow: point out the passages that
      `.claude/sdd-workflow.md` now covers, and offer to remove them (don't edit unasked);
@@ -32,12 +34,19 @@ The installer script does the work; you run it, then report.
    - no `package-lock.json`: CI's `npm ci` needs one, so run `npm install` and commit the lock.
    - `removed the sdd opt-out from CLAUDE.md`: not a warning, but name it, since the repository
      had opted out of sdd before.
+   - the other host's `sdd-checks` file: it no longer runs; offer to delete it in the same PR.
 5. List the next steps that apply:
    - commit the changes on a branch and open a PR (this is a code-free change);
    - `openspec/specs/` is empty: describe the first capability with `/opsx:propose`;
-   - the `sdd-checks` workflow uses `pull_request_target`, so it runs from the default branch
-     only after this PR merges; to gate merging, require its `checks` job in branch protection
-     (or, with `"sdd": { "statuses": true }`, the `sdd/<check>` statuses one by one);
+   - on GitHub: the `sdd-checks` workflow uses `pull_request_target`, so it runs from the
+     default branch only after this PR merges; to gate merging, require its `checks` job in
+     branch protection (or, with `"sdd": { "statuses": true }`, the `sdd/<check>` statuses one
+     by one);
+   - on Azure DevOps: create a pipeline from `.azure-pipelines/sdd-checks.yml` and add it to the
+     default branch's Build Validation policy (Azure Repos ignores YAML PR triggers), and set a
+     pipeline variable `SDD_DEFAULT_BRANCH` if the default branch isn't `main`. Say plainly
+     that its verdicts are advisory: a PR build runs the PR's own YAML and scripts. A repository
+     that already runs `check-specs.sh` in its own pipeline can keep that or switch to this one;
    - a repository with its own copies of what sdd now does (pin scripts, a requirements check, a
      main-spec diff, its own archive check): offer to retire them, one PR each, after this one
      merges and the new checks have run on a PR.

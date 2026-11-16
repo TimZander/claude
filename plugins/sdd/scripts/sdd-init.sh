@@ -3,7 +3,13 @@
 # Sets up (or updates) spec-driven development with OpenSpec in a repository.
 #
 #   bash sdd-init.sh [--repo <dir>] [--openspec-version <x.y.z>] [--no-ci] [--no-install]
-#                    [--marketplace-repo <owner/repo>]
+#                    [--host github|azure-devops] [--marketplace-repo <owner/repo>]
+#
+# The host decides which CI template is installed. Without --host it is package.json's
+# `sdd.host`, else read from the `origin` remote (dev.azure.com or *.visualstudio.com is
+# azure-devops), else github. An Azure DevOps host is recorded as `"sdd": { "host":
+# "azure-devops" }` in package.json, so later runs and /sdd:archive-pr agree on it. A --host
+# that contradicts package.json fails: change the setting first.
 #
 # Idempotent: safe to re-run, and re-running is how a repo picks up a newer
 # version of the plugin's files. Two kinds of file:
@@ -13,7 +19,8 @@
 #                                       settings, the CI reporter, and the SessionStart hook
 #                                       (npm ci --ignore-scripts when stale, sdd status)
 #     .claude/sdd-workflow.md           the flow agents follow, imported by CLAUDE.md
-#     .github/workflows/sdd-checks.yml  the PR checks (skipped with --no-ci)
+#     .github/workflows/sdd-checks.yml  the PR checks on GitHub (skipped with --no-ci)
+#     .azure-pipelines/sdd-checks.yml   the PR checks on Azure DevOps (skipped with --no-ci)
 #     .claude/sdd-version               the plugin version installed
 #
 #   Owned by the repo, created only when absent, then never touched:
@@ -52,11 +59,13 @@ openspec_version="1.14.1"
 ci=1
 install=1
 marketplace_repo="TimZander/claude"
+host=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --repo) [ $# -ge 2 ] || usage; repo="$2"; shift 2 ;;
         --openspec-version) [ $# -ge 2 ] || usage; openspec_version="$2"; shift 2 ;;
         --marketplace-repo) [ $# -ge 2 ] || usage; marketplace_repo="$2"; shift 2 ;;
+        --host) [ $# -ge 2 ] || usage; host="$2"; shift 2 ;;
         --no-ci) ci=0; shift ;;
         --no-install) install=0; shift ;;
         -h|--help) usage ;;
@@ -65,6 +74,10 @@ while [ $# -gt 0 ]; do
 done
 printf '%s' "$openspec_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
     || { echo "sdd-init: --openspec-version must be an exact x.y.z version" >&2; exit 2; }
+case "$host" in
+    ""|github|azure-devops) ;;
+    *) echo "sdd-init: --host must be github or azure-devops" >&2; exit 2 ;;
+esac
 
 TMPDIR_INIT="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR_INIT"' EXIT
@@ -76,7 +89,32 @@ cd "$root"
 
 version="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).version || "0.0.0")' \
     "$PLUGIN_DIR/.claude-plugin/plugin.json")"
-echo "Setting up sdd $version in $root"
+# The host: --host, else package.json's sdd.host, else the origin remote, else github.
+pkg_host="$(node -e '
+    try {
+        const p = JSON.parse(require("fs").readFileSync("package.json", "utf8"))
+        const h = p && p.sdd && p.sdd.host
+        if (typeof h === "string") process.stdout.write(h)
+    } catch {}' 2>/dev/null || true)"
+if [ -n "$host" ]; then
+    host_from="--host"
+    if [ -n "$pkg_host" ] && [ "$pkg_host" != "$host" ]; then
+        fail "--host $host contradicts package.json's sdd.host ($pkg_host): change the setting first"
+    fi
+elif [ -n "$pkg_host" ]; then
+    host="$pkg_host"; host_from="package.json"
+else
+    case "$(git remote get-url origin 2>/dev/null || true)" in
+        *dev.azure.com[:/]*|*.visualstudio.com[:/]*) host=azure-devops; host_from="the origin remote" ;;
+        *) host=github; host_from="the default" ;;
+    esac
+fi
+case "$host" in
+    github|azure-devops) ;;
+    *) fail "package.json's sdd.host is $host, not github or azure-devops" ;;
+esac
+
+echo "Setting up sdd $version in $root (host: $host, from $host_from)"
 
 warnings=0
 note() {
@@ -113,12 +151,16 @@ echo "Plugin files:"
 for f in openspec.sh sdd-archive.sh check-specs.sh session-start.sh; do
     owned "scripts/sdd/$f" 755
 done
-for f in setup-agent-skills.mjs sdd-config.mjs sdd-specs.mjs sdd-github.mjs; do
+for f in setup-agent-skills.mjs sdd-config.mjs sdd-specs.mjs sdd-github.mjs sdd-azure.mjs; do
     owned "scripts/sdd/$f"
 done
 owned .claude/sdd-workflow.md
 if [ $ci -eq 1 ]; then
-    owned .github/workflows/sdd-checks.yml
+    if [ "$host" = azure-devops ]; then
+        owned .azure-pipelines/sdd-checks.yml
+    else
+        owned .github/workflows/sdd-checks.yml
+    fi
 fi
 if [ "$(cat .claude/sdd-version 2>/dev/null || true)" != "$version" ]; then
     printf '%s\n' "$version" > .claude/sdd-version
@@ -133,7 +175,7 @@ if [ ! -d docs/decisions ]; then
 fi
 
 echo "Settings:"
-while IFS= read -r line; do note "$line"; done < <(node "$SCRIPT_DIR/sdd-init-json.mjs" package package.json "$openspec_version" || echo "warning: package.json not updated")
+while IFS= read -r line; do note "$line"; done < <(node "$SCRIPT_DIR/sdd-init-json.mjs" package package.json "$openspec_version" "$host" || echo "warning: package.json not updated")
 while IFS= read -r line; do note "$line"; done < <(node "$SCRIPT_DIR/sdd-init-json.mjs" settings .claude/settings.json "$marketplace_repo" || echo "warning: .claude/settings.json not updated")
 
 touch .gitignore
@@ -232,6 +274,13 @@ fi
 
 if [ $ci -eq 1 ] && [ ! -f package-lock.json ]; then
     note "warning: no package-lock.json: the sdd-checks workflow runs \`npm ci\`, which needs one; run \`npm install\` and commit it"
+fi
+
+# The other host's checks, from an earlier run or a move: they no longer run, or never could.
+if [ "$host" = azure-devops ] && [ -f .github/workflows/sdd-checks.yml ]; then
+    note "warning: .github/workflows/sdd-checks.yml is for GitHub, and this repository is on Azure DevOps: delete it"
+elif [ "$host" = github ] && [ -f .azure-pipelines/sdd-checks.yml ]; then
+    note "warning: .azure-pipelines/sdd-checks.yml is for Azure DevOps, and this repository is on GitHub: delete it"
 fi
 
 if [ $warnings -gt 0 ]; then

@@ -64,13 +64,14 @@ export class InternalError extends Error {}
 // --- output ----------------------------------------------------------------------------------
 
 /**
- * Makes text safe for one log line: no line breaks or tabs, and GitHub's `::` and `##[` workflow
- * command syntax broken.
+ * Makes text safe for one log line: no line breaks or tabs, GitHub's `::` and `##[` workflow
+ * command syntax broken, and Azure Pipelines' `##vso[` logging commands (in any case) too.
  * @param {string} text
  * @returns {string}
  */
 export function clean(text) {
-  return String(text).replace(/[\r\n\t]+/g, ' ').replace(/##\[/g, '#\\u0023[').replace(/::/g, ':\\u003a')
+  return String(text).replace(/[\r\n\t]+/g, ' ').replace(/##\[/g, '#\\u0023[').replace(/##(vso)\[/gi, '#\\u0023$1[')
+    .replace(/::/g, ':\\u003a')
 }
 
 /** @param {string} text */

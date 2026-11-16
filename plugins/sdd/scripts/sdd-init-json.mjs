@@ -1,7 +1,8 @@
 // JSON edits for sdd-init.sh. Adds what is missing and never overwrites a value the repo
 // already set: a different value is reported as a warning for the owner to reconcile.
 //
-//   node sdd-init-json.mjs package  <package.json>  <openspec-version>
+//   node sdd-init-json.mjs package  <package.json>  <openspec-version> [<host>]
+//       <host> azure-devops also records "sdd": { "host": "azure-devops" }.
 //   node sdd-init-json.mjs settings <settings.json> <marketplace-repo>
 //
 // Prints one line per edit (`added ...`) or conflict (`warning: ...`).
@@ -9,9 +10,9 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
 
-const [mode, file, arg] = process.argv.slice(2)
-if (!['package', 'settings'].includes(mode) || !file || !arg) {
-  console.error('usage: sdd-init-json.mjs package <package.json> <openspec-version>')
+const [mode, file, arg, host = 'github'] = process.argv.slice(2)
+if (!['package', 'settings'].includes(mode) || !file || !arg || !['github', 'azure-devops'].includes(host)) {
+  console.error('usage: sdd-init-json.mjs package <package.json> <openspec-version> [github|azure-devops]')
   console.error('       sdd-init-json.mjs settings <settings.json> <marketplace-repo>')
   process.exit(2)
 }
@@ -79,6 +80,11 @@ if (mode === 'package') {
   ensure(scripts, 'spec:check', 'bash scripts/sdd/check-specs.sh', 'scripts["spec:check"]')
   ensure(scripts, 'spec:pin', 'node scripts/sdd/sdd-specs.mjs pin', 'scripts["spec:pin"]')
   ensure(scripts, 'prepare', 'node scripts/sdd/setup-agent-skills.mjs', 'scripts.prepare')
+  // GitHub is the default host, so it is never written; Azure DevOps is, so every later run and
+  // /sdd:archive-pr read the same host. A non-object "sdd" is left for sdd-config to report.
+  if (host === 'azure-devops' && (data.sdd === undefined || (typeof data.sdd === 'object' && data.sdd !== null && !Array.isArray(data.sdd)))) {
+    ensure(section(data, 'sdd'), 'host', host, 'sdd.host')
+  }
 } else {
   ensure(section(data, 'env'), 'OPENSPEC_TELEMETRY', '0', 'env.OPENSPEC_TELEMETRY')
   ensure(section(data, 'extraKnownMarketplaces'), 'tzander-skills',

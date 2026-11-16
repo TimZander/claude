@@ -13,8 +13,18 @@
 //     "specDiffComment": true,      CI keeps a PR comment with the main specs' diff
 //     "archiveVerdicts": [],        more verdicts /sdd:archive-pr must see as success, each
 //                                   { "workflow": ".github/workflows/x.yml", "line": "name" }
-//     "autoMerge": true             /sdd:archive-pr merges a mechanical archive PR itself
+//     "autoMerge": true,            /sdd:archive-pr merges a mechanical archive PR itself
+//     "host": "github",             "github" or "azure-devops": which CI template sdd-init
+//                                   installs, and how /sdd:archive-pr opens and merges PRs
+//     "archiveBypassReviewers": false
+//                                   Azure DevOps only: /sdd:archive-pr may complete an archive
+//                                   PR it verified past a "Minimum number of reviewers" policy
+//                                   when that is the only blocking policy not yet met
 //   }
+//
+// Some settings belong to one host. `statuses` and `archiveVerdicts` are GitHub only (on Azure
+// DevOps, require the pipeline in a Build Validation policy instead); `archiveBypassReviewers` is
+// Azure DevOps only. Setting one for the other host is an error, never a silent no-op.
 //
 // The settings always come from the checkout these scripts run from, never from a PR's tree:
 // in CI that is the base branch.
@@ -40,7 +50,11 @@ export const DEFAULTS = Object.freeze({
   specDiffComment: true,
   archiveVerdicts: [],
   autoMerge: true,
+  host: 'github',
+  archiveBypassReviewers: false,
 })
+
+export const HOSTS = Object.freeze(['github', 'azure-devops'])
 
 const TOOL = /^[a-z0-9][a-z0-9-]*$/
 const WORKFLOW = /^\.github\/workflows\/[A-Za-z0-9._-]+\.ya?ml$/
@@ -91,6 +105,7 @@ export function readConfig(root = TRUSTED_ROOT) {
       case 'statuses':
       case 'specDiffComment':
       case 'autoMerge':
+      case 'archiveBypassReviewers':
         if (typeof value !== 'boolean') {
           throw bad('true or false')
         }
@@ -105,9 +120,25 @@ export function readConfig(root = TRUSTED_ROOT) {
         }
         config.archiveVerdicts = value.map(x => ({ workflow: x.workflow, line: x.line }))
         break
+      case 'host':
+        if (typeof value !== 'string' || !HOSTS.includes(value)) {
+          throw bad(HOSTS.map(x => `"${x}"`).join(' or '))
+        }
+        config.host = value
+        break
       default:
         throw new ConfigError(`package.json sdd.${key} is not an sdd setting`)
     }
+  }
+  if (config.host === 'azure-devops') {
+    if (config.statuses) {
+      throw new ConfigError('package.json sdd.statuses is GitHub only: on Azure DevOps, require the sdd-checks pipeline in a Build Validation policy')
+    }
+    if (config.archiveVerdicts.length > 0) {
+      throw new ConfigError('package.json sdd.archiveVerdicts is GitHub only: on Azure DevOps, require each pipeline in a Build Validation policy')
+    }
+  } else if (config.archiveBypassReviewers) {
+    throw new ConfigError('package.json sdd.archiveBypassReviewers is Azure DevOps only (it needs "host": "azure-devops")')
   }
   return config
 }

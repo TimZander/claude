@@ -104,9 +104,10 @@ on_exit() {
 }
 trap on_exit EXIT
 
-# Breaks GitHub's `##[` and `::` workflow-command syntax in text from the repo.
+# Breaks workflow-command syntax in text from the repo: GitHub's `##[` and `::`, and Azure
+# Pipelines' `##vso[` (in any case).
 neutralise() {
-    sed -e 's/##\[/#\\u0023[/g' -e 's/::/:\\u003a/g'
+    sed -e 's/##\[/#\\u0023[/g' -e 's/##\([vV][sS][oO]\)\[/#\\u0023\1[/g' -e 's/::/:\\u003a/g'
 }
 
 # Folders directly under $2 at revision $1, one per line.
