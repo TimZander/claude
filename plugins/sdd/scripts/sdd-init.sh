@@ -6,10 +6,11 @@
 #                    [--host github|azure-devops] [--marketplace-repo <owner/repo>]
 #
 # The host decides which CI template is installed. Without --host it is package.json's
-# `sdd.host`, else read from the `origin` remote (dev.azure.com or *.visualstudio.com is
-# azure-devops), else github. An Azure DevOps host is recorded as `"sdd": { "host":
-# "azure-devops" }` in package.json, so later runs and /sdd:archive-pr agree on it. A --host
-# that contradicts package.json fails: change the setting first.
+# `sdd.host`, else azure-devops when the `origin` remote is an Azure Repos URL (read by the same
+# parser /sdd:archive-pr uses, sdd-azure.mjs remote), else github. An Azure DevOps host, and any
+# host given with --host, is recorded as `"sdd": { "host": ... }` in package.json, so later
+# runs and /sdd:archive-pr agree on it. A --host that contradicts package.json fails: change
+# the setting first.
 #
 # Idempotent: safe to re-run, and re-running is how a repo picks up a newer
 # version of the plugin's files. Two kinds of file:
@@ -105,11 +106,10 @@ if [ -n "$host" ]; then
     fi
 elif [ -n "$pkg_host" ]; then
     host="$pkg_host"; host_from="package.json"
+elif node "$TEMPLATE/scripts/sdd/sdd-azure.mjs" remote >/dev/null 2>&1; then
+    host=azure-devops; host_from="the origin remote"
 else
-    case "$(git remote get-url origin 2>/dev/null || true)" in
-        *dev.azure.com[:/]*|*.visualstudio.com[:/]*) host=azure-devops; host_from="the origin remote" ;;
-        *) host=github; host_from="the default" ;;
-    esac
+    host=github; host_from="the default"
 fi
 case "$host" in
     github|azure-devops) ;;
@@ -177,7 +177,7 @@ if [ ! -d docs/decisions ]; then
 fi
 
 echo "Settings:"
-while IFS= read -r line; do note "$line"; done < <(node "$SCRIPT_DIR/sdd-init-json.mjs" package package.json "$openspec_version" "$host" || echo "warning: package.json not updated")
+while IFS= read -r line; do note "$line"; done < <(node "$SCRIPT_DIR/sdd-init-json.mjs" package package.json "$openspec_version" "$host" "$([ "$host_from" = --host ] && echo explicit || echo detected)" || echo "warning: package.json not updated")
 while IFS= read -r line; do note "$line"; done < <(node "$SCRIPT_DIR/sdd-init-json.mjs" settings .claude/settings.json "$marketplace_repo" || echo "warning: .claude/settings.json not updated")
 
 touch .gitignore

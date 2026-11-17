@@ -809,9 +809,9 @@ pass "the workflow fetches the merge commit with the token, and shows git's erro
 
 # --- Azure DevOps: the install path -------------------------------------------------------
 ra="$(fresh_repo)"
-git -C "$ra" remote add origin 'https://bgvone.visualstudio.com/BGV%20Development/_git/BgvSites'
+git -C "$ra" remote add origin 'https://example.visualstudio.com/My%20Project/_git/repo'
 out="$(bash "$INIT" --repo "$ra" --no-install)"
-printf '%s\n' "$out" | head -n 1 | grep -q '(host: azure-devops, from the origin remote)$' || { echo "$out"; fail "host not read from an Azure Repos origin"; }
+printf '%s\n' "$out" | sed -n 1p | grep -q '(host: azure-devops, from the origin remote)$' || { echo "$out"; fail "host not read from an Azure Repos origin"; }
 [ -f "$ra/.azure-pipelines/sdd-checks.yml" ] || fail "no Azure Pipelines template on an Azure DevOps repo"
 [ -f "$ra/scripts/sdd/sdd-azure.mjs" ] || fail "sdd-azure.mjs not installed"
 [ ! -e "$ra/.github" ] || fail "the GitHub workflow was installed on an Azure DevOps repo"
@@ -820,7 +820,7 @@ printf '%s\n' "$out" | head -n 1 | grep -q '(host: azure-devops, from the origin
 echo '{}' > "$ra/package-lock.json"
 out="$(bash "$INIT" --repo "$ra" --no-install)"
 if printf '%s\n' "$out" | grep -Eq '^  (added|updated|set|warning)'; then echo "$out"; fail "second Azure DevOps run changed files"; fi
-printf '%s\n' "$out" | head -n 1 | grep -q 'from package.json)$' || { echo "$out"; fail "second run did not take the host from package.json"; }
+printf '%s\n' "$out" | sed -n 1p | grep -q 'from package.json)$' || { echo "$out"; fail "second run did not take the host from package.json"; }
 expect_exit 1 bash "$INIT" --repo "$ra" --no-install --host github
 grep -q "contradicts package.json's sdd.host (azure-devops)" "$TMP_ROOT/out" || fail "a contradicting --host not explained"
 expect_exit 2 bash "$INIT" --repo "$ra" --no-install --host gitlab
@@ -833,6 +833,26 @@ grep -q '"host": "azure-devops"' "$rs/package.json" || fail "host not read from 
 rh="$(fresh_repo)"
 bash "$INIT" --repo "$rh" --no-install --host azure-devops >/dev/null
 [ -f "$rh/.azure-pipelines/sdd-checks.yml" ] || fail "--host azure-devops ignored"
+# Every Azure Repos form /sdd:archive-pr can read is detected, and nothing else.
+for url in https://dev.azure.com/org/Proj/_git/repo https://Org@DEV.AZURE.COM/org/Proj/_git/repo \
+           https://dev.azure.com/org/_git/repo https://org.visualstudio.com/DefaultCollection/_git/repo \
+           ssh://git@ssh.dev.azure.com:22/v3/org/Proj/repo org@vs-ssh.visualstudio.com:v3/org/Proj/repo; do
+    rd="$(fresh_repo)" && git -C "$rd" remote add origin "$url"
+    out="$(bash "$INIT" --repo "$rd" --no-install --no-ci)"
+    printf '%s\n' "$out" | sed -n 1p | grep -q '(host: azure-devops, from the origin remote)$' || fail "not detected as Azure DevOps: $url"
+done
+for url in https://git.example.com/dev.azure.com/org/p/_git/r https://foodev.azure.com/org/p/_git/r; do
+    rd="$(fresh_repo)" && git -C "$rd" remote add origin "$url"
+    out="$(bash "$INIT" --repo "$rd" --no-install --no-ci)"
+    printf '%s\n' "$out" | sed -n 1p | grep -q '(host: github, from the default)$' || fail "detected as Azure DevOps: $url"
+done
+# An explicit --host github on an Azure Repos origin sticks.
+rk="$(fresh_repo)" && git -C "$rk" remote add origin https://dev.azure.com/org/Proj/_git/repo
+bash "$INIT" --repo "$rk" --no-install --host github >/dev/null
+grep -q '"host": "github"' "$rk/package.json" || fail "--host github not recorded"
+out="$(bash "$INIT" --repo "$rk" --no-install)"
+printf '%s\n' "$out" | sed -n 1p | grep -q '(host: github, from package.json)$' || { echo "$out"; fail "--host github was detected away"; }
+[ ! -e "$rk/.azure-pipelines" ] || fail "the pipeline was installed after --host github"
 # A GitHub repository keeps no host setting, and is warned about a leftover pipeline.
 rg="$(fresh_repo)"
 git -C "$rg" remote add origin https://github.com/o/r.git
@@ -863,15 +883,37 @@ pass "settings: host, and host-only settings on the wrong host are errors"
 
 # --- Azure DevOps: sdd-azure.mjs -----------------------------------------------------------
 AZ="$rc/scripts/sdd/sdd-azure.mjs"
+node_in() { (cd "$1" && shift && node "$@"); }
 for pair in \
     'https://dev.azure.com/org/My%20Project/_git/My%20Repo|{"organization":"https://dev.azure.com/org","project":"My Project","repository":"My Repo"}' \
     'https://org@dev.azure.com/org/Proj/_git/repo|{"organization":"https://dev.azure.com/org","project":"Proj","repository":"repo"}' \
     'https://org.visualstudio.com/DefaultCollection/Proj/_git/repo|{"organization":"https://org.visualstudio.com","project":"Proj","repository":"repo"}' \
     'git@ssh.dev.azure.com:v3/org/Proj/repo|{"organization":"https://dev.azure.com/org","project":"Proj","repository":"repo"}' \
-    'org@vs-ssh.visualstudio.com:v3/org/Proj/repo|{"organization":"https://dev.azure.com/org","project":"Proj","repository":"repo"}'; do
+    'org@vs-ssh.visualstudio.com:v3/org/Proj/repo|{"organization":"https://dev.azure.com/org","project":"Proj","repository":"repo"}' \
+    'ssh://git@ssh.dev.azure.com:22/v3/org/Proj/repo|{"organization":"https://dev.azure.com/org","project":"Proj","repository":"repo"}' \
+    'https://dev.azure.com/org/_git/repo|{"organization":"https://dev.azure.com/org","project":"repo","repository":"repo"}' \
+    'https://org.visualstudio.com/DefaultCollection/_git/repo|{"organization":"https://org.visualstudio.com","project":"repo","repository":"repo"}' \
+    'https://org.visualstudio.com/_git/repo|{"organization":"https://org.visualstudio.com","project":"repo","repository":"repo"}' \
+    'https://ORG.VisualStudio.com/Proj/_git/repo.git|{"organization":"https://org.visualstudio.com","project":"Proj","repository":"repo"}'; do
     got="$(node "$AZ" remote "${pair%%|*}")" || fail "remote: ${pair%%|*}"
     [ "$got" = "${pair#*|}" ] || fail "remote ${pair%%|*}: $got"
 done
+# Hosts anywhere but the host, and names that could break an argument, are refused.
+for url in 'https://evil/x@ssh.dev.azure.com:v3/a/b/c' https://foodev.azure.com/org/p/_git/r \
+           https://git.example.com/dev.azure.com/org/p/_git/r 'https://dev.azure.com/org/a%2Fb/_git/r' \
+           'https://dev.azure.com/org/p/_git/r?x=1' 'https://dev.azure.com/org/p/_git/%0Ar' http://dev.azure.com/org/p/_git/r \
+           https://org.visualstudio.com/Coll/Proj/_git/r; do
+    expect_exit 1 node "$AZ" remote "$url"
+done
+# With no argument: origin as git uses it, then as configured.
+rr="$(fresh_repo)"
+expect_exit 1 node_in "$rr" "$AZ" remote
+grep -q 'no origin remote' "$TMP_ROOT/out" || fail "remote without an origin"
+git -C "$rr" remote add origin https://dev.azure.com/org/Proj/_git/repo
+[ "$(node_in "$rr" "$AZ" remote)" = '{"organization":"https://dev.azure.com/org","project":"Proj","repository":"repo"}' ] || fail "remote from origin"
+git -C "$rr" config "url.$rr.insteadOf" https://dev.azure.com/org/Proj/_git/repo
+[ "$(node_in "$rr" "$AZ" remote)" = '{"organization":"https://dev.azure.com/org","project":"Proj","repository":"repo"}' ] || fail "remote from a rewritten origin"
+expect_exit 2 node "$AZ" remote a b
 expect_exit 1 node "$AZ" remote https://github.com/o/r.git
 expect_exit 2 node "$AZ" bogus
 sha_a=1111111111111111111111111111111111111111
@@ -1076,7 +1118,7 @@ ado_scenario() {
     AZ_FIX="$TMP_ROOT/azfix.$RANDOM$RANDOM" && mkdir -p "$AZ_FIX" && AZ_LOG="$AZ_FIX/log" && : > "$AZ_LOG"
     export AZ_FIX AZ_LOG
     local head="$1"; shift
-    sha_a="$head" pr_json sourceRefName "\"refs/heads/$(git -C "$ao" for-each-ref --points-at "$head" --format='%(refname:lstrip=2)' refs/heads | head -n 1)\"" "$@" > "$AZ_FIX/pr-show.json"
+    sha_a="$head" pr_json sourceRefName "\"refs/heads/$(git -C "$ao" for-each-ref --points-at "$head" --format='%(refname:lstrip=2)' refs/heads | sed -n 1p)\"" "$@" > "$AZ_FIX/pr-show.json"
     printf '[%s]' "$(pol $MR approved)" > "$AZ_FIX/policies.json"
     sha_a="$head" pr_json status '"completed"' lastMergeTargetCommit "{\"commitId\":\"$atip\"}" > "$AZ_FIX/pr-done.json"
 }

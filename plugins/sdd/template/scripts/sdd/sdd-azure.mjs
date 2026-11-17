@@ -74,29 +74,66 @@ export class InputError extends Error {}
  */
 export function parseRemote(url) {
   const text = String(url).trim()
-  const decode = (/** @type {string} */ x) => {
+  /** A decoded project or repository name, or null when it could break an argument or path. */
+  const name = (/** @type {string | undefined} */ x) => {
+    if (x === undefined || x === '') {
+      return null
+    }
+    let decoded
     try {
-      return decodeURIComponent(x)
+      decoded = decodeURIComponent(x)
     } catch {
       return null
     }
+    return /[/\\\x00-\x1f\x7f]/.test(decoded) || decoded === '.' || decoded === '..' ? null : decoded
   }
-  const make = (/** @type {string} */ organization, /** @type {string} */ project, /** @type {string} */ repository) => {
-    const p = decode(project)
-    const r = decode(repository.replace(/\.git$/, ''))
+  const make = (/** @type {string} */ organization, /** @type {string | undefined} */ project, /** @type {string | undefined} */ repository) => {
+    const r = name(repository?.replace(/\.git$/, ''))
+    // A short URL (no project) names a repository whose project has the same name.
+    const p = project === undefined ? r : name(project)
     return p && r ? { organization, project: p, repository: r } : null
   }
-  let m = /^https:\/\/(?:[^@/]+@)?dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/([^/?#]+)\/?$/i.exec(text)
-  if (m) {
-    return make(`https://dev.azure.com/${m[1]}`, m[2], m[3])
+  const ORG = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+  // SSH: [ssh://]<user>@ssh.dev.azure.com[:22]:v3/<org>/<project>/<repo>, and vs-ssh.visualstudio.com.
+  const ssh = /^(?:ssh:\/\/)?[A-Za-z0-9._-]+@(?:ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)(?::22)?[:/]v3\/([^/]+)\/([^/]+)\/([^/]+?)\/?$/i.exec(text)
+  if (ssh) {
+    return ORG.test(ssh[1]) ? make(`https://dev.azure.com/${ssh[1]}`, ssh[2], ssh[3]) : null
   }
-  m = /^https:\/\/(?:[^@/]+@)?([A-Za-z0-9-]+)\.visualstudio\.com\/(?:DefaultCollection\/)?([^/]+)\/_git\/([^/?#]+)\/?$/i.exec(text)
-  if (m) {
-    return make(`https://${m[1]}.visualstudio.com`, m[2], m[3])
+
+  // HTTPS: parsed, so the host is the host and never a path that happens to contain one.
+  let parsed
+  try {
+    parsed = new URL(text)
+  } catch {
+    return null
   }
-  m = /^(?:ssh:\/\/)?[^@]+@(?:ssh\.dev\.azure\.com|vs-ssh\.visualstudio\.com)[:/]v3\/([^/]+)\/([^/]+)\/([^/]+)$/i.exec(text)
-  if (m) {
-    return make(`https://dev.azure.com/${m[1]}`, m[2], m[3])
+  if (parsed.protocol !== 'https:' || parsed.search !== '' || parsed.hash !== '') {
+    return null
+  }
+  const segments = parsed.pathname.split('/').filter(x => x !== '')
+  const git = segments.indexOf('_git')
+  if (git < 0 || git !== segments.length - 2) {
+    return null
+  }
+  const repository = segments[git + 1]
+  const before = segments.slice(0, git)
+  const host = parsed.hostname.toLowerCase()
+  if (host === 'dev.azure.com') {
+    // /<org>/<project>/_git/<repo>, or /<org>/_git/<repo>
+    if (before.length < 1 || before.length > 2 || !ORG.test(before[0])) {
+      return null
+    }
+    return make(`https://dev.azure.com/${before[0]}`, before[1], repository)
+  }
+  const vs = /^([a-z0-9][a-z0-9-]*)\.visualstudio\.com$/.exec(host)
+  if (vs) {
+    // /[DefaultCollection/]<project>/_git/<repo>, or /[DefaultCollection/]_git/<repo>
+    const rest = before.length > 0 && before[0].toLowerCase() === 'defaultcollection' ? before.slice(1) : before
+    if (rest.length > 1) {
+      return null
+    }
+    return make(`https://${vs[1]}.visualstudio.com`, rest[0], repository)
   }
   return null
 }
