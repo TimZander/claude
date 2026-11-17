@@ -123,8 +123,11 @@ A value the repo already set differently is kept and reported as a warning.
 Options: `--openspec-version <x.y.z>` (default `1.14.1`), `--host github|azure-devops`,
 `--no-ci`, `--no-install`. Without `--host`, the host is `package.json`'s `sdd.host`, else read
 from the `origin` remote (`dev.azure.com` or `*.visualstudio.com` is Azure DevOps), else GitHub.
-A `--host` that contradicts `sdd.host` fails: change the setting first. A leftover CI template
-for the other host is reported as a warning.
+`sdd.host` is written for an Azure DevOps repository and for any `--host` given, so a later run
+keeps it; a `--host` that contradicts it fails: change the setting first. A repository set up
+before, now with an Azure Repos origin, is moved to Azure DevOps with a warning, or refused while
+it sets GitHub-only settings. An Azure DevOps Server (on-premises) origin isn't supported: it is
+set up for GitHub, with a warning. A leftover CI template for the other host is reported too.
 
 **OpenSpec 1.14.1 fails long requirements.** From 1.14.1, `validate --strict` fails any
 requirement whose text (above its first scenario) is over 500 characters; 1.14.0 only noted it.
@@ -144,15 +147,15 @@ reason its verdicts are advisory. `/sdd:archive-pr` reads them from the default 
 | `pins` | `true` | Every active change holds `base-pins.json` (below) |
 | `changeNames` | `"default"` | `"lowercase"`: change names are `[a-z0-9][a-z0-9-]*` and don't start with a date. The default is `[A-Za-z0-9][A-Za-z0-9._-]*` |
 | `tools` | `["claude"]` | Tools OpenSpec generates its skills for (`openspec init --tools`), such as `["claude", "opencode"]`. Gitignore the other tools' generated folders yourself |
-| `specDiffComment` | `true` | GitHub: CI keeps one PR comment showing the main specs as they will read once the PR's changes are archived. Azure DevOps has no comment; the diff always goes to the build's summary tab, and this setting is ignored there |
+| `specDiffComment` | `true` | GitHub only. CI keeps one PR comment showing the main specs as they will read once the PR's changes are archived. On Azure DevOps the diff always goes to the build's summary tab |
 | `statuses` | `false` | GitHub only. CI also posts a commit status per check (`sdd/spec-checks`, `sdd/requirements-through-change`, `sdd/main-spec-diff`, `sdd/archive-mechanical`), so branch protection can require each by name |
 | `archiveVerdicts` | `[]` | GitHub only. More verdicts `/sdd:archive-pr` must see as `success` before merging, each `{ "workflow": ".github/workflows/<file>.yml", "line": "<verdict name>" }` |
 | `autoMerge` | `true` | `false`: `/sdd:archive-pr` stops before merging |
 | `host` | `"github"` | `"azure-devops"`: install the Azure Pipelines template, and complete archive PRs through Azure DevOps. `/sdd:init` writes it for an Azure DevOps repository, and for any `--host` given |
 | `archiveBypassReviewers` | `false` | Azure DevOps only. `true`: `/sdd:archive-pr` may complete an archive PR it verified past a "Minimum number of reviewers" policy, when that is the only blocking policy not met and no reviewer voted Reject or Waiting for author. Without this setting it never bypasses, and it never approves or votes |
 
-`statuses` and `archiveVerdicts` on Azure DevOps, and `archiveBypassReviewers` on GitHub, are
-errors, not silent no-ops.
+Setting `specDiffComment`, `statuses` or `archiveVerdicts` on Azure DevOps, or
+`archiveBypassReviewers` on GitHub, is an error, not a silent no-op.
 
 ## Base pins
 
@@ -238,7 +241,9 @@ advisory: a red build is a real failure, a green one proves nothing alone.
 | The archive check `/sdd:archive-pr` relies on | CI's verdict, from a run it checks, plus its own re-run | Its own re-run of `verify` (`sdd-azure-pr.sh merge`), from a clean checkout of the default branch's tip against the PR head. No CI verdict is read |
 | A push after the check can't merge unchecked commits | Merge pinned with `--match-head-commit` | Likely, not proven: completion names the verified commit as `lastMergeSourceCommit`, which should make Azure DevOps refuse a newer head. The source and target commits that landed are confirmed afterwards, and a mismatch is reported as unverified |
 | A PR from a fork, or from another repository, is never adopted | Yes | Yes (`forkSource`, and the PR's repository and project) |
-| A merge without review | Allowed for a verified archive PR | A minimum-reviewer policy stops it, unless `archiveBypassReviewers` is set, that is the only unmet blocking policy, and no reviewer voted against. The bypass then skips every policy at the moment of completion, so it is judged on a fresh read right before |
+| A merge without review | Allowed for a verified archive PR | A minimum-reviewer policy stops it, unless `archiveBypassReviewers` is set and that is the only unmet blocking policy. The bypass then skips every policy at the moment of completion: it is judged on a fresh read right before, and anything that changes in the seconds between is bypassed too |
+| A reviewer's vote against is respected | n/a | Yes: no completion, bypass or not, goes past a Reject or Waiting-for-author vote, or a required reviewer who hasn't approved |
+| The merge strategy is one the repository allows | n/a | Yes: read from the branch's "Require a merge strategy" policies, squash first; the source branch is deleted |
 | Text from the PR can't forge a log line | `::` and `##[` broken | Not in CI: the PR runs its own scripts, so it can print any `##vso[` command. sdd's scripts break `##vso[` in text they quote, which guards only against text that isn't hostile |
 
 Unproven here, because no test can call Azure DevOps: that a completion naming a
@@ -259,13 +264,17 @@ it, so sdd doesn't ship one.
 
 ## Upgrading to 0.4.0 on Azure DevOps
 
-A repository on Azure DevOps that ran `/sdd:init --no-ci`, with `check-specs.sh` in its own
-pipeline, adopts it by re-running `/sdd:init` without `--no-ci`: it records `sdd.host`, installs
-`.azure-pipelines/sdd-checks.yml`, `sdd-azure.mjs` and `sdd-azure-pr.sh`. Then create a pipeline from that file and
-add it to the default branch's Build Validation policy, set `SDD_DEFAULT_BRANCH` on it if the
-default branch isn't `main`, and decide on `archiveBypassReviewers` (with a minimum-reviewer
-policy and no bypass, every archive PR waits for one approval). Its own `check-specs.sh` step can
-stay or go.
+A repository on Azure DevOps set up by 0.3.x adopts it by re-running `/sdd:init`: it records
+`sdd.host` and installs `sdd-azure.mjs` and `sdd-azure-pr.sh`, which `/sdd:archive-pr` needs.
+Without `--no-ci` it also installs `.azure-pipelines/sdd-checks.yml`: create a pipeline from it,
+add it to the default branch's Build Validation policy, and set `SDD_DEFAULT_BRANCH` on it if
+the default branch isn't `main`. A repository that already runs `check-specs.sh` in its own
+pipeline can keep that and pass `--no-ci`. Decide on `archiveBypassReviewers`: with a
+minimum-reviewer policy and no bypass, every archive PR waits for one approval.
+
+`sdd.host` is a 0.4.0 setting: sdd scripts from 0.3.x reject it as unknown, so every checkout of
+the repository runs 0.4.0's scripts once it is recorded (they come with the commit that records
+it).
 
 ## Upgrading from 0.1.0
 
