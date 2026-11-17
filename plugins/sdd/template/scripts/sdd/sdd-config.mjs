@@ -11,7 +11,6 @@
 //     "pins": true,                 every active change holds base-pins.json (see sdd-specs.mjs)
 //     "statuses": false,            GitHub: CI also posts a commit status per check
 //     "specDiffComment": true,      GitHub: CI keeps a PR comment with the main specs' diff
-//                                   (ignored on Azure DevOps, whose build summary always has it)
 //     "archiveVerdicts": [],        more verdicts /sdd:archive-pr must see as success, each
 //                                   { "workflow": ".github/workflows/x.yml", "line": "name" }
 //     "autoMerge": true,            /sdd:archive-pr merges a mechanical archive PR itself
@@ -24,9 +23,10 @@
 //                                   reviewer voted Reject or Waiting for author
 //   }
 //
-// Some settings belong to one host. `statuses` and `archiveVerdicts` are GitHub only (on Azure
-// DevOps, require the pipeline in a Build Validation policy instead); `archiveBypassReviewers` is
-// Azure DevOps only. Setting one for the other host is an error, never a silent no-op.
+// Some settings belong to one host. `specDiffComment`, `statuses` and `archiveVerdicts` are
+// GitHub only (on Azure DevOps the diff goes to the build summary, and the pipeline is required
+// in a Build Validation policy instead); `archiveBypassReviewers` is Azure DevOps only. Setting
+// one for the other host is an error, never a silent no-op.
 //
 // The settings always come from the checkout these scripts run from. On GitHub, CI runs the
 // base branch's checkout, so they never come from a PR's tree. On Azure DevOps, a PR build runs
@@ -140,6 +140,10 @@ export function readConfig(root = TRUSTED_ROOT) {
     }
     if (config.archiveVerdicts.length > 0) {
       throw new ConfigError('package.json sdd.archiveVerdicts is GitHub only: on Azure DevOps, require each pipeline in a Build Validation policy')
+    }
+    // Its default stands for GitHub; set at all, it says something Azure DevOps can't honor.
+    if ('specDiffComment' in raw) {
+      throw new ConfigError('package.json sdd.specDiffComment is GitHub only: on Azure DevOps, the main-spec diff always goes to the build summary')
     }
   } else if (config.archiveBypassReviewers) {
     throw new ConfigError('package.json sdd.archiveBypassReviewers is Azure DevOps only (it needs "host": "azure-devops")')

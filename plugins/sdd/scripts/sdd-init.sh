@@ -97,7 +97,9 @@ pkg_host="$(node -e '
     try {
         const p = JSON.parse(require("fs").readFileSync("package.json", "utf8"))
         const h = p && p.sdd && p.sdd.host
-        if (typeof h === "string") process.stdout.write(h)
+        if (typeof h === "string") {
+            process.stdout.write(h)
+        }
     } catch {}' 2>/dev/null || true)"
 if [ -n "$host" ]; then
     host_from="--host"
@@ -116,6 +118,32 @@ case "$host" in
     *) fail "package.json's sdd.host is $host, not github or azure-devops" ;;
 esac
 
+# A repository sdd set up before records no host, and was set up for GitHub. Detection moving it
+# to Azure DevOps is a change of host: refuse it where GitHub-only settings would then fail
+# every sdd script, and say so loudly otherwise.
+switched=0
+if [ "$host_from" = "the origin remote" ] && [ -f .claude/sdd-version ]; then
+    switched=1
+    github_only="$(node -e '
+        try {
+            const sdd = JSON.parse(require("fs").readFileSync("package.json", "utf8")).sdd || {}
+            const set = []
+            if (sdd.statuses === true) {
+                set.push("statuses")
+            }
+            if (Array.isArray(sdd.archiveVerdicts) && sdd.archiveVerdicts.length > 0) {
+                set.push("archiveVerdicts")
+            }
+            if ("specDiffComment" in sdd) {
+                set.push("specDiffComment")
+            }
+            process.stdout.write(set.join(", "))
+        } catch {}' 2>/dev/null || true)"
+    if [ -n "$github_only" ]; then
+        fail "this repository was set up for GitHub, and its origin is now Azure Repos, but package.json sets GitHub-only sdd settings ($github_only). Remove them to move it to Azure DevOps, or pass --host github to keep it on GitHub"
+    fi
+fi
+
 echo "Setting up sdd $version in $root (host: $host, from $host_from)"
 
 warnings=0
@@ -125,6 +153,16 @@ note() {
         *) echo "  $1" ;;
     esac
 }
+
+if [ $switched -eq 1 ]; then
+    note "warning: this repository was set up for GitHub, and its origin is Azure Repos: moving it to Azure DevOps. Re-run with --host github to keep it on GitHub"
+fi
+# An Azure DevOps Server (on-premises) remote isn't one sdd can read: it stays on GitHub.
+if [ "$host" = github ] && [ "$host_from" = "the default" ]; then
+    case "$(git remote get-url origin 2>/dev/null || true)" in
+        */_git/*|*/_optimized/*) note "warning: origin looks like Azure DevOps Server, which sdd doesn't support, so this is set up for GitHub; pass --host to choose" ;;
+    esac
+fi
 
 # Copies a plugin-owned file, reporting added/updated/unchanged.
 owned() {

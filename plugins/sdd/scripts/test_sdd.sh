@@ -917,16 +917,56 @@ changed="$(git -C "$ru" status --porcelain | sed 's/^...//' | grep -vE '^(script
 [ ! -e "$ru/.azure-pipelines" ] || fail "the upgrade installed the Azure Pipelines template"
 pass "a GitHub repository set up by 0.3.6 upgrades with only plugin files changed"
 
+# A repository set up by 0.3.6 whose origin is Azure Repos moves to Azure DevOps, with a warning;
+# with GitHub-only settings, it is refused rather than left with settings every script rejects.
+setup_036() { # repo
+    if [ -d "$TMP_ROOT/sdd-0.3.6/plugins/sdd" ]; then
+        bash "$TMP_ROOT/sdd-0.3.6/plugins/sdd/scripts/sdd-init.sh" --repo "$1" --no-install --host github >/dev/null 2>&1 \
+            || bash "$TMP_ROOT/sdd-0.3.6/plugins/sdd/scripts/sdd-init.sh" --repo "$1" --no-install >/dev/null
+    else
+        bash "$INIT" --repo "$1" --no-install --host github >/dev/null
+        rm "$1/scripts/sdd/sdd-azure.mjs" "$1/scripts/sdd/sdd-azure-pr.sh" && echo 0.3.6 > "$1/.claude/sdd-version"
+        node -e 'const f = process.argv[1], p = JSON.parse(require("fs").readFileSync(f, "utf8")); delete p.sdd; require("fs").writeFileSync(f, JSON.stringify(p, null, 2) + "\n")' "$1/package.json"
+    fi
+    echo '{}' > "$1/package-lock.json"
+}
+ra36="$(fresh_repo)" && setup_036 "$ra36"
+git -C "$ra36" remote add origin https://dev.azure.com/org/Proj/_git/repo
+out="$(bash "$INIT" --repo "$ra36" --no-install)" || { echo "$out"; fail "an Azure-origin 0.3.6 repository did not upgrade"; }
+printf '%s\n' "$out" | grep -q 'warning: this repository was set up for GitHub, and its origin is Azure Repos: moving it to Azure DevOps' || { echo "$out"; fail "the move to Azure DevOps was silent"; }
+grep -q '"host": "azure-devops"' "$ra36/package.json" || fail "the moved repository records no host"
+[ -f "$ra36/.azure-pipelines/sdd-checks.yml" ] || fail "the moved repository has no pipeline"
+rb36="$(fresh_repo)" && setup_036 "$rb36"
+git -C "$rb36" remote add origin https://dev.azure.com/org/Proj/_git/repo
+node -e 'const f = process.argv[1], p = JSON.parse(require("fs").readFileSync(f, "utf8")); p.sdd = { statuses: true }; require("fs").writeFileSync(f, JSON.stringify(p, null, 2) + "\n")' "$rb36/package.json"
+expect_exit 1 bash "$INIT" --repo "$rb36" --no-install
+grep -q 'sets GitHub-only sdd settings (statuses)' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "GitHub-only settings not refused on the move"; }
+grep -q '"host"' "$rb36/package.json" && fail "a refused move still recorded a host"
+bash "$INIT" --repo "$rb36" --no-install --host github >/dev/null || fail "--host github did not keep a GitHub repository with an Azure origin"
+# An Azure DevOps Server origin stays GitHub, and says so.
+rserver="$(fresh_repo)" && git -C "$rserver" remote add origin https://tfs.example.com/tfs/Coll/Proj/_git/repo
+out="$(bash "$INIT" --repo "$rserver" --no-install --no-ci)"
+printf '%s\n' "$out" | grep -q 'warning: origin looks like Azure DevOps Server' || { echo "$out"; fail "an Azure DevOps Server origin set up silently"; }
+pass "an Azure-origin 0.3.6 repository moves to Azure DevOps with a warning, or is refused with GitHub-only settings"
+
 # --- Azure DevOps: host settings ---------------------------------------------------------
 rc="$(fresh_repo)"
 mkdir -p "$rc/scripts" && cp -R "$T" "$rc/scripts/sdd"
-for bad in '{"host":"gitlab"}' '{"host":"azure-devops","statuses":true}' \
-           '{"host":"azure-devops","archiveVerdicts":[{"workflow":".github/workflows/x.yml","line":"x"}]}' \
-           '{"archiveBypassReviewers":true}' '{"host":"azure-devops","archiveBypassReviewers":"yes"}'; do
-    echo "{\"sdd\":$bad}" > "$rc/package.json"
+# Each bad setting, and the message that must name it.
+for bad in '{"host":"gitlab"}|sdd.host must be "github" or "azure-devops"' \
+           '{"host":"azure-devops","statuses":true}|sdd.statuses is GitHub only' \
+           '{"host":"azure-devops","archiveVerdicts":[{"workflow":".github/workflows/x.yml","line":"x"}]}|sdd.archiveVerdicts is GitHub only' \
+           '{"archiveBypassReviewers":true}|sdd.archiveBypassReviewers is Azure DevOps only' \
+           '{"host":"azure-devops","archiveBypassReviewers":"yes"}|archiveBypassReviewers must be true or false' \
+           '{"host":"azure-devops","specDiffComment":true}|sdd.specDiffComment is GitHub only'; do
+    echo "{\"sdd\":${bad%%|*}}" > "$rc/package.json"
     expect_exit 3 node "$rc/scripts/sdd/sdd-config.mjs" --json
+    grep -qF -- "${bad#*|}" "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "not reported: ${bad#*|}"; }
 done
-grep -q 'archiveBypassReviewers must be true or false' "$TMP_ROOT/out" || fail "a bad archiveBypassReviewers not reported"
+echo '{"sdd":{"host":"azure-devops","specDiffComment":false,"statuses":false,"archiveVerdicts":[]}}' > "$rc/package.json"
+expect_exit 3 node "$rc/scripts/sdd/sdd-config.mjs" --json
+echo '{"sdd":{"host":"azure-devops","statuses":false,"archiveVerdicts":[],"archiveBypassReviewers":false}}' > "$rc/package.json"
+node "$rc/scripts/sdd/sdd-config.mjs" --json >/dev/null || fail "a valid Azure DevOps config refused"
 echo '{"sdd":{"host":"azure-devops","archiveBypassReviewers":true}}' > "$rc/package.json"
 [ "$(node "$rc/scripts/sdd/sdd-config.mjs" archiveBypassReviewers)" = true ] || fail "archiveBypassReviewers not read"
 pass "settings: host, and host-only settings on the wrong host are errors"
