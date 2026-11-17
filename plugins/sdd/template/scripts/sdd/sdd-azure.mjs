@@ -9,10 +9,10 @@
 //       `origin` of the current directory's repository, as git uses it and as configured), as
 //       JSON. Exit 1 when it isn't one.
 //
-//   node sdd-azure.mjs find-archive [<file>|-]
+//   node sdd-azure.mjs find-archive [--page-size <n>] [<file>|-]
 //       Reads `az repos pr list -o json` and prints `pr=<id>` for each open archive PR from
 //       this repository's own branches (an `archive/` branch or a title starting "Archive", no
-//       fork), or `pr=none`.
+//       fork), or `pr=none`. With --page-size, a list that long may be cut short: exit 3.
 //
 //   node sdd-azure.mjs pr --default <branch> --project <name> --repository <name> [<file>|-]
 //       Checks a PR as `az repos pr show -o json` prints it: in this project and repository
@@ -23,32 +23,38 @@
 //       `project_id=<guid>`. Last line `pr=ok|wait|refused`: wait means the merge is still
 //       being computed. Exit 0 ok, 4 wait, 1 refused.
 //
-//   node sdd-azure.mjs policies [<file>|-]
+//   node sdd-azure.mjs policies [--page-size <n>] [<file>|-]
 //       Reads the PR's policy evaluations (`az repos pr policy list -o json`) and prints a `- `
 //       line for each blocking policy that isn't met, then `policies=<state>`:
 //         none       no policy evaluations: Azure DevOps still checks a completion itself
 //         approved   every enabled blocking policy is approved or not applicable
-//         pending    none failed, but one is still queued or running: wait and read again
+//         pending    none failed, but a build is still queued or running: wait, read again
 //         reviewers  the only unmet blocking policies are "Minimum number of reviewers"
-//         blocked    any other blocking policy failed or isn't met (a failed build, required
-//                    reviewers, linked work items, comments, a status policy)
+//         blocked    any other blocking policy isn't met: a failed or expired build, and any
+//                    other policy not yet approved (Required reviewers, comments, work items,
+//                    a status), which waiting won't change
 //       Every evaluation must carry a boolean `configuration.isBlocking` (exit 3 otherwise), so
-//       a field missing from the input never makes a policy count as non-blocking.
-//       Exit 0 for approved or none, 1 otherwise.
+//       a field missing from the input never makes a policy count as non-blocking. With
+//       --page-size, a list that long may be cut short: exit 3. Exit 0 for approved or none,
+//       1 otherwise.
 //
-//   node sdd-azure.mjs complete-body --commit <sha> --pr <file>|- --policies <file>|-
-//                                    [--bypass-reviewers] [--message <text>]
+//   node sdd-azure.mjs complete-body --commit <sha> --pr <file> --policies <file>
+//                                    --merge-policies <file> [--bypass-reviewers]
+//                                    [--message <text>]
 //       Prints the body of the PATCH that completes the PR, pinned to <sha>
 //       (`lastMergeSourceCommit`), the source commit Azure DevOps is asked to complete. A push
 //       after verification should make completion fail; that rests on Azure DevOps' behavior,
 //       which no test here exercises, so confirm the completed commit afterwards. The merge
-//       strategy is named: the first of noFastForward, rebaseMerge, squash, rebase that every
-//       "Require a merge strategy" policy allows. Refuses (exit 1, a `- not completing:` line)
+//       strategy is named: the first of squash, noFastForward, rebaseMerge, rebase that every
+//       "Require a merge strategy" policy in --merge-policies (the branch's configurations,
+//       `az repos policy list --branch`) allows. Refuses (exit 1, a `- not completing:` line)
 //       unless the repository is on Azure DevOps, `autoMerge` is on, the PR's head is still
-//       <sha>, and the policies are `approved` or `none`. The one exception: policies
-//       `reviewers`, --bypass-reviewers given, `archiveBypassReviewers` true, and no reviewer
-//       voted Reject or Waiting for author; then the body bypasses policy with a reason.
-//       Settings come from this checkout's package.json (sdd-config.mjs), never a PR's.
+//       <sha>, no reviewer voted Reject or Waiting for author, every required reviewer
+//       approved, and the policies are `approved` or `none`. The one exception: policies
+//       `reviewers`, --bypass-reviewers given and `archiveBypassReviewers` true; then the body
+//       bypasses policy, with a reason. A bypass skips every policy when Azure DevOps
+//       completes, including anything that changed after these reads. Settings come from this
+//       checkout's package.json (sdd-config.mjs), never a PR's.
 //
 // Exit status: 0 done, 1 refused or not met, 2 usage error, 3 bad input, 4 wait (pr).
 import { execFileSync } from 'node:child_process'
@@ -261,14 +267,19 @@ function isLive(config) {
   return config.isEnabled !== false && config.isDeleted !== true
 }
 
+/** Build Validation: the one policy that finishes on its own, so the only one worth waiting for. */
+export const BUILD = '0609b952-1397-4640-95ec-e00a01b2c241'
+
 /**
  * The state of a PR's blocking policies, and a line for each one not met.
  *   none       the branch has no policy evaluations at all: a completion without a bypass is
  *              still checked by Azure DevOps itself, and nothing may be bypassed
  *   approved   every enabled blocking policy is approved or not applicable
- *   pending    none failed, but one is still queued or running
+ *   pending    none failed, but a build is still queued or running
  *   reviewers  the only unmet blocking policies are "Minimum number of reviewers"
- *   blocked    any other blocking policy failed or isn't met
+ *   blocked    any other blocking policy isn't met: a failed or expired build, and any other
+ *              policy not yet approved (Required reviewers, comments, work items, a status),
+ *              which waiting won't change
  * @param {unknown} input
  * @returns {{ state: 'none' | 'approved' | 'pending' | 'reviewers' | 'blocked', unmet: string[] }}
  */
@@ -286,15 +297,17 @@ export function judgePolicies(input) {
     if (!config.isBlocking || !isLive(config)) {
       continue
     }
-    if (x.status === 'approved' || x.status === 'notApplicable') {
+    const typeId = String(config.type?.id ?? '').toLowerCase()
+    const name = oneLine(config.type?.displayName ?? (typeId || 'unknown policy'))
+    // An expired build reads approved, but Azure DevOps won't complete on it.
+    const expired = typeId === BUILD && x.context?.isExpired === true
+    if ((x.status === 'approved' && !expired) || x.status === 'notApplicable') {
       continue
     }
-    const typeId = String(config.type?.id ?? '').toLowerCase()
-    const name = String(config.type?.displayName ?? (typeId || 'unknown policy')).replace(/[\r\n\t]+/g, ' ')
-    unmet.push(`- ${name}: ${x.status}`)
+    unmet.push(`- ${name}: ${expired ? 'expired (queue the build again)' : oneLine(x.status)}`)
     if (typeId === MINIMUM_REVIEWERS) {
       reviewers = true
-    } else if (x.status === 'queued' || x.status === 'running') {
+    } else if (typeId === BUILD && !expired && (x.status === 'queued' || x.status === 'running')) {
       pending = true
     } else {
       blocked = true
@@ -304,26 +317,50 @@ export function judgePolicies(input) {
   return { state, unmet }
 }
 
-/** Merge strategies in the order sdd prefers them: every one keeps the archive's tree. */
+/**
+ * Merge strategies in the order sdd prefers them. Squash first: it lands one commit whose tree
+ * is the one verified, never the branch's intermediate commits, which verify doesn't judge.
+ */
 const STRATEGIES = Object.freeze([
+  ['squash', 'allowSquash'],
   ['noFastForward', 'allowNoFastForward'],
   ['rebaseMerge', 'allowRebaseMerge'],
-  ['squash', 'allowSquash'],
   ['rebase', 'allowRebase'],
 ])
 
 /**
+ * Policy configurations, from `az repos policy list --branch <b> --repository-id <id> -o json`
+ * (or the REST `{ value: [...] }`), or the `configuration` of each policy evaluation.
+ * @param {unknown} input
+ * @returns {any[]}
+ */
+function configurationsOf(input) {
+  const list = Array.isArray(input) ? input : (input !== null && typeof input === 'object' && Array.isArray(/** @type {any} */ (input).value) ? /** @type {any} */ (input).value : null)
+  if (list === null) {
+    throw new InputError('policy configurations must be a JSON array')
+  }
+  return list.map(x => {
+    const config = x !== null && typeof x === 'object' && x.configuration !== undefined ? x.configuration : x
+    if (config === null || typeof config !== 'object' || config.type === null || typeof config.type !== 'object') {
+      throw new InputError('a policy configuration has no type')
+    }
+    return config
+  })
+}
+
+/**
  * The merge strategy to complete with: the first sdd prefers that every enabled "Require a
- * merge strategy" policy allows, or noFastForward when there is no such policy. Named
- * explicitly, so a bypass can never complete with a strategy the repository forbids.
- * @param {unknown} input policy evaluations
+ * merge strategy" policy on the branch allows, or squash when there is none. Named explicitly,
+ * so neither the API default nor a bypass completes with a strategy the repository forbids.
+ * A policy lists only the strategies it allows (`allowSquash: true`, ...); one with none of
+ * them is the older form, `useSquashMerge`, or no-fast-forward only.
+ * @param {unknown} input the branch's policy configurations
  * @returns {{ strategy: string } | { refused: string }}
  */
 export function mergeStrategy(input) {
   let allowed = new Set(STRATEGIES.map(([name]) => name))
-  for (const x of evaluationsOf(input)) {
-    const config = x.configuration
-    if (String(config.type?.id ?? '').toLowerCase() !== MERGE_STRATEGY || !isLive(config)) {
+  for (const config of configurationsOf(input)) {
+    if (String(config.type.id ?? '').toLowerCase() !== MERGE_STRATEGY || !isLive(config)) {
       continue
     }
     const settings = config.settings !== null && typeof config.settings === 'object' ? config.settings : {}
@@ -333,7 +370,6 @@ export function mergeStrategy(input) {
     if (named) {
       here = new Set(STRATEGIES.filter(([, key]) => settings[key] === true).map(([name]) => name))
     } else if (settings.useSquashMerge === true) {
-      // The policy's older form: squash only.
       here = new Set(['squash'])
     } else {
       here = new Set(['noFastForward'])
@@ -345,31 +381,43 @@ export function mergeStrategy(input) {
 }
 
 /**
- * Reviewers who voted Reject (-10) or Waiting for author (-5) on a PR.
+ * Reviewers who stand against completing: anyone who voted Reject (-10) or Waiting for author
+ * (-5), and any required reviewer who hasn't approved.
  * @param {any} pr
  * @returns {string[]}
  */
-export function vetoes(pr) {
+export function reviewerObjections(pr) {
   if (pr.reviewers === undefined || pr.reviewers === null) {
     return []
   }
   if (!Array.isArray(pr.reviewers)) {
     throw new InputError('the PR\'s reviewers must be an array')
   }
-  return pr.reviewers
-    .filter((/** @type {any} */ x) => typeof x?.vote === 'number' && x.vote < 0)
-    .map((/** @type {any} */ x) => `${String(x.displayName ?? x.uniqueName ?? 'a reviewer').replace(/[\r\n\t]+/g, ' ')} (${x.vote === -10 ? 'Reject' : 'Waiting for author'})`)
+  const out = []
+  for (const x of pr.reviewers) {
+    const who = oneLine(x?.displayName ?? x?.uniqueName ?? 'a reviewer')
+    const vote = typeof x?.vote === 'number' ? x.vote : 0
+    if (vote < 0) {
+      out.push(`${who} voted ${vote <= -10 ? 'Reject' : 'Waiting for author'}`)
+    } else if (x?.isRequired === true && vote <= 0) {
+      out.push(`${who} is a required reviewer and hasn't approved`)
+    }
+  }
+  return out
 }
 
 /**
  * The PATCH body that completes a PR pinned to a commit, or the reason it may not.
- * The bypass is narrow: only with --bypass-reviewers and `archiveBypassReviewers`, only when
- * "Minimum number of reviewers" is the only unmet blocking policy, and never past a reviewer
- * who voted Reject or Waiting for author.
- * @param {{ commit: string, pr: any, policies: unknown, bypassReviewers: boolean, message: string | null, config: ReturnType<typeof readConfig> }} options
+ * Never past a reviewer who voted against it or a required reviewer who hasn't approved, in any
+ * policy state. The bypass is narrow: only with --bypass-reviewers and `archiveBypassReviewers`,
+ * and only when "Minimum number of reviewers" is the only unmet blocking policy. It still
+ * bypasses every policy at the moment Azure DevOps completes, so anything that changes between
+ * these reads and the PATCH (a new vote, an expired build) is bypassed too; sdd-azure-pr.sh
+ * reads everything again right before, to keep that window to seconds.
+ * @param {{ commit: string, pr: any, policies: unknown, mergePolicies: unknown, bypassReviewers: boolean, message: string | null, config: ReturnType<typeof readConfig> }} options
  * @returns {{ body: object } | { refused: string }}
  */
-export function completeBody({ commit, pr, policies, bypassReviewers, message, config }) {
+export function completeBody({ commit, pr, policies, mergePolicies, bypassReviewers, message, config }) {
   if (!SHA.test(commit)) {
     throw new InputError('--commit must be a full 40-character commit id')
   }
@@ -385,8 +433,12 @@ export function completeBody({ commit, pr, policies, bypassReviewers, message, c
   if (pr.lastMergeSourceCommit?.commitId !== commit) {
     return { refused: `the PR's head is no longer ${commit}: someone pushed after it was verified` }
   }
+  const objections = reviewerObjections(pr)
+  if (objections.length > 0) {
+    return { refused: `a reviewer stands against the PR, which sdd never completes past: ${objections.join('; ')}` }
+  }
   const { state } = judgePolicies(policies)
-  const merge = mergeStrategy(policies)
+  const merge = mergeStrategy(mergePolicies)
   if ('refused' in merge) {
     return merge
   }
@@ -402,16 +454,45 @@ export function completeBody({ commit, pr, policies, bypassReviewers, message, c
     if (!config.archiveBypassReviewers) {
       return { refused: 'a minimum-reviewer policy is not met, and package.json sdd.archiveBypassReviewers is not true' }
     }
-    const vetoed = vetoes(pr)
-    if (vetoed.length > 0) {
-      return { refused: `a reviewer voted against the PR, which is never bypassed: ${vetoed.join(', ')}` }
-    }
     completionOptions.bypassPolicy = true
     completionOptions.bypassReason = `sdd: archive PR verified mechanical at ${commit} with the default branch's scripts; only the reviewer count was unmet`
   } else if (state !== 'approved' && state !== 'none') {
     return { refused: `the PR's policies are ${state}` }
   }
   return { body: { status: 'completed', lastMergeSourceCommit: { commitId: commit }, completionOptions } }
+}
+
+/**
+ * `[--page-size <n>] [<file>|-]`: the arguments of a command that reads one page of az output.
+ * @param {string[]} rest
+ */
+function pageArgs(rest) {
+  let pageSize = 0
+  let file = '-'
+  let ok = true
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === '--page-size' && /^[1-9][0-9]*$/.test(rest[i + 1] ?? '')) {
+      pageSize = Number(rest[++i])
+    } else if (i === rest.length - 1 && !rest[i].startsWith('--')) {
+      file = rest[i]
+    } else {
+      ok = false
+    }
+  }
+  return { pageSize, file, ok }
+}
+
+/**
+ * A list as long as the page az was asked for may be cut short: it is never read as complete.
+ * @param {unknown} input
+ * @param {number} pageSize 0 for no page
+ * @param {string} what
+ */
+function fullPage(input, pageSize, what) {
+  const list = Array.isArray(input) ? input : /** @type {any} */ (input)?.value
+  if (pageSize > 0 && Array.isArray(list) && list.length >= pageSize) {
+    throw new InputError(`${list.length} ${what} fill a whole page of ${pageSize}: too many to read as one complete list`)
+  }
 }
 
 /** @param {string} source */
@@ -440,10 +521,11 @@ function isMain() {
 }
 
 const USAGE = `usage: sdd-azure.mjs remote [<url>]
-       sdd-azure.mjs find-archive [<file>|-]
+       sdd-azure.mjs find-archive [--page-size <n>] [<file>|-]
        sdd-azure.mjs pr --default <branch> --project <name> --repository <name> [<file>|-]
-       sdd-azure.mjs policies [<file>|-]
-       sdd-azure.mjs complete-body --commit <sha> --pr <file>|- --policies <file>|- [--bypass-reviewers] [--message <text>]`
+       sdd-azure.mjs policies [--page-size <n>] [<file>|-]
+       sdd-azure.mjs complete-body --commit <sha> --pr <file> --policies <file> --merge-policies <file>
+                                   [--bypass-reviewers] [--message <text>]`
 
 /** @param {string[]} args */
 function main(args) {
@@ -482,10 +564,13 @@ function main(args) {
     return 0
   }
   if (cmd === 'find-archive') {
-    if (rest.length > 1) {
+    const { pageSize, file, ok } = pageArgs(rest)
+    if (!ok) {
       return usage()
     }
-    const ids = findArchivePrs(readJson(rest[0] ?? '-'))
+    const list = readJson(file)
+    fullPage(list, pageSize, 'open PRs')
+    const ids = findArchivePrs(list)
     for (const id of ids) {
       console.log(`pr=${id}`)
     }
@@ -529,10 +614,13 @@ function main(args) {
     return result.state === 'ok' ? 0 : result.state === 'wait' ? 4 : 1
   }
   if (cmd === 'policies') {
-    if (rest.length > 1) {
+    const { pageSize, file, ok } = pageArgs(rest)
+    if (!ok) {
       return usage()
     }
-    const { state, unmet } = judgePolicies(readJson(rest[0] ?? '-'))
+    const list = readJson(file)
+    fullPage(list, pageSize, 'policy evaluations')
+    const { state, unmet } = judgePolicies(list)
     for (const x of unmet) {
       console.log(x)
     }
@@ -551,14 +639,15 @@ function main(args) {
       }
       const value = rest[i + 1]
       // Each option once, and never a flag taken as another's value.
-      if (!['--commit', '--pr', '--policies', '--message'].includes(flag) || flag in opts
+      if (!['--commit', '--pr', '--policies', '--merge-policies', '--message'].includes(flag) || flag in opts
         || value === undefined || value.startsWith('--')) {
         return usage()
       }
       opts[flag] = value
       i++
     }
-    if (!opts['--commit'] || !opts['--pr'] || !opts['--policies'] || (opts['--pr'] === '-' && opts['--policies'] === '-')) {
+    const stdin = ['--pr', '--policies', '--merge-policies'].filter(x => opts[x] === '-').length
+    if (!opts['--commit'] || !opts['--pr'] || !opts['--policies'] || !opts['--merge-policies'] || stdin > 1) {
       return usage()
     }
     const config = readConfig()
@@ -566,6 +655,7 @@ function main(args) {
       commit: opts['--commit'],
       pr: readJson(opts['--pr']),
       policies: readJson(opts['--policies']),
+      mergePolicies: readJson(opts['--merge-policies']),
       bypassReviewers,
       message: opts['--message'] ?? null,
       config,
