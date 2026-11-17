@@ -43,7 +43,16 @@ jobs:
       version: '22.x'
     displayName: Install Node.js
 
-  - script: npm ci --ignore-scripts
+  - bash: |
+      # No check can run without the CLI: say so in every check's verdict line.
+      if ! npm ci --ignore-scripts; then
+        echo "- reason: npm ci failed, so no check ran"
+        echo "spec-checks: failure"
+        echo "requirements-through-change: failure"
+        echo "main-spec-diff: failure"
+        echo "archive-mechanical: failure"
+        exit 1
+      fi
     displayName: Install the pinned OpenSpec CLI (no install scripts)
 
   - bash: |

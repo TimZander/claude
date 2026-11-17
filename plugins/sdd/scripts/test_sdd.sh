@@ -1323,8 +1323,25 @@ grep -v '^#' "$AP" | grep -qi 'AccessToken' && fail "the pipeline hands a step t
 grep -qx '    persistCredentials: false' "$AP" || fail "the pipeline keeps credentials"
 grep -qx '    fetchDepth: 0' "$AP" || fail "the pipeline fetches shallow: the merge commit's parents are needed"
 [ "$(grep -c "condition: and(succeededOrFailed(), eq(variables\['SDD_REFS'\], 'ok'))" "$AP")" = 4 ] || fail "each check should run only after the refs step"
-awk '/^  - bash: \|$/ { n++; if (n == 1) { f = 1; next } } f && /^    name: refs$/ { exit } f { sub(/^      /, ""); print }' "$AP" > "$TMP_ROOT/refs.sh"
+# A step's script: the `bash: |` block whose step has the given line (its name or displayName).
+step_script() {
+    awk -v key="$1" '
+        /^  - bash: \|$/ { buf = ""; f = 1; next }
+        f && /^    [A-Za-z]/ { if ($0 == key) { printf "%s", buf; exit } f = 0 }
+        f { l = $0; sub(/^      /, "", l); buf = buf l "\n" }
+    ' "$AP"
+}
+step_script '    name: refs' > "$TMP_ROOT/refs.sh"
 grep -q 'HEAD\^2' "$TMP_ROOT/refs.sh" || fail "could not extract the refs step"
+# A failed npm ci still prints every check's verdict.
+step_script '    displayName: Install the pinned OpenSpec CLI (no install scripts)' > "$TMP_ROOT/npm.sh"
+grep -q 'npm ci' "$TMP_ROOT/npm.sh" || fail "could not extract the install step"
+npmfake="$TMP_ROOT/npmfake" && mkdir -p "$npmfake" && printf '#!/bin/bash\nexit 1\n' > "$npmfake/npm" && chmod +x "$npmfake/npm"
+npm_step() { PATH="$npmfake:$PATH" bash "$TMP_ROOT/npm.sh"; }
+expect_exit 1 npm_step
+for check in spec-checks requirements-through-change main-spec-diff archive-mechanical; do
+    grep -qx "$check: failure" "$TMP_ROOT/out" || fail "no $check verdict when npm ci fails"
+done
 wa="$TMP_ROOT/ap-repo"
 git init -q -b main "$wa" && git -C "$wa" -c user.email=t@e -c user.name=t commit -q --allow-empty -m base
 git -C "$wa" checkout -q -b pr-head && git -C "$wa" -c user.email=t@e -c user.name=t commit -q --allow-empty -m head
