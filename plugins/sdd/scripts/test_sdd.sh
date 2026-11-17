@@ -1235,7 +1235,9 @@ F="$AZ_FIX"
 serve() {
     local n
     n=$(( $(cat "$F/$1.count" 2>/dev/null || echo 0) + 1 )); echo $n > "$F/$1.count"
-    [ ! -f "$F/$1.$n.hook" ] || bash "$F/$1.$n.hook" >/dev/null 2>&1
+    # A hook runs as the test would: without the no-path-conversion setting az is called with.
+    [ ! -f "$F/$1.$n.hook" ] || env -u MSYS2_ARG_CONV_EXCL bash "$F/$1.$n.hook" >/dev/null 2>&1 \
+        || { echo "stub az: $1 call $n's hook failed" >&2; exit 9; }
     if [ -f "$F/$1.$n.fail" ]; then echo "ERROR: stub az: $1 call $n failed" >&2; exit 1; fi
     [ ! -f "$F/bom" ] || printf '\357\273\277'
     if [ -f "$F/$1.$n.json" ]; then cat "$F/$1.$n.json"; else cat "$F/$1.json"; fi
