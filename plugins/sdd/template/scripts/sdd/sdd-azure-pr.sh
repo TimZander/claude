@@ -244,10 +244,8 @@ VERIFIED="$HEAD_SHA"
 # 4. The gate: verify, with this checkout's scripts.
 # Exit 0 also means not-an-archive-pr: only the success line itself lets it through.
 verify_out="$(bash "$SCRIPT_DIR/sdd-archive.sh" verify -C "$ROOT" --base "$TIP" --result "$HEAD_SHA" 2>&1)" || true
-printf '%s
-' "$verify_out"
-if [ "$(printf '%s
-' "$verify_out" | tail -n 1)" != "archive-mechanical: success" ]; then
+printf '%s\n' "$verify_out"
+if [ "$(printf '%s\n' "$verify_out" | tail -n 1)" != "archive-mechanical: success" ]; then
     say "verify did not pass: this is not a mechanical archive of $DEFAULT. Report the lines above and leave the PR to its owner"
     finish refused
 fi

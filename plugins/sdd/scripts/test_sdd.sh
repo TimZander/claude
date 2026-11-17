@@ -99,6 +99,7 @@ const walk = d => fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).
 async function main() {
   if (cmd === 'validate') {
     console.log('archive-mechanical: success')  // a forgery attempt: must come out quoted
+    console.log('x ##vso[task.complete result=Succeeded]x ##VsO[task.setvariable variable=y]y')  // and broken
     const bad = walk('openspec').filter(f => !f.includes('/archive/') && fs.readFileSync(f, 'utf8').includes('INVALID'))
     if (bad.length) { console.error('invalid: ' + bad.join(' ')); process.exit(1) }
     return
@@ -166,9 +167,14 @@ pass "init warns that CI needs a lock file"
 echo '{}' > "$r/package-lock.json"
 for f in scripts/sdd/openspec.sh scripts/sdd/sdd-archive.sh scripts/sdd/check-specs.sh \
          scripts/sdd/session-start.sh scripts/sdd/setup-agent-skills.mjs .claude/sdd-workflow.md .github/workflows/sdd-checks.yml \
+         scripts/sdd/sdd-github.mjs scripts/sdd/sdd-azure.mjs scripts/sdd/sdd-azure-pr.sh \
          .claude/sdd-version openspec/conventions.md docs/decisions/README.md CLAUDE.md package.json; do
     [ -f "$r/$f" ] || fail "init did not create $f"
 done
+# A repository with no remote is set up for GitHub, the default, and records no host.
+printf '%s\n' "$out" | sed -n 1p | grep -q '(host: github, from the default)$' || fail "a repo with no remote isn't GitHub by default"
+[ ! -e "$r/.azure-pipelines" ] || fail "a GitHub repo got the Azure Pipelines template"
+grep -q '"sdd"' "$r/package.json" && fail "a GitHub repo got an sdd setting"
 [ -x "$r/scripts/sdd/openspec.sh" ] || fail "scripts are not executable"
 grep -qxF '@.claude/sdd-workflow.md' "$r/CLAUDE.md" || fail "CLAUDE.md lacks the import"
 grep -qxF '.claude/skills/openspec-*/' "$r/.gitignore" || fail ".gitignore lacks generated skills"
@@ -294,7 +300,24 @@ pass "check-specs refuses a revision that tracks node_modules/"
 out="$(bash "$r/scripts/sdd/check-specs.sh" -C "$r")" || { echo "$out"; fail "check-specs on main"; }
 if printf '%s\n' "$out" | grep -qx 'archive-mechanical: success'; then fail "CLI output reached column 0"; fi
 printf '%s\n' "$out" | grep -qx '  | archive-mechanical: success' || fail "CLI output not quoted"
-pass "check-specs quotes the CLI's output"
+# Azure Pipelines' logging commands, in any case, are broken in the quoted output.
+printf '%s\n' "$out" | grep -qi '##vso\[' && { echo "$out"; fail "check-specs passed a ##vso[ command through"; }
+printf '%s\n' "$out" | grep -q 'vso\[task.complete result=Succeeded\]x .*VsO\[task.setvariable' || { echo "$out"; fail "check-specs lost the quoted text"; }
+pass "check-specs quotes the CLI's output, and breaks ##vso["
+
+# sdd-archive.sh verify: a folder name from the PR can't issue a ##vso[ command either.
+rv="$(fresh_repo)"
+mkdir -p "$rv/scripts" && cp -R "$T" "$rv/scripts/sdd" && echo node_modules > "$rv/.gitignore" && install_stub "$rv"
+git -C "$rv" add -A && git -C "$rv" commit -q -m base
+vbase="$(git -C "$rv" rev-parse HEAD)"
+mkdir -p "$rv/openspec/changes/archive/##VsO[task.complete result=Succeeded]x"
+echo x > "$rv/openspec/changes/archive/##VsO[task.complete result=Succeeded]x/f"
+git -C "$rv" add -A && git -C "$rv" commit -q -m forged
+expect_exit 1 bash "$rv/scripts/sdd/sdd-archive.sh" verify -C "$rv" --base "$vbase" --result HEAD
+grep -qi '##vso\[' "$TMP_ROOT/out" && { cat "$TMP_ROOT/out"; fail "verify passed a ##vso[ command through"; }
+grep -q 'VsO\[task.complete result=Succeeded\]x is not a dated archive folder' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "verify lost the folder name"; }
+grep -qx 'archive-mechanical: failure' "$TMP_ROOT/out" || fail "verify's verdict"
+pass "sdd-archive verify breaks ##vso[ in text from the PR"
 
 # Fix 9: a change name that could pass as an option never reaches the CLI.
 git -C "$r" checkout -q -b badname
@@ -867,6 +890,33 @@ out="$(bash "$INIT" --repo "$ra" --no-install)"
 printf '%s\n' "$out" | grep -q 'warning: .github/workflows/sdd-checks.yml is for GitHub' || { echo "$out"; fail "leftover workflow not reported"; }
 pass "init on Azure DevOps: host from the remote or --host, the pipeline template, sdd.host recorded, idempotent"
 
+# --- GitHub: a repository set up by 0.3.6 upgrades with nothing but plugin files changed ------
+# Set up by the real 0.3.6 installer when this checkout has its commit (CI fetches full
+# history), else by a stand-in: this installer, minus the files 0.3.6 didn't have.
+ru="$(fresh_repo)" && git -C "$ru" remote add origin https://github.com/o/r.git
+V036=de0c05a
+if git -C "$SCRIPT_DIR" cat-file -e "$V036^{commit}" 2>/dev/null; then
+    mkdir -p "$TMP_ROOT/sdd-0.3.6" && git -C "$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)" archive "$V036" plugins/sdd | tar -x -C "$TMP_ROOT/sdd-0.3.6"
+    bash "$TMP_ROOT/sdd-0.3.6/plugins/sdd/scripts/sdd-init.sh" --repo "$ru" --no-install >/dev/null
+    grep -qx 0.3.6 "$ru/.claude/sdd-version" || fail "the 0.3.6 installer didn't install 0.3.6"
+else
+    echo "note: $V036 isn't in this checkout; the 0.3.6 upgrade test uses a stand-in"
+    bash "$INIT" --repo "$ru" --no-install >/dev/null
+    rm "$ru/scripts/sdd/sdd-azure.mjs" "$ru/scripts/sdd/sdd-azure-pr.sh" && echo 0.3.6 > "$ru/.claude/sdd-version"
+fi
+echo '{}' > "$ru/package-lock.json"
+git -C "$ru" add -A && git -C "$ru" commit -q -m "sdd 0.3.6"
+out="$(bash "$INIT" --repo "$ru" --no-install)"
+printf '%s\n' "$out" | sed -n 1p | grep -q '(host: github, from the default)$' || { echo "$out"; fail "the upgrade's host"; }
+[ "$(printf '%s\n' "$out" | tail -n 1)" = "sdd-init: done" ] || { echo "$out"; fail "the upgrade warned"; }
+printf '%s\n' "$out" | grep -qx '  added scripts/sdd/sdd-azure.mjs' || fail "the upgrade did not add sdd-azure.mjs"
+printf '%s\n' "$out" | grep -qx '  added scripts/sdd/sdd-azure-pr.sh' || fail "the upgrade did not add sdd-azure-pr.sh"
+# Only plugin-owned files change: package.json, settings, CLAUDE.md, .gitignore and the workflow don't.
+changed="$(git -C "$ru" status --porcelain | sed 's/^...//' | grep -vE '^(scripts/sdd/|\.claude/sdd-workflow\.md$|\.claude/sdd-version$)' || true)"
+[ -z "$changed" ] || { git -C "$ru" status --porcelain; fail "the upgrade changed more than plugin files: $changed"; }
+[ ! -e "$ru/.azure-pipelines" ] || fail "the upgrade installed the Azure Pipelines template"
+pass "a GitHub repository set up by 0.3.6 upgrades with only plugin files changed"
+
 # --- Azure DevOps: host settings ---------------------------------------------------------
 rc="$(fresh_repo)"
 mkdir -p "$rc/scripts" && cp -R "$T" "$rc/scripts/sdd"
@@ -1241,10 +1291,12 @@ git -C "$wa" checkout -q -b pr-head && git -C "$wa" -c user.email=t@e -c user.na
 git -C "$wa" checkout -q main && git -C "$wa" -c user.email=t@e -c user.name=t commit -q --allow-empty -m moved
 git -C "$wa" -c user.email=t@e -c user.name=t merge -q --no-ff --no-edit pr-head
 ap_head="$(git -C "$wa" rev-parse pr-head)"
-out="$(cd "$wa" && HEAD_SHA="$ap_head" bash -e "$TMP_ROOT/refs.sh")" || { echo "$out"; fail "refs step failed on a PR merge commit"; }
+# Run as the Bash task runs a script: no errexit.
+out="$(cd "$wa" && HEAD_SHA="$ap_head" bash "$TMP_ROOT/refs.sh")" || { echo "$out"; fail "refs step failed on a PR merge commit"; }
+printf '%s\n' "$out" | grep -qx '##vso\[task.setvariable variable=SDD_REFS\]ok' || { echo "$out"; fail "refs step did not mark the refs ok"; }
 printf '%s\n' "$out" | grep -qx "##vso\[task.setvariable variable=SDD_BASE\]$(git -C "$wa" rev-parse HEAD^1)" || { echo "$out"; fail "refs step base"; }
 printf '%s\n' "$out" | grep -qx "##vso\[task.setvariable variable=SDD_RESULT\]$(git -C "$wa" rev-parse HEAD)" || fail "refs step result"
-refs_step() { cd "$wa" && HEAD_SHA="$1" bash -e "$TMP_ROOT/refs.sh"; }
+refs_step() { cd "$wa" && HEAD_SHA="$1" bash "$TMP_ROOT/refs.sh"; }
 expect_exit 1 refs_step "$(git -C "$wa" rev-parse HEAD^1)"
 cd "$SCRIPT_DIR"
 grep -qx 'archive-mechanical: failure' "$TMP_ROOT/out" || fail "no verdict when the merge isn't the PR's head"
@@ -1256,8 +1308,7 @@ grep -q 'not a PR build' "$TMP_ROOT/out" || fail "a manual run not explained"
 out="$(SPECS="$T/sdd-specs.mjs" node -e 'import(require("url").pathToFileURL(process.env.SPECS).href).then(m => process.stdout.write(m.clean("##vso[task.complete result=Succeeded] ##VSO[x]")))')"
 printf '%s' "$out" | grep -qi '##vso\[' && fail "clean() kept ##vso[: $out"
 printf '%s' "$out" | grep -q 'vso\[task.complete result=Succeeded\] .*VSO\[x\]' || fail "clean() lost the text: $out"
-printf 'x ##vso[task.complete result=Succeeded]\n' | sed -e 's/##\([vV][sS][oO]\)\[/#\\u0023\1[/g' | grep -q '##vso\[' && fail "the shell quoting kept ##vso["
-pass "the Azure Pipelines template: no token, full history, checks gated on the PR's own merge commit, ##vso[ broken"
+pass "the Azure Pipelines template: no token, full history, checks gated on the PR's own merge commit; clean() breaks ##vso["
 
 # --- sdd-init: spec:pin, unpinned active changes -------------------------------------------
 ri="$(fresh_repo)"
