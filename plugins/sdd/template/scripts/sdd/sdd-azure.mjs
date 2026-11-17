@@ -7,11 +7,14 @@
 //       The organization URL, project and repository of an Azure Repos remote (default: the
 //       `origin` of the current directory's repository), as JSON. Exit 1 when it isn't one.
 //
-//   node sdd-azure.mjs pr --default <branch> [<file>|-]
-//       Checks a PR as `az repos pr show -o json` prints it: active, not a draft, not from a fork,
-//       from a branch of this repository into the default branch, and its merge computed without
-//       conflicts. Prints `head=<sha>` and `source=<ref>`, or a `- ` line per problem. Exit 1 on
-//       any problem.
+//   node sdd-azure.mjs pr --default <branch> --project <name> --repository <name> [<file>|-]
+//       Checks a PR as `az repos pr show -o json` prints it: in this project and repository
+//       (`az repos pr show --id` finds PRs anywhere in the organization), active, not a draft,
+//       not from a fork, without auto-complete set, from a branch named in safe characters into
+//       the default branch, and its merge computed without conflicts. Prints a `- ` line per
+//       problem; when there is none, `head=<sha>`, `source=<ref>`, `repository_id=<guid>` and
+//       `project_id=<guid>`. Last line `pr=ok|wait|refused`: wait means the merge is still
+//       being computed. Exit 0 ok, 4 wait, 1 refused.
 //
 //   node sdd-azure.mjs policies [<file>|-]
 //       Reads the PR's policy evaluations (`az repos pr policy list -o json`) and prints a `- `
@@ -40,7 +43,7 @@
 //       voted Reject or Waiting for author; then the body bypasses policy with a reason.
 //       Settings come from this checkout's package.json (sdd-config.mjs), never a PR's.
 //
-// Exit status: 0 done, 1 refused or not met, 2 usage error, 3 bad input.
+// Exit status: 0 done, 1 refused or not met, 2 usage error, 3 bad input, 4 wait (pr).
 import { execFileSync } from 'node:child_process'
 import { readFileSync, realpathSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
@@ -52,7 +55,8 @@ export const MINIMUM_REVIEWERS = 'fa4e907d-c16b-4a4c-9dfa-4906e5d171dd'
 export const MERGE_STRATEGY = 'fa4e907d-c16b-4a4c-9dfa-4916e5d171ab'
 
 const SHA = /^[0-9a-f]{40}$/
-const BRANCH = /^[A-Za-z0-9._/-]+$/
+const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/
+const GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
 export class InputError extends Error {}
 
@@ -91,18 +95,50 @@ export function parseRemote(url) {
 }
 
 /**
- * Problems with a PR as an archive PR, and its head and source branch.
- * @param {any} pr
- * @param {string} defaultBranch
- * @returns {{ problems: string[], head: string | null, source: string | null }}
+ * Whether a source ref is safe to hand to git and the shell: a branch, in characters that need
+ * no quoting anywhere. Git itself allows `$`, backticks and parentheses in branch names.
+ * @param {unknown} ref
+ * @returns {boolean}
  */
-export function checkPr(pr, defaultBranch) {
+export function isSafeRef(ref) {
+  return typeof ref === 'string' && /^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(ref)
+    && !ref.includes('..') && !ref.includes('//') && !ref.endsWith('/') && !ref.endsWith('.lock')
+}
+
+/** One line of untrusted text for a `- ` line. @param {unknown} text */
+function oneLine(text) {
+  return String(text).replace(/[\r\n\t]+/g, ' ')
+}
+
+/** Merge statuses that mean Azure DevOps hasn't finished computing the PR's merge yet. */
+const MERGE_PENDING = new Set(['queued', 'notSet'])
+
+/**
+ * Whether a PR can be adopted as this repository's archive PR into its default branch.
+ *   ok        it can: head, source and the repository and project ids are set
+ *   wait      nothing is wrong yet, but its merge is still being computed: read it again
+ *   refused   one or more problems, each a line
+ * @param {any} pr as `az repos pr show -o json` prints it
+ * @param {{ defaultBranch: string, project: string, repository: string }} expected
+ * @returns {{ state: 'ok' | 'wait' | 'refused', problems: string[], head: string | null, source: string | null, repositoryId: string | null, projectId: string | null }}
+ */
+export function checkPr(pr, { defaultBranch, project, repository }) {
   if (pr === null || typeof pr !== 'object' || Array.isArray(pr)) {
     throw new InputError('not a pull request object')
   }
   const problems = []
+  const same = (/** @type {unknown} */ a, /** @type {string} */ b) => typeof a === 'string' && a.toLowerCase() === b.toLowerCase()
+  // `az repos pr show --id` finds a PR anywhere in the organization.
+  if (!same(pr.repository?.name, repository) || !same(pr.repository?.project?.name, project)) {
+    problems.push(`the PR belongs to ${oneLine(pr.repository?.project?.name)}/${oneLine(pr.repository?.name)}, not ${project}/${repository}`)
+  }
+  const repositoryId = typeof pr.repository?.id === 'string' && GUID.test(pr.repository.id) ? pr.repository.id : null
+  const projectId = typeof pr.repository?.project?.id === 'string' && GUID.test(pr.repository.project.id) ? pr.repository.project.id : null
+  if (repositoryId === null || projectId === null) {
+    problems.push('the PR has no repository or project id')
+  }
   if (pr.status !== 'active') {
-    problems.push(`the PR is ${String(pr.status)}, not active`)
+    problems.push(`the PR is ${oneLine(pr.status)}, not active`)
   }
   if (pr.isDraft === true) {
     problems.push('the PR is a draft')
@@ -110,22 +146,28 @@ export function checkPr(pr, defaultBranch) {
   if (pr.forkSource !== undefined && pr.forkSource !== null) {
     problems.push('the PR comes from a fork: never adopt it, its author controls its pipeline')
   }
+  if (pr.autoCompleteSetBy !== undefined && pr.autoCompleteSetBy !== null) {
+    problems.push(`auto-complete is set (by ${oneLine(pr.autoCompleteSetBy?.displayName ?? 'someone')}): it would complete whatever commit is current, unverified. Cancel it first`)
+  }
   if (pr.targetRefName !== `refs/heads/${defaultBranch}`) {
-    problems.push(`the PR targets ${String(pr.targetRefName)}, not refs/heads/${defaultBranch}`)
+    problems.push(`the PR targets ${oneLine(pr.targetRefName)}, not refs/heads/${defaultBranch}`)
   }
-  const source = typeof pr.sourceRefName === 'string' && pr.sourceRefName.startsWith('refs/heads/') ? pr.sourceRefName : null
+  const source = isSafeRef(pr.sourceRefName) ? pr.sourceRefName : null
   if (source === null) {
-    problems.push('the PR does not come from a branch of this repository')
-  }
-  if (pr.mergeStatus !== 'succeeded') {
-    problems.push(`the PR's merge status is ${String(pr.mergeStatus)}, not succeeded (a conflict, or not computed yet)`)
+    problems.push('the PR\'s source is not a branch of this repository named in safe characters ([A-Za-z0-9._/-])')
   }
   const commit = pr.lastMergeSourceCommit?.commitId
   const head = typeof commit === 'string' && SHA.test(commit) ? commit : null
-  if (head === null) {
+  let wait = false
+  if (MERGE_PENDING.has(pr.mergeStatus)) {
+    wait = true
+  } else if (pr.mergeStatus !== 'succeeded') {
+    problems.push(`the PR's merge status is ${oneLine(pr.mergeStatus)} (a conflict, or a failed merge)`)
+  } else if (head === null) {
     problems.push('the PR has no last merge source commit')
   }
-  return { problems, head, source }
+  const state = problems.length > 0 ? 'refused' : wait ? 'wait' : 'ok'
+  return { state, problems, head, source, repositoryId, projectId }
 }
 
 /**
@@ -337,7 +379,7 @@ function isMain() {
 }
 
 const USAGE = `usage: sdd-azure.mjs remote [<url>]
-       sdd-azure.mjs pr --default <branch> [<file>|-]
+       sdd-azure.mjs pr --default <branch> --project <name> --repository <name> [<file>|-]
        sdd-azure.mjs policies [<file>|-]
        sdd-azure.mjs complete-body --commit <sha> --pr <file>|- --policies <file>|- [--bypass-reviewers] [--message <text>]`
 
@@ -370,19 +412,38 @@ function main(args) {
     return 0
   }
   if (cmd === 'pr') {
-    if (rest[0] !== '--default' || rest.length < 2 || rest.length > 3 || !BRANCH.test(rest[1])) {
+    /** @type {Record<string, string>} */
+    const opts = {}
+    let file = '-'
+    for (let i = 0; i < rest.length; i++) {
+      const flag = rest[i]
+      const value = rest[i + 1]
+      if (['--default', '--project', '--repository'].includes(flag) && !(flag in opts) && value !== undefined && !value.startsWith('--')) {
+        opts[flag] = value
+        i++
+      } else if (i === rest.length - 1 && !flag.startsWith('--')) {
+        file = flag
+      } else {
+        return usage()
+      }
+    }
+    if (!opts['--default'] || !opts['--project'] || !opts['--repository'] || !BRANCH.test(opts['--default'])) {
       return usage()
     }
-    const { problems, head, source } = checkPr(readJson(rest[2] ?? '-'), rest[1])
-    if (problems.length > 0) {
-      for (const x of problems) {
-        console.log(`- ${x}`)
-      }
-      return 1
+    const result = checkPr(readJson(file), { defaultBranch: opts['--default'], project: opts['--project'], repository: opts['--repository'] })
+    for (const x of result.problems) {
+      console.log(`- ${x}`)
     }
-    console.log(`head=${head}`)
-    console.log(`source=${source}`)
-    return 0
+    if (result.state === 'ok') {
+      console.log(`head=${result.head}`)
+      console.log(`source=${result.source}`)
+      console.log(`repository_id=${result.repositoryId}`)
+      console.log(`project_id=${result.projectId}`)
+    } else if (result.state === 'wait') {
+      console.log('- the PR\'s merge is still being computed: read it again shortly')
+    }
+    console.log(`pr=${result.state}`)
+    return result.state === 'ok' ? 0 : result.state === 'wait' ? 4 : 1
   }
   if (cmd === 'policies') {
     if (rest.length > 1) {

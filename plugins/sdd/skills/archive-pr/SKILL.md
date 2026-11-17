@@ -110,9 +110,11 @@ There is no trustworthy CI verdict to read here, so nothing in this step reads o
 organization, project and repository from `sdd-azure.mjs remote` to every `az` call.
 
 1. **Read the PR.** `az repos pr show --id <n> -o json | node scripts/sdd/sdd-azure.mjs pr
-   --default <default>` must print `head=<sha>` and `source=<ref>`. Otherwise its `- ` lines
-   say why not: not active, a draft, from a fork, into another branch, or a merge conflict.
-   Stop and report them.
+   --default <default> --project <project> --repository <repository>` must end `pr=ok`, after
+   `head=<sha>` and `source=<ref>`. `pr=wait` means Azure DevOps is still computing the merge:
+   read it again shortly. `pr=refused` follows a `- ` line per reason (another repository, not
+   active, a draft, from a fork, auto-complete set, a source branch named outside
+   `[A-Za-z0-9._/-]`, into another branch, a conflict): stop and report them.
 2. **Re-run the check yourself**, with the default branch's scripts, never the PR's: in a clean
    checkout of the default branch's tip, with its dependencies installed by
    `npm ci --ignore-scripts`, fetch the PR's source branch (`git fetch origin <source>`),

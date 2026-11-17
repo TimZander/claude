@@ -875,18 +875,50 @@ done
 expect_exit 1 node "$AZ" remote https://github.com/o/r.git
 expect_exit 2 node "$AZ" bogus
 sha_a=1111111111111111111111111111111111111111
-pr_json() { # status, fork, target, merge status
-    printf '{"status":"%s",%s"isDraft":false,"targetRefName":"%s","sourceRefName":"refs/heads/archive/x","mergeStatus":"%s","lastMergeSourceCommit":{"commitId":"%s"}}' \
-        "$1" "$2" "$3" "$4" "$sha_a"
+REPO_ID=aaaaaaaa-0000-0000-0000-000000000001 PROJ_ID=bbbbbbbb-0000-0000-0000-000000000002
+# A PR as `az repos pr show` prints it, with one field replaced: pr_json [<field> <JSON value>]...
+pr_json() {
+    node -e '
+      const pr = {
+        status: "active", isDraft: false, forkSource: null, autoCompleteSetBy: null,
+        repository: { id: process.env.REPO_ID, name: "repo", project: { id: process.env.PROJ_ID, name: "My Project" } },
+        targetRefName: "refs/heads/main", sourceRefName: "refs/heads/archive/x", mergeStatus: "succeeded",
+        lastMergeSourceCommit: { commitId: process.env.sha_a },
+      }
+      const a = process.argv.slice(1)
+      for (let i = 0; i < a.length; i += 2) { pr[a[i]] = JSON.parse(a[i + 1]) }
+      process.stdout.write(JSON.stringify(pr))
+    ' "$@"
 }
-out="$(pr_json active '' refs/heads/main succeeded | node "$AZ" pr --default main)" || { echo "$out"; fail "a good archive PR refused"; }
-[ "$out" = "$(printf 'head=%s\nsource=refs/heads/archive/x' "$sha_a")" ] || fail "pr output: $out"
-pr_check_fails() { pr_json "$@" | node "$AZ" pr --default main; }
-expect_exit 1 pr_check_fails active '"forkSource":{"repository":{}},' refs/heads/main succeeded
-grep -q 'from a fork' "$TMP_ROOT/out" || fail "a fork PR not refused"
-expect_exit 1 pr_check_fails active '' refs/heads/release succeeded
-expect_exit 1 pr_check_fails active '' refs/heads/main conflicts
-expect_exit 1 pr_check_fails completed '' refs/heads/main succeeded
+export REPO_ID PROJ_ID sha_a
+pr_check() { pr_json "$@" | node "$AZ" pr --default main --project 'my project' --repository REPO; }
+out="$(pr_check)" || { echo "$out"; fail "a good archive PR refused"; }
+[ "$out" = "$(printf 'head=%s\nsource=refs/heads/archive/x\nrepository_id=%s\nproject_id=%s\npr=ok' "$sha_a" "$REPO_ID" "$PROJ_ID")" ] || fail "pr output: $out"
+refused() { # problem text, field/value pairs
+    local want="$1"; shift
+    expect_exit 1 pr_check "$@"
+    grep -qF -- "$want" "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "pr did not say: $want"; }
+    grep -qx 'pr=refused' "$TMP_ROOT/out" || fail "pr did not end with pr=refused"
+}
+refused 'from a fork' forkSource '{"repository":{}}'
+refused 'not refs/heads/main' targetRefName '"refs/heads/release"'
+refused '(a conflict, or a failed merge)' mergeStatus '"conflicts"'
+refused 'not active' status '"completed"'
+refused 'is a draft' isDraft true
+refused 'auto-complete is set (by Ann)' autoCompleteSetBy '{"displayName":"Ann"}'
+refused 'belongs to Other/repo, not my project/REPO' repository "{\"id\":\"$REPO_ID\",\"name\":\"repo\",\"project\":{\"id\":\"$PROJ_ID\",\"name\":\"Other\"}}"
+refused 'no last merge source commit' lastMergeSourceCommit '{"commitId":"abc"}'
+# A branch name git allows but a shell would expand is never passed on.
+for ref in 'refs/heads/archive/$(id)' 'refs/heads/archive/`id`' 'refs/heads/a..b' 'refs/pull/1/head' 'refs/heads/-x'; do
+    refused 'named in safe characters' sourceRefName "\"$ref\""
+done
+# A merge still being computed is a wait, not a refusal.
+expect_exit 4 pr_check mergeStatus '"queued"'
+grep -qx 'pr=wait' "$TMP_ROOT/out" || fail "a queued merge is not a wait"
+expect_exit 4 pr_check mergeStatus '"notSet"'
+expect_exit 2 node "$AZ" pr --default main
+expect_exit 2 node "$AZ" pr --default main --project p --repository r --default main
+pass "sdd-azure pr: this repository, no fork, no auto-complete, safe source, queued is a wait"
 pol() { # type id, status[, blocking[, settings JSON]]
     printf '{"configuration":{"isBlocking":%s,"isEnabled":true,"type":{"id":"%s","displayName":"%s"},"settings":%s},"status":"%s"}' \
         "${3:-true}" "$1" "$1" "${4:-{\}}" "$2"
