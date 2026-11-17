@@ -77,7 +77,7 @@ or ask for it on a single change.
 | `/sdd:spec-review <change>` | After proposing, before any code | Fresh-agent, read-only review of the change's meaning: contradictions, dangling references, untestable or ambiguous requirements, coverage, scope, undecided requirements |
 | `/sdd:conformance-review <change>` | After `/opsx:apply`, before the PR | Fresh-agent review of the code against the spec: every scenario tested, code does what the spec says and nothing unspecified, plus a mutation spot check on the 3 riskiest scenarios. At most 15 findings, each routed to spec, test or code |
 | `/sdd:spec-fix <change>` | On any finding, UAT remark or bug | Triage, then spec delta → check → commit, then failing test, then code |
-| `/sdd:archive-pr` | Before new work, when a change is still active | Archive-only PR, merged once it is shown to be mechanical against the current tip: on GitHub, CI's `archive-mechanical: success` plus its own re-run; on Azure DevOps, its own re-run and a completion pinned to the verified commit |
+| `/sdd:archive-pr` | Before new work, when a change is still active | Archive-only PR, merged once it is shown to be mechanical against the current tip: on GitHub, CI's `archive-mechanical: success` plus its own re-run; on Azure DevOps, its own re-run only (CI there is advisory), then a completion that names the verified commit, within the branch's policies, confirmed afterwards |
 
 `conformance-review` is the code review for every change in this flow. It checks the code
 against a spec that was already reviewed for intent, so it doesn't need a general code review
@@ -135,22 +135,24 @@ and warns: split the long requirements on the old version first, then bump in it
 
 Optional, in the `sdd` field of `package.json`. An unknown key or a wrong type is an error, so
 a typo never turns a check off silently. They are always read from the checkout the scripts run
-from: in CI, the base branch, never the PR.
+from. On GitHub, CI runs from the base branch, so a PR can't change them for its own checks. On
+Azure DevOps, CI runs the PR's own checkout, so a PR's build reads the PR's settings: one more
+reason its verdicts are advisory. `/sdd:archive-pr` reads them from the default branch on both.
 
 | Setting | Default | What it does |
 |---|---|---|
 | `pins` | `true` | Every active change holds `base-pins.json` (below) |
 | `changeNames` | `"default"` | `"lowercase"`: change names are `[a-z0-9][a-z0-9-]*` and don't start with a date. The default is `[A-Za-z0-9][A-Za-z0-9._-]*` |
 | `tools` | `["claude"]` | Tools OpenSpec generates its skills for (`openspec init --tools`), such as `["claude", "opencode"]`. Gitignore the other tools' generated folders yourself |
-| `specDiffComment` | `true` | CI keeps one PR comment showing the main specs as they will read once the PR's changes are archived |
+| `specDiffComment` | `true` | GitHub: CI keeps one PR comment showing the main specs as they will read once the PR's changes are archived. Azure DevOps has no comment; the diff always goes to the build's summary tab, and this setting is ignored there |
 | `statuses` | `false` | GitHub only. CI also posts a commit status per check (`sdd/spec-checks`, `sdd/requirements-through-change`, `sdd/main-spec-diff`, `sdd/archive-mechanical`), so branch protection can require each by name |
 | `archiveVerdicts` | `[]` | GitHub only. More verdicts `/sdd:archive-pr` must see as `success` before merging, each `{ "workflow": ".github/workflows/<file>.yml", "line": "<verdict name>" }` |
 | `autoMerge` | `true` | `false`: `/sdd:archive-pr` stops before merging |
-| `host` | `"github"` | `"azure-devops"`: install the Azure Pipelines template, and complete archive PRs through Azure DevOps. `/sdd:init` sets it |
-| `archiveBypassReviewers` | `false` | Azure DevOps only. `true`: `/sdd:archive-pr` may complete an archive PR it verified past a "Minimum number of reviewers" policy, when that is the only blocking policy not met. It never bypasses on its own |
+| `host` | `"github"` | `"azure-devops"`: install the Azure Pipelines template, and complete archive PRs through Azure DevOps. `/sdd:init` writes it for an Azure DevOps repository, and for any `--host` given |
+| `archiveBypassReviewers` | `false` | Azure DevOps only. `true`: `/sdd:archive-pr` may complete an archive PR it verified past a "Minimum number of reviewers" policy, when that is the only blocking policy not met and no reviewer voted Reject or Waiting for author. Without this setting it never bypasses, and it never approves or votes |
 
-A setting for the other host is an error, not a silent no-op. `specDiffComment` has no effect on
-Azure DevOps, where the diff goes to the build's summary tab instead.
+`statuses` and `archiveVerdicts` on Azure DevOps, and `archiveBypassReviewers` on GitHub, are
+errors, not silent no-ops.
 
 ## Base pins
 
@@ -188,9 +190,9 @@ forgotten tick can still be fixed on the branch; on an archive PR, `archive-mech
 forgotten tick found after merge can still be fixed in a PR that only ticks it
 (`requirements-through-change` allows that).
 
-The job fails when any check does. It works in private repositories: the merge commit is
-fetched with the job's token, given to that one `git fetch` as an HTTP header in its own
-environment, never stored in `.git/config`.
+The job fails when any check does. On GitHub it works in private repositories: the merge
+commit is fetched with the job's token, given to that one `git fetch` as an HTTP header in its
+own environment, never stored in `.git/config`.
 
 On Azure DevOps, `.azure-pipelines/sdd-checks.yml` prints the same verdict lines from a PR build
 of the PR's merge commit, and puts the main-spec diff on the build's summary tab. It runs only
@@ -233,16 +235,17 @@ advisory: a red build is a real failure, a green one proves nothing alone.
 | Only default-branch code judges a PR in CI | Yes | **No**: the PR's own YAML and scripts run |
 | CI catches a hand edit of `openspec/specs/` (`requirements-through-change`) | Yes, can gate merging | Advisory: a PR can disable the check; review is the gate |
 | Main-spec diff | A PR comment | The build's summary tab, from the PR's own scripts |
-| The archive check `/sdd:archive-pr` relies on | CI's verdict, from a run it checks, plus its own re-run | Its own re-run of `verify`, from a clean checkout of the default branch's tip against the PR head. No CI verdict is read |
-| A push after the check can't merge unchecked commits | Merge pinned with `--match-head-commit` | Completion names the verified commit as `lastMergeSourceCommit` |
-| A PR from a fork is never adopted | Yes | Yes (`forkSource`) |
-| A merge without review | Allowed for a verified archive PR | Only within branch policies: a minimum-reviewer policy stops it, unless `archiveBypassReviewers` is set and that is the only unmet blocking policy |
-| Text from the PR can't forge a log line | `::` and `##[` broken | `##vso[` broken too |
+| The archive check `/sdd:archive-pr` relies on | CI's verdict, from a run it checks, plus its own re-run | Its own re-run of `verify` (`sdd-azure-pr.sh merge`), from a clean checkout of the default branch's tip against the PR head. No CI verdict is read |
+| A push after the check can't merge unchecked commits | Merge pinned with `--match-head-commit` | Likely, not proven: completion names the verified commit as `lastMergeSourceCommit`, which should make Azure DevOps refuse a newer head. The source and target commits that landed are confirmed afterwards, and a mismatch is reported as unverified |
+| A PR from a fork, or from another repository, is never adopted | Yes | Yes (`forkSource`, and the PR's repository and project) |
+| A merge without review | Allowed for a verified archive PR | A minimum-reviewer policy stops it, unless `archiveBypassReviewers` is set, that is the only unmet blocking policy, and no reviewer voted against. The bypass then skips every policy at the moment of completion, so it is judged on a fresh read right before |
+| Text from the PR can't forge a log line | `::` and `##[` broken | Not in CI: the PR runs its own scripts, so it can print any `##vso[` command. sdd's scripts break `##vso[` in text they quote, which guards only against text that isn't hostile |
 
-Things that rest on Azure DevOps behaving as documented and that the tests here can't exercise:
-that completing with a `lastMergeSourceCommit` other than the source branch's head is refused,
-and the policy evaluation states `az repos pr policy list` reports. `/sdd:archive-pr` confirms
-after completing that the completed commit is the one it verified.
+Unproven here, because no test can call Azure DevOps: that a completion naming a
+`lastMergeSourceCommit` other than the source branch's head is refused (Microsoft's REST
+reference describes the field, but not that check), and the policy evaluation fields and states
+`az repos pr policy list` prints. The confirmation after completing is what catches the first
+one failing.
 
 **Default-branch code against a PR's content, in a pipeline.** Within one repository, no: the
 Build Validation build takes its YAML from the PR's merge commit, and checking out the default
@@ -258,11 +261,11 @@ it, so sdd doesn't ship one.
 
 A repository on Azure DevOps that ran `/sdd:init --no-ci`, with `check-specs.sh` in its own
 pipeline, adopts it by re-running `/sdd:init` without `--no-ci`: it records `sdd.host`, installs
-`.azure-pipelines/sdd-checks.yml` and `sdd-azure.mjs`. Then create a pipeline from that file and
+`.azure-pipelines/sdd-checks.yml`, `sdd-azure.mjs` and `sdd-azure-pr.sh`. Then create a pipeline from that file and
 add it to the default branch's Build Validation policy, set `SDD_DEFAULT_BRANCH` on it if the
 default branch isn't `main`, and decide on `archiveBypassReviewers` (with a minimum-reviewer
 policy and no bypass, every archive PR waits for one approval). Its own `check-specs.sh` step can
-stay or go. Update any ADR that records the GitHub-only gap.
+stay or go.
 
 ## Upgrading from 0.1.0
 

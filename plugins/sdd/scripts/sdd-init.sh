@@ -16,7 +16,8 @@
 #
 #   Owned by the plugin, overwritten on every run (each says so at its top):
 #     scripts/sdd/*                     OpenSpec runner, archive and spec checks, base pins,
-#                                       settings, the CI reporter, and the SessionStart hook
+#                                       settings, the GitHub CI reporter, the Azure DevOps
+#                                       archive-PR helpers, and the SessionStart hook
 #                                       (npm ci --ignore-scripts when stale, sdd status)
 #     .claude/sdd-workflow.md           the flow agents follow, imported by CLAUDE.md
 #     .github/workflows/sdd-checks.yml  the PR checks on GitHub (skipped with --no-ci)
@@ -26,7 +27,8 @@
 #   Owned by the repo, created only when absent, then never touched:
 #     openspec/conventions.md, docs/decisions/ (README and template)
 #
-# And edits that only ever add: package.json (pinned OpenSpec, scripts),
+# And edits that only ever add: package.json (pinned OpenSpec, scripts, and sdd.host on Azure
+# DevOps or when --host is given),
 # .claude/settings.json (telemetry off, the plugin enabled, the SessionStart hook),
 # .gitignore, and
 # the `@.claude/sdd-workflow.md` import line in CLAUDE.md. A value the repo
@@ -273,7 +275,7 @@ elif [ "$(node scripts/sdd/sdd-config.mjs --root . pins)" = true ] && [ -d opens
 fi
 
 if [ $ci -eq 1 ] && [ ! -f package-lock.json ]; then
-    note "warning: no package-lock.json: the sdd-checks workflow runs \`npm ci\`, which needs one; run \`npm install\` and commit it"
+    note "warning: no package-lock.json: sdd-checks CI runs \`npm ci\`, which needs one; run \`npm install\` and commit it"
 fi
 
 # The other host's checks, from an earlier run or a move: they no longer run, or never could.

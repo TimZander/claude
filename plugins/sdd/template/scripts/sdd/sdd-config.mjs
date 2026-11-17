@@ -9,8 +9,9 @@
 //     "changeNames": "default",     "default": [A-Za-z0-9][A-Za-z0-9._-]*
 //                                   "lowercase": [a-z0-9][a-z0-9-]*, not starting YYYY-MM-DD-
 //     "pins": true,                 every active change holds base-pins.json (see sdd-specs.mjs)
-//     "statuses": false,            CI also posts a commit status per check
-//     "specDiffComment": true,      CI keeps a PR comment with the main specs' diff
+//     "statuses": false,            GitHub: CI also posts a commit status per check
+//     "specDiffComment": true,      GitHub: CI keeps a PR comment with the main specs' diff
+//                                   (ignored on Azure DevOps, whose build summary always has it)
 //     "archiveVerdicts": [],        more verdicts /sdd:archive-pr must see as success, each
 //                                   { "workflow": ".github/workflows/x.yml", "line": "name" }
 //     "autoMerge": true,            /sdd:archive-pr merges a mechanical archive PR itself
@@ -19,15 +20,18 @@
 //     "archiveBypassReviewers": false
 //                                   Azure DevOps only: /sdd:archive-pr may complete an archive
 //                                   PR it verified past a "Minimum number of reviewers" policy
-//                                   when that is the only blocking policy not yet met
+//                                   when that is the only blocking policy not yet met and no
+//                                   reviewer voted Reject or Waiting for author
 //   }
 //
 // Some settings belong to one host. `statuses` and `archiveVerdicts` are GitHub only (on Azure
 // DevOps, require the pipeline in a Build Validation policy instead); `archiveBypassReviewers` is
 // Azure DevOps only. Setting one for the other host is an error, never a silent no-op.
 //
-// The settings always come from the checkout these scripts run from, never from a PR's tree:
-// in CI that is the base branch.
+// The settings always come from the checkout these scripts run from. On GitHub, CI runs the
+// base branch's checkout, so they never come from a PR's tree. On Azure DevOps, a PR build runs
+// the PR's own checkout and reads the PR's settings (its verdicts are advisory);
+// /sdd:archive-pr runs from the default branch's checkout on both.
 //
 //   node sdd-config.mjs [--root <dir>] <key>   prints one setting: booleans as true/false,
 //                                              tools comma-separated, archiveVerdicts one

@@ -19,8 +19,9 @@ The installer script does the work; you run it, then report.
 4. On success, summarise what it added or updated, grouped as plugin files, repo files and
    settings, and name the host from its first line (`host: …, from …`): it decides which CI
    template was installed. If the host came from "the default" but the repository is on Azure
-   DevOps (or the other way round), say so and offer to re-run with `--host`. For each `warning:` line, say what the repo has, what sdd expects, and what the
-   owner should decide. In particular:
+   DevOps (or the other way round), say so and offer to re-run with `--host`. For each
+   `warning:` line, say what the repo has, what sdd expects, and what the owner should decide.
+   In particular:
    - a CLAUDE.md that already describes an OpenSpec workflow: point out the passages that
      `.claude/sdd-workflow.md` now covers, and offer to remove them (don't edit unasked);
    - a different pinned OpenSpec version or a different `prepare` script: kept as is. If the
@@ -46,7 +47,9 @@ The installer script does the work; you run it, then report.
      default branch's Build Validation policy (Azure Repos ignores YAML PR triggers), and set a
      pipeline variable `SDD_DEFAULT_BRANCH` if the default branch isn't `main`. Say plainly
      that its verdicts are advisory: a PR build runs the PR's own YAML and scripts. A repository
-     that already runs `check-specs.sh` in its own pipeline can keep that or switch to this one;
+     that already runs `check-specs.sh` in its own pipeline can keep that or switch to this one.
+     With a "Minimum number of reviewers" policy, every archive PR waits for one approval unless
+     the owner sets `"archiveBypassReviewers": true` (which needs the bypass permission); ask;
    - a repository with its own copies of what sdd now does (pin scripts, a requirements check, a
      main-spec diff, its own archive check): offer to retire them, one PR each, after this one
      merges and the new checks have run on a PR.
