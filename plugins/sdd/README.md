@@ -96,8 +96,9 @@ session:
 | `scripts/sdd/sdd-archive.sh` | plugin | `active`, `run`, `verify` (is an archive PR mechanical?), `verdict` (read a CI log) |
 | `scripts/sdd/sdd-specs.mjs` | plugin | `pin` (base pins), and the checks that read requirements: `check`, `gate`, `requirements`, `spec-diff` |
 | `scripts/sdd/sdd-config.mjs` | plugin | Reads the repo's `sdd` settings from `package.json` (below) |
-| `scripts/sdd/sdd-github.mjs` | plugin | GitHub CI only: posts commit statuses and the main-spec diff comment, when the settings ask |
-| `scripts/sdd/sdd-azure.mjs` | plugin | Azure DevOps: the remote's organization, project and repository, and `/sdd:archive-pr`'s decisions (is this an archive PR, are its policies met, the pinned completion body) |
+| `scripts/sdd/sdd-github.mjs` | plugin | GitHub CI only: posts commit statuses and the main-spec diff comment, when the settings ask. Inert on Azure DevOps |
+| `scripts/sdd/sdd-azure.mjs` | plugin | Azure DevOps: the remote's organization, project and repository, and `/sdd:archive-pr`'s decisions (can this PR be adopted, are its policies met, the pinned completion body). Inert on GitHub |
+| `scripts/sdd/sdd-azure-pr.sh` | plugin | Azure DevOps: `/sdd:archive-pr`'s `find`, `open` and `merge` (verify, then complete pinned and confirm), through `az`. Inert on GitHub |
 | `scripts/sdd/session-start.sh` | plugin | SessionStart hook: `npm ci --ignore-scripts` when `node_modules` is stale and OpenSpec's skills generated, then one-line status (active changes to archive, learning mode) |
 | `scripts/sdd/setup-agent-skills.mjs` | plugin | `prepare` script: generates OpenSpec's skills from the pinned version, for the tools in the settings |
 | `.github/workflows/sdd-checks.yml` | plugin | GitHub: PR checks under `pull_request_target`: runs base-branch code, reads the PR as data (see below) |

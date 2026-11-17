@@ -108,7 +108,7 @@ async function main() {
     return
   }
   if (cmd === 'archive') {
-    const p = await import(path.join(__dirname, '../dist/core/parsers/requirement-blocks.js'))
+    const p = await import(require('url').pathToFileURL(path.join(__dirname, '../dist/core/parsers/requirement-blocks.js')).href)
     const src = path.join('openspec/changes', name)
     if (!fs.existsSync(src)) { console.error('no change ' + name); process.exit(1) }
     for (const f of walk(path.join(src, 'specs'))) {
@@ -1014,6 +1014,176 @@ expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --pr "$TMP_ROOT/pr-ok" 
 expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --policies "$TMP_ROOT/pol-ok"
 expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --pr - --policies -
 pass "complete-body: settings, a bad commit id and usage errors"
+
+# --- Azure DevOps: sdd-azure-pr.sh, against a stub az and a real origin ----------------------
+# The origin holds the default branch with one active change, and its archive branch. The
+# clean checkout of main runs the script; its configured origin is an Azure Repos URL that
+# git rewrites (insteadOf) to the local origin.
+ADO_URL='https://dev.azure.com/example/My%20Project/_git/repo'
+ao="$TMP_ROOT/ado-origin" && awc="$TMP_ROOT/ado-checkout"
+git init -q -b main "$ao"
+git -C "$ao" config user.email test@example.com && git -C "$ao" config user.name Test
+mkdir -p "$ao/scripts" "$ao/openspec/specs/base" && cp -R "$T" "$ao/scripts/sdd"
+echo '{"sdd":{"host":"azure-devops"}}' > "$ao/package.json"
+echo node_modules > "$ao/.gitignore"
+echo ok > "$ao/openspec/specs/base/spec.md"
+add_change "$ao" c-one
+git -C "$ao" add -A && git -C "$ao" commit -q -m main
+install_stub "$ao"
+git -C "$ao" checkout -q -b archive/c-one
+STUB_DATE=2026-01-01 bash "$ao/scripts/sdd/sdd-archive.sh" run -C "$ao" >/dev/null
+git -C "$ao" add -A && git -C "$ao" commit -q -m "Archive c-one"
+ahead="$(git -C "$ao" rev-parse HEAD)"
+git -C "$ao" checkout -q -b outside archive/c-one && echo changed > "$ao/README.md"
+git -C "$ao" add -A && git -C "$ao" commit -q -m outside
+outside="$(git -C "$ao" rev-parse HEAD)"
+git -C "$ao" checkout -q -b plain main && echo changed > "$ao/README.md"
+git -C "$ao" add -A && git -C "$ao" commit -q -m plain
+plain="$(git -C "$ao" rev-parse HEAD)"
+git -C "$ao" checkout -q main
+atip="$(git -C "$ao" rev-parse main)"
+git clone -q "$ao" "$awc"
+install_stub "$awc"
+git -C "$awc" config remote.origin.url "$ADO_URL"
+git -C "$awc" config "url.$ao.insteadOf" "$ADO_URL"
+APR="$awc/scripts/sdd/sdd-azure-pr.sh"
+
+azbin="$TMP_ROOT/azbin" && mkdir -p "$azbin"
+cat > "$azbin/az" <<'EOF'
+#!/usr/bin/env bash
+# A stub az: answers from the files in $AZ_FIX, and logs every call to $AZ_LOG.
+printf '%s\n' "$*" >> "$AZ_LOG"
+F="$AZ_FIX"
+case "$1 $2 $3" in
+    "repos pr list") cat "$F/list.json" ;;
+    "repos pr create") cat "$F/created.json" ;;
+    "repos pr show")
+        if [ -f "$F/patched" ]; then cat "$F/pr-done.json"; exit 0; fi
+        n=$(( $(cat "$F/show.count" 2>/dev/null || echo 0) + 1 )); echo $n > "$F/show.count"
+        if [ -f "$F/pr-show.$n.json" ]; then cat "$F/pr-show.$n.json"; else cat "$F/pr-show.json"; fi ;;
+    "repos pr policy") cat "$F/policies.json" ;;
+    "devops invoke --org")
+        [ ! -f "$F/refuse" ] || { echo "TF401181: the pull request was updated" >&2; exit 1; }
+        while [ $# -gt 0 ]; do [ "$1" != --in-file ] || cp "$2" "$F/body.json"; shift; done
+        touch "$F/patched"; echo '{}' ;;
+    *) echo "stub az: unexpected: $*" >&2; exit 9 ;;
+esac
+EOF
+chmod +x "$azbin/az"
+# A fresh scenario: the PR (head, field overrides), approved policies, a completion that lands
+# exactly what was verified.
+ado_scenario() {
+    AZ_FIX="$TMP_ROOT/azfix.$RANDOM$RANDOM" && mkdir -p "$AZ_FIX" && AZ_LOG="$AZ_FIX/log" && : > "$AZ_LOG"
+    export AZ_FIX AZ_LOG
+    local head="$1"; shift
+    sha_a="$head" pr_json sourceRefName "\"refs/heads/$(git -C "$ao" for-each-ref --points-at "$head" --format='%(refname:lstrip=2)' refs/heads | head -n 1)\"" "$@" > "$AZ_FIX/pr-show.json"
+    printf '[%s]' "$(pol $MR approved)" > "$AZ_FIX/policies.json"
+    sha_a="$head" pr_json status '"completed"' lastMergeTargetCommit "{\"commitId\":\"$atip\"}" > "$AZ_FIX/pr-done.json"
+}
+apr() { (cd "$awc" && PATH="$azbin:$PATH" SDD_AZ_POLL=0 SDD_AZ_WAIT_MERGE=0 SDD_AZ_WAIT_POLICIES=0 SDD_AZ_WAIT_COMPLETE=0 bash "$APR" "$@"); }
+no_patch() { grep -q '^devops invoke' "$AZ_LOG" && { cat "$AZ_LOG"; fail "$1: the PR was completed"; }; return 0; }
+
+ado_scenario "$ahead"
+out="$(apr merge --default main --pr 7 --message 'Archive c-one')" || { echo "$out"; cat "$AZ_LOG"; fail "a verified archive PR did not complete"; }
+[ "$(printf '%s\n' "$out" | tail -n 1)" = "archive-pr: completed" ] || { echo "$out"; fail "merge state"; }
+printf '%s\n' "$out" | grep -qx 'archive-mechanical: success' || fail "merge did not run verify"
+grep -q "^devops invoke --org https://dev.azure.com/example --area git --resource pullRequests --route-parameters project=$PROJ_ID repositoryId=$REPO_ID pullRequestId=7 --http-method PATCH" "$AZ_LOG" || { cat "$AZ_LOG"; fail "the completion call"; }
+grep -q '^repos pr show --org https://dev.azure.com/example --id 7 -o json$' "$AZ_LOG" || { cat "$AZ_LOG"; fail "pr show takes only --org and --id"; }
+body_check "$(cat "$AZ_FIX/body.json")" "b.lastMergeSourceCommit.commitId === '$ahead' && b.completionOptions.mergeStrategy === 'noFastForward' && b.completionOptions.mergeCommitMessage === 'Archive c-one'" || fail "completion body: $(cat "$AZ_FIX/body.json")"
+pass "sdd-azure-pr merge: verifies with the checkout's scripts, completes pinned, confirms both commits"
+
+# A merge still being computed is waited for.
+ado_scenario "$ahead"
+sha_a="$ahead" pr_json sourceRefName '"refs/heads/archive/c-one"' mergeStatus '"queued"' > "$AZ_FIX/pr-show.1.json"
+out="$(cd "$awc" && PATH="$azbin:$PATH" SDD_AZ_POLL=1 SDD_AZ_WAIT_MERGE=1 SDD_AZ_WAIT_POLICIES=0 SDD_AZ_WAIT_COMPLETE=0 bash "$APR" merge --default main --pr 7)" \
+    || { echo "$out"; fail "a queued merge was not waited for"; }
+ado_scenario "$ahead"
+sha_a="$ahead" pr_json sourceRefName '"refs/heads/archive/c-one"' mergeStatus '"queued"' > "$AZ_FIX/pr-show.json"
+expect_exit 1 apr merge --default main --pr 7
+grep -qx 'archive-pr: timeout' "$TMP_ROOT/out" || fail "a merge never computed is not a timeout"
+no_patch "a queued merge"
+
+# Each refusal stops before completing.
+ado_scenario "$outside" sourceRefName '"refs/heads/outside"'
+expect_exit 1 apr merge --default main --pr 7
+grep -qx 'archive-pr: refused' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a non-mechanical PR not refused"; }
+grep -q 'changed outside openspec/: README.md' "$TMP_ROOT/out" || fail "verify's reason not shown"
+no_patch "a failed verify"
+ado_scenario "$plain" sourceRefName '"refs/heads/plain"'
+expect_exit 1 apr merge --default main --pr 7
+grep -qx 'archive-mechanical: not-an-archive-pr' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "verify did not run on a plain PR"; }
+grep -qx 'archive-pr: refused' "$TMP_ROOT/out" || fail "a PR that isn't an archive was not refused"
+no_patch "not an archive PR"
+ado_scenario "$ahead"
+printf '[%s]' "$(pol $MR rejected)" > "$AZ_FIX/policies.json"
+expect_exit 1 apr merge --default main --pr 7
+grep -qx 'archive-pr: review' "$TMP_ROOT/out" || fail "an unmet reviewer policy is not review"
+no_patch "a PR that needs a review"
+expect_exit 1 apr merge --default main --pr 7 --bypass-reviewers
+grep -q 'archiveBypassReviewers is not true' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "--bypass-reviewers bypassed without the setting"; }
+no_patch "a bypass without the setting"
+ado_scenario "$ahead"
+printf '[%s]' "$(pol $BUILD rejected)" > "$AZ_FIX/policies.json"
+expect_exit 1 apr merge --default main --pr 7
+grep -qx 'archive-pr: refused' "$TMP_ROOT/out" || fail "a failed build is not refused"
+no_patch "a failed build"
+ado_scenario "$ahead"
+printf '[%s]' "$(pol $BUILD running)" > "$AZ_FIX/policies.json"
+expect_exit 1 apr merge --default main --pr 7
+grep -qx 'archive-pr: timeout' "$TMP_ROOT/out" || fail "a build that never finishes is not a timeout"
+no_patch "a running build"
+ado_scenario "$ahead"
+out="$(apr merge --default main --pr 7 --no-merge)" || { echo "$out"; fail "--no-merge"; }
+[ "$(printf '%s\n' "$out" | tail -n 1)" = "archive-pr: verified" ] || fail "--no-merge state"
+no_patch "--no-merge"
+# Someone pushes between the verify and the completion.
+ado_scenario "$ahead"
+sha_a="$sha_b" pr_json sourceRefName '"refs/heads/archive/c-one"' > "$AZ_FIX/pr-show.2.json"
+expect_exit 1 apr merge --default main --pr 7
+grep -q "head is no longer $ahead" "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a push after the verify not refused"; }
+no_patch "a push after the verify"
+# Azure DevOps refuses the completion.
+ado_scenario "$ahead"
+touch "$AZ_FIX/refuse"
+expect_exit 1 apr merge --default main --pr 7
+grep -q '^  | TF401181' "$TMP_ROOT/out" || fail "az's refusal not shown"
+grep -qx 'archive-pr: failed' "$TMP_ROOT/out" || fail "a refused completion is not failed"
+# It completes against another target: say so.
+ado_scenario "$ahead"
+sha_a="$ahead" pr_json status '"completed"' lastMergeTargetCommit "{\"commitId\":\"$sha_b\"}" > "$AZ_FIX/pr-done.json"
+expect_exit 1 apr merge --default main --pr 7
+grep -qx 'archive-pr: unverified' "$TMP_ROOT/out" || fail "a completion against another target not flagged"
+# Only from a clean checkout of the tip.
+ado_scenario "$ahead"
+echo dirty > "$awc/dirty.txt"
+expect_exit 1 apr merge --default main --pr 7
+grep -q 'clean checkout of main' "$TMP_ROOT/out" || fail "a dirty checkout ran"
+rm "$awc/dirty.txt"
+# The default branch moves on: the archive branch is behind.
+echo more > "$ao/more.txt" && git -C "$ao" add more.txt && git -C "$ao" commit -q -m more
+git -C "$awc" pull -q
+ado_scenario "$ahead"
+expect_exit 1 apr merge --default main --pr 7
+grep -qx 'archive-pr: behind' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a branch behind the tip is not behind"; }
+no_patch "a branch behind the tip"
+expect_exit 2 apr merge --default main
+expect_exit 2 apr merge --default 'main;x' --pr 7
+pass "sdd-azure-pr merge: stops before completing on a failed verify, a review, a policy, --no-merge, a push, a dirty checkout or a moved tip"
+
+# find and open.
+ado_scenario "$ahead"
+printf '[{"pullRequestId":3,"sourceRefName":"refs/heads/archive/a","forkSource":null},{"pullRequestId":4,"sourceRefName":"refs/heads/archive/b","forkSource":{"repository":{}}},{"pullRequestId":5,"sourceRefName":"refs/heads/feature","title":"Archive c"},{"pullRequestId":6,"sourceRefName":"refs/heads/feature","title":"Add x"}]' > "$AZ_FIX/list.json"
+out="$(apr find --default main)" || fail "find"
+[ "$out" = "$(printf 'pr=3\npr=5')" ] || fail "find output: $out"
+grep -q '^repos pr list --org https://dev.azure.com/example --project My Project --repository repo --status active --target-branch main' "$AZ_LOG" || { cat "$AZ_LOG"; fail "the list call"; }
+echo '{"pullRequestId":12}' > "$AZ_FIX/created.json"
+printf 'Archive c-one\n\nOnly openspec archive output.\n' > "$TMP_ROOT/desc.md"
+out="$(apr open --default main --source archive/c-one --title 'Archive c-one' --description-file "$TMP_ROOT/desc.md")" || fail "open"
+[ "$out" = pr=12 ] || fail "open output: $out"
+grep -q -- '--source-branch archive/c-one --target-branch main --title Archive c-one --description Archive c-one' "$AZ_LOG" || { cat "$AZ_LOG"; fail "the create call"; }
+grep -q -- '--auto-complete' "$AZ_LOG" && fail "open set auto-complete"
+expect_exit 2 apr open --default main --source 'archive/$(id)' --title t --description-file "$TMP_ROOT/desc.md"
+pass "sdd-azure-pr find and open"
 
 # --- Azure DevOps: the pipeline template ----------------------------------------------------
 AP="$SCRIPT_DIR/../template/.azure-pipelines/sdd-checks.yml"

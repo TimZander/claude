@@ -148,7 +148,7 @@ seed() {
 }
 
 echo "Plugin files:"
-for f in openspec.sh sdd-archive.sh check-specs.sh session-start.sh; do
+for f in openspec.sh sdd-archive.sh check-specs.sh session-start.sh sdd-azure-pr.sh; do
     owned "scripts/sdd/$f" 755
 done
 for f in setup-agent-skills.mjs sdd-config.mjs sdd-specs.mjs sdd-github.mjs sdd-azure.mjs; do

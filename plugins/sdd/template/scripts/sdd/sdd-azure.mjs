@@ -1,11 +1,18 @@
 // Installed by the sdd plugin (sdd-init). Re-running sdd-init overwrites this file.
 //
-// Azure DevOps helpers for /sdd:archive-pr. They decide; they never call Azure DevOps. The skill
-// fetches with `az` and pipes the JSON in, so every rule here is testable offline.
+// Azure DevOps helpers for /sdd:archive-pr. They decide; they never call Azure DevOps.
+// sdd-azure-pr.sh fetches with `az` and passes the JSON in, so every rule here is testable
+// offline.
 //
 //   node sdd-azure.mjs remote [<url>]
 //       The organization URL, project and repository of an Azure Repos remote (default: the
-//       `origin` of the current directory's repository), as JSON. Exit 1 when it isn't one.
+//       `origin` of the current directory's repository, as git uses it and as configured), as
+//       JSON. Exit 1 when it isn't one.
+//
+//   node sdd-azure.mjs find-archive [<file>|-]
+//       Reads `az repos pr list -o json` and prints `pr=<id>` for each open archive PR from
+//       this repository's own branches (an `archive/` branch or a title starting "Archive", no
+//       fork), or `pr=none`.
 //
 //   node sdd-azure.mjs pr --default <branch> --project <name> --repository <name> [<file>|-]
 //       Checks a PR as `az repos pr show -o json` prints it: in this project and repository
@@ -108,6 +115,23 @@ export function isSafeRef(ref) {
 /** One line of untrusted text for a `- ` line. @param {unknown} text */
 function oneLine(text) {
   return String(text).replace(/[\r\n\t]+/g, ' ')
+}
+
+/**
+ * The ids of open archive PRs from this repository's own branches: an `archive/` branch or a
+ * title starting "Archive", never from a fork.
+ * @param {unknown} input `az repos pr list -o json` output
+ * @returns {number[]}
+ */
+export function findArchivePrs(input) {
+  if (!Array.isArray(input)) {
+    throw new InputError('the PR list must be a JSON array')
+  }
+  return input
+    .filter(x => x !== null && typeof x === 'object' && (x.forkSource === undefined || x.forkSource === null)
+      && (String(x.sourceRefName ?? '').startsWith('refs/heads/archive/') || /^Archive\b/.test(String(x.title ?? '')))
+      && Number.isInteger(x.pullRequestId))
+    .map(x => x.pullRequestId)
 }
 
 /** Merge statuses that mean Azure DevOps hasn't finished computing the PR's merge yet. */
@@ -379,6 +403,7 @@ function isMain() {
 }
 
 const USAGE = `usage: sdd-azure.mjs remote [<url>]
+       sdd-azure.mjs find-archive [<file>|-]
        sdd-azure.mjs pr --default <branch> --project <name> --repository <name> [<file>|-]
        sdd-azure.mjs policies [<file>|-]
        sdd-azure.mjs complete-body --commit <sha> --pr <file>|- --policies <file>|- [--bypass-reviewers] [--message <text>]`
@@ -394,21 +419,42 @@ function main(args) {
     if (rest.length > 1) {
       return usage()
     }
-    let url = rest[0]
-    if (url === undefined) {
-      try {
-        url = execFileSync('git', ['remote', 'get-url', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-      } catch {
+    /** @type {string[]} */
+    let urls = rest.length === 1 ? [rest[0]] : []
+    if (rest.length === 0) {
+      // The URL git uses (insteadOf applied), then the one configured: either may be the
+      // Azure Repos URL when an alias or a mirror rewrites it.
+      for (const args of [['remote', 'get-url', 'origin'], ['config', '--get', 'remote.origin.url']]) {
+        try {
+          urls.push(execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))
+        } catch {
+          // no such remote, or no such setting
+        }
+      }
+      if (urls.length === 0) {
         console.log('- this repository has no origin remote')
         return 1
       }
     }
-    const remote = parseRemote(url)
-    if (remote === null) {
+    const remote = urls.map(parseRemote).find(x => x !== null)
+    if (remote === undefined) {
       console.log('- origin is not an Azure Repos remote')
       return 1
     }
     console.log(JSON.stringify(remote))
+    return 0
+  }
+  if (cmd === 'find-archive') {
+    if (rest.length > 1) {
+      return usage()
+    }
+    const ids = findArchivePrs(readJson(rest[0] ?? '-'))
+    for (const id of ids) {
+      console.log(`pr=${id}`)
+    }
+    if (ids.length === 0) {
+      console.log('pr=none')
+    }
     return 0
   }
   if (cmd === 'pr') {
