@@ -887,45 +887,101 @@ grep -q 'from a fork' "$TMP_ROOT/out" || fail "a fork PR not refused"
 expect_exit 1 pr_check_fails active '' refs/heads/release succeeded
 expect_exit 1 pr_check_fails active '' refs/heads/main conflicts
 expect_exit 1 pr_check_fails completed '' refs/heads/main succeeded
-pol() { # type id, status[, blocking]
-    printf '{"configuration":{"isBlocking":%s,"isEnabled":true,"type":{"id":"%s","displayName":"%s"}},"status":"%s"}' \
-        "${3:-true}" "$1" "$1" "$2"
+pol() { # type id, status[, blocking[, settings JSON]]
+    printf '{"configuration":{"isBlocking":%s,"isEnabled":true,"type":{"id":"%s","displayName":"%s"},"settings":%s},"status":"%s"}' \
+        "${3:-true}" "$1" "$1" "${4:-{\}}" "$2"
 }
-MR=fa4e907d-c16b-4a4c-9dfa-4906e5d171dd BUILD=0609b952-1397-4640-95ec-e00a01b2c241
+MR=fa4e907d-c16b-4a4c-9dfa-4906e5d171dd BUILD=0609b952-1397-4640-95ec-e00a01b2c241 MS=fa4e907d-c16b-4a4c-9dfa-4916e5d171ab
 policies_state() { printf '%s' "$1" | node "$AZ" policies | tail -n 1; }
 [ "$(policies_state "[$(pol $MR approved),$(pol $BUILD approved)]")" = policies=approved ] || fail "approved policies"
 [ "$(policies_state "[$(pol $MR rejected),$(pol $BUILD approved),$(pol other rejected false)]")" = policies=reviewers ] || fail "reviewers only"
 [ "$(policies_state "[$(pol $MR rejected),$(pol $BUILD running)]")" = policies=pending ] || fail "a running build is pending"
 [ "$(policies_state "[$(pol $MR approved),$(pol $BUILD rejected)]")" = policies=blocked ] || fail "a failed build blocks"
 [ "$(policies_state "{\"value\":[$(pol $BUILD notApplicable)]}")" = policies=approved ] || fail "the REST shape"
+[ "$(policies_state '[]')" = policies=none ] || fail "no evaluations is not none"
 printf 'not json' > "$TMP_ROOT/pol-bad"
 expect_exit 3 node "$AZ" policies "$TMP_ROOT/pol-bad"
-complete() { printf '%s' "$1" | node "$AZ" complete-body --commit "$sha_a" --policies - "${@:2}"; }
+# A missing isBlocking never reads as non-blocking.
+printf '[{"configuration":{"isEnabled":true,"type":{"id":"%s"}},"status":"rejected"}]' "$BUILD" > "$TMP_ROOT/pol-noblock"
+expect_exit 3 node "$AZ" policies "$TMP_ROOT/pol-noblock"
+grep -q 'no boolean configuration.isBlocking' "$TMP_ROOT/out" || fail "a missing isBlocking not refused"
+pass "sdd-azure: policy states, strictly read"
+
+# complete-body: the PR's head and reviewers, the policies, and the settings decide.
+pr_votes() { # head, reviewers JSON
+    printf '{"status":"active","lastMergeSourceCommit":{"commitId":"%s"},"reviewers":%s}' "$1" "${2:-[]}"
+}
+sdd_complete() { # policies JSON, PR JSON, more args
+    printf '%s' "$2" > "$TMP_ROOT/cb-pr.json"
+    printf '%s' "$1" | node "$AZ" complete-body --commit "$sha_a" --pr "$TMP_ROOT/cb-pr.json" --policies - "${@:3}"
+}
+body_check() { # body, JS condition on b (the body)
+    printf '%s' "$1" | node -e 'const b = JSON.parse(require("fs").readFileSync(0, "utf8")); if (!(eval(process.argv[1]))) { process.exit(1) }' "$2"
+}
 echo '{"sdd":{"host":"azure-devops"}}' > "$rc/package.json"
-out="$(complete "[$(pol $MR approved)]" --message 'Archive x')" || { echo "$out"; fail "complete-body refused approved policies"; }
-printf '%s' "$out" | node -e '
-  const b = JSON.parse(require("fs").readFileSync(0, "utf8"))
-  if (b.status !== "completed" || b.lastMergeSourceCommit.commitId !== process.argv[1]) throw "not pinned"
-  if (b.completionOptions.bypassPolicy !== undefined || b.completionOptions.mergeCommitMessage !== "Archive x") throw "options"
-' "$sha_a" || fail "complete-body body: $out"
-expect_exit 1 complete "[$(pol $MR rejected)]"
+out="$(sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_a)" --message 'Archive x')" || { echo "$out"; fail "complete-body refused approved policies"; }
+body_check "$out" "b.status === 'completed' && b.lastMergeSourceCommit.commitId === '$sha_a'" || fail "not pinned: $out"
+body_check "$out" "b.completionOptions.bypassPolicy === undefined && b.completionOptions.mergeCommitMessage === 'Archive x'" || fail "options: $out"
+body_check "$out" "b.completionOptions.mergeStrategy === 'noFastForward' && b.completionOptions.deleteSourceBranch === true && b.completionOptions.transitionWorkItems === false" || fail "defaults: $out"
+out="$(sdd_complete '[]' "$(pr_votes $sha_a)")" || { echo "$out"; fail "a branch without policies refused"; }
+body_check "$out" "b.completionOptions.bypassPolicy === undefined && b.completionOptions.mergeCommitMessage === undefined" || fail "no policies: $out"
+sha_b=2222222222222222222222222222222222222222
+expect_exit 1 sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_b)"
+grep -q "head is no longer $sha_a" "$TMP_ROOT/out" || fail "a moved head not refused"
+expect_exit 1 sdd_complete "[$(pol $MR rejected)]" "$(pr_votes $sha_a)"
 grep -q 'needs a review' "$TMP_ROOT/out" || fail "reviewers without --bypass-reviewers"
-expect_exit 1 complete "[$(pol $MR rejected)]" --bypass-reviewers
+expect_exit 1 sdd_complete "[$(pol $MR rejected)]" "$(pr_votes $sha_a)" --bypass-reviewers
 grep -q 'archiveBypassReviewers is not true' "$TMP_ROOT/out" || fail "a bypass without the setting"
-expect_exit 1 complete "[$(pol $MR rejected),$(pol $BUILD rejected)]" --bypass-reviewers
-expect_exit 1 complete "[$(pol $BUILD running)]"
+expect_exit 1 sdd_complete "[$(pol $MR rejected),$(pol $BUILD rejected)]" "$(pr_votes $sha_a)" --bypass-reviewers
+grep -q "policies are blocked" "$TMP_ROOT/out" || fail "a blocked PR not refused as blocked"
+expect_exit 1 sdd_complete "[$(pol $BUILD running)]" "$(pr_votes $sha_a)"
+grep -q "policies are pending" "$TMP_ROOT/out" || fail "a pending PR not refused as pending"
 echo '{"sdd":{"host":"azure-devops","archiveBypassReviewers":true}}' > "$rc/package.json"
-out="$(complete "[$(pol $MR rejected),$(pol $BUILD approved)]" --bypass-reviewers)" || { echo "$out"; fail "an allowed bypass refused"; }
-printf '%s' "$out" | grep -q '"bypassPolicy": true' || fail "no bypassPolicy in an allowed bypass"
-expect_exit 1 complete "[$(pol $MR rejected),$(pol $BUILD rejected)]" --bypass-reviewers
+out="$(sdd_complete "[$(pol $MR rejected),$(pol $BUILD approved)]" "$(pr_votes $sha_a '[{"displayName":"Ann","vote":0},{"displayName":"Bo","vote":5}]')" --bypass-reviewers)" \
+    || { echo "$out"; fail "an allowed bypass refused"; }
+body_check "$out" "b.completionOptions.bypassPolicy === true && b.lastMergeSourceCommit.commitId === '$sha_a' && b.completionOptions.bypassReason.includes('$sha_a')" || fail "allowed bypass body: $out"
+# A min-reviewer policy rejected by an explicit vote must not allow a bypass.
+expect_exit 1 sdd_complete "[$(pol $MR rejected),$(pol $BUILD approved)]" "$(pr_votes $sha_a '[{"displayName":"Ann","vote":-10}]')" --bypass-reviewers
+grep -q 'never bypassed: Ann (Reject)' "$TMP_ROOT/out" || fail "a Reject vote was bypassed"
+expect_exit 1 sdd_complete "[$(pol $MR rejected)]" "$(pr_votes $sha_a '[{"displayName":"Bo","vote":-5}]')" --bypass-reviewers
+grep -q 'Bo (Waiting for author)' "$TMP_ROOT/out" || fail "a Waiting-for-author vote was bypassed"
+expect_exit 1 sdd_complete "[$(pol $MR rejected),$(pol $BUILD rejected)]" "$(pr_votes $sha_a)" --bypass-reviewers
+# --bypass-reviewers never adds a bypass that isn't needed.
+out="$(sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_a)" --bypass-reviewers)" || fail "approved with --bypass-reviewers refused"
+body_check "$out" "b.completionOptions.bypassPolicy === undefined" || fail "an unneeded bypass: $out"
+pass "complete-body: pinned, never past a vote against, a bypass only when only the reviewer count is unmet"
+
+# The merge strategy: the first every "Require a merge strategy" policy allows, named even
+# under a bypass.
+strategy_of() { # policies JSON
+    sdd_complete "$1" "$(pr_votes $sha_a)" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8")).completionOptions.mergeStrategy)'
+}
+[ "$(strategy_of "[$(pol $MS approved true '{"allowNoFastForward":false,"allowSquash":true,"allowRebase":true,"allowRebaseMerge":false}')]")" = squash ] || fail "squash-or-rebase policy"
+[ "$(strategy_of "[$(pol $MS approved true '{"allowNoFastForward":false,"allowRebaseMerge":true}')]")" = rebaseMerge ] || fail "semi-linear policy"
+[ "$(strategy_of "[$(pol $MS approved true '{"useSquashMerge":true}')]")" = squash ] || fail "the policy's older squash-only form"
+[ "$(strategy_of "[$(pol $MS approved true '{"allowSquash":true}'),$(pol $MS approved true '{"allowSquash":true,"allowRebase":true}')]")" = squash ] || fail "two policies' common strategy"
+printf '[{"configuration":{"isBlocking":true,"isEnabled":false,"type":{"id":"%s"},"settings":{"allowSquash":true}},"status":"approved"}]' "$MS" > "$TMP_ROOT/pol-ms-off"
+[ "$(strategy_of "$(cat "$TMP_ROOT/pol-ms-off")")" = noFastForward ] || fail "a disabled merge policy applied"
+expect_exit 1 sdd_complete "[$(pol $MS approved true '{"allowSquash":true}'),$(pol $MS approved true '{"allowRebase":true}')]" "$(pr_votes $sha_a)"
+grep -q 'no merge type in common' "$TMP_ROOT/out" || fail "disjoint merge policies not refused"
+pass "complete-body names the merge strategy the policies allow"
+
 echo '{"sdd":{"host":"azure-devops","autoMerge":false}}' > "$rc/package.json"
-expect_exit 1 complete "[$(pol $MR approved)]"
+expect_exit 1 sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_a)"
 grep -q 'autoMerge is false' "$TMP_ROOT/out" || fail "autoMerge false not honored"
 echo '{}' > "$rc/package.json"
-expect_exit 1 complete "[$(pol $MR approved)]"
+expect_exit 1 sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_a)"
 grep -q 'not on Azure DevOps' "$TMP_ROOT/out" || fail "complete-body ran for a GitHub repo"
-expect_exit 3 node "$AZ" complete-body --commit abc --policies "$TMP_ROOT/pol-bad"
-pass "sdd-azure: remotes, archive PR checks, policy states, and a pinned completion only when policies allow"
+echo '{"sdd":{"host":"azure-devops"}}' > "$rc/package.json"
+printf '[%s]' "$(pol $MR approved)" > "$TMP_ROOT/pol-ok"
+pr_votes $sha_a > "$TMP_ROOT/pr-ok"
+expect_exit 3 node "$AZ" complete-body --commit abc --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok"
+grep -q 'full 40-character commit id' "$TMP_ROOT/out" || fail "a short commit id not refused by name"
+expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --commit "$sha_a" --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok"
+expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok" --message --bypass-reviewers
+expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --policies "$TMP_ROOT/pol-ok"
+expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --pr - --policies -
+pass "complete-body: settings, a bad commit id and usage errors"
 
 # --- Azure DevOps: the pipeline template ----------------------------------------------------
 AP="$SCRIPT_DIR/../template/.azure-pipelines/sdd-checks.yml"

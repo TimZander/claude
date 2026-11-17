@@ -136,18 +136,21 @@ organization, project and repository from `sdd-azure.mjs remote` to every `az` c
    and start this step again: a re-run against the old tip says nothing about the new one.
 5. **Complete, pinned.** Stop here instead if `--no-merge` was given, `autoMerge` is `false`, or
    the user asked to merge themselves. Otherwise build the body with
-   `az repos pr policy list --id <n> -o json | node scripts/sdd/sdd-azure.mjs complete-body
-   --commit <head> --policies - --message "Archive <changes>"`, adding `--bypass-reviewers`
-   only when step 3 said `reviewers`. It re-reads the policies and refuses (a
-   `- not completing:` line) unless they allow it, so a stale decision never completes the PR.
+   a fresh read of the PR and its policies saved to files (`az repos pr show --id <n> -o json`,
+   `az repos pr policy list --id <n> -o json`), then `node scripts/sdd/sdd-azure.mjs
+   complete-body --commit <head> --pr <pr-file> --policies <policies-file> --message "Archive
+   <changes>"`, adding `--bypass-reviewers` only when step 3 said `reviewers`. It refuses (a
+   `- not completing:` line) unless the PR's head is still `<head>` and the policies allow it,
+   and never past a reviewer who voted Reject or Waiting for author. It names the merge
+   strategy the repository's merge-type policies allow.
    Write the body to a temporary file and send it with `az devops invoke --area git --resource
    pullRequests --route-parameters project=<project> repositoryId=<repository>
    pullRequestId=<n> --http-method PATCH --in-file <file> --api-version 7.1 -o json`. The body
    names `<head>` as `lastMergeSourceCommit`, the commit Azure DevOps is asked to complete, so a
    push after your re-run should make the call fail instead of merging unchecked commits; step
    6 checks that it did. The bypass,
-   when used, skips every policy, which is why `complete-body` allows it only when nothing but
-   the reviewer count is unmet. It needs the "Bypass policies when completing pull requests"
+   when used, skips every policy at the moment of the PATCH, which is why `complete-body` allows
+   it only when nothing but the reviewer count is unmet, read just before. It needs the "Bypass policies when completing pull requests"
    permission; without it the call fails: report that.
 6. **Confirm.** `az repos pr show --id <n> -o json`: `status` is `completed` and
    `lastMergeSourceCommit.commitId` is `<head>`. If it completed with any other commit,
