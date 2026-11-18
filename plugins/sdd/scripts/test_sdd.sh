@@ -1052,8 +1052,11 @@ expect_exit 2 node "$AZ" pr --default main
 expect_exit 2 node "$AZ" pr --default main --project p --repository r --default main
 pass "sdd-azure pr: this repository, no fork, no auto-complete, safe source, queued is a wait"
 pol() { # type id, status[, blocking[, settings JSON[, context JSON]]]: an evaluation as az prints it
+    # The settings default is set apart: bash 3.2 (macOS) keeps the backslash in "${4:-{\}}".
+    local settings="${4:-}"
+    [ -n "$settings" ] || settings='{}'
     printf '{"configuration":{"isBlocking":%s,"isEnabled":true,"isDeleted":false,"type":{"id":"%s","displayName":"%s"},"settings":%s},"context":%s,"status":"%s"}' \
-        "${3:-true}" "$1" "$1" "${4:-{\}}" "${5:-null}" "$2"
+        "${3:-true}" "$1" "$1" "$settings" "${5:-null}" "$2"
 }
 mpol() { # settings JSON[, enabled]: a "Require a merge strategy" configuration as az repos policy list prints it
     printf '{"id":233,"isEnabled":%s,"isBlocking":true,"isDeleted":false,"type":{"id":"%s","displayName":"Require a merge strategy"},"settings":%s}' \
