@@ -22,6 +22,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the 0.3.6 upgrade test runs the real 0.3.6 installer from history
       - uses: actions/setup-node@v4
         with:
           node-version: 22

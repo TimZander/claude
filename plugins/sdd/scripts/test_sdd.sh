@@ -99,6 +99,7 @@ const walk = d => fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).
 async function main() {
   if (cmd === 'validate') {
     console.log('archive-mechanical: success')  // a forgery attempt: must come out quoted
+    console.log('x ##vso[task.complete result=Succeeded]x ##VsO[task.setvariable variable=y]y')  // and broken
     const bad = walk('openspec').filter(f => !f.includes('/archive/') && fs.readFileSync(f, 'utf8').includes('INVALID'))
     if (bad.length) { console.error('invalid: ' + bad.join(' ')); process.exit(1) }
     return
@@ -108,7 +109,7 @@ async function main() {
     return
   }
   if (cmd === 'archive') {
-    const p = await import(path.join(__dirname, '../dist/core/parsers/requirement-blocks.js'))
+    const p = await import(require('url').pathToFileURL(path.join(__dirname, '../dist/core/parsers/requirement-blocks.js')).href)
     const src = path.join('openspec/changes', name)
     if (!fs.existsSync(src)) { console.error('no change ' + name); process.exit(1) }
     for (const f of walk(path.join(src, 'specs'))) {
@@ -166,9 +167,14 @@ pass "init warns that CI needs a lock file"
 echo '{}' > "$r/package-lock.json"
 for f in scripts/sdd/openspec.sh scripts/sdd/sdd-archive.sh scripts/sdd/check-specs.sh \
          scripts/sdd/session-start.sh scripts/sdd/setup-agent-skills.mjs .claude/sdd-workflow.md .github/workflows/sdd-checks.yml \
+         scripts/sdd/sdd-github.mjs scripts/sdd/sdd-azure.mjs scripts/sdd/sdd-azure-pr.sh \
          .claude/sdd-version openspec/conventions.md docs/decisions/README.md CLAUDE.md package.json; do
     [ -f "$r/$f" ] || fail "init did not create $f"
 done
+# A repository with no remote is set up for GitHub, the default, and records no host.
+printf '%s\n' "$out" | sed -n 1p | grep -q '(host: github, from the default)$' || fail "a repo with no remote isn't GitHub by default"
+[ ! -e "$r/.azure-pipelines" ] || fail "a GitHub repo got the Azure Pipelines template"
+grep -q '"sdd"' "$r/package.json" && fail "a GitHub repo got an sdd setting"
 [ -x "$r/scripts/sdd/openspec.sh" ] || fail "scripts are not executable"
 grep -qxF '@.claude/sdd-workflow.md' "$r/CLAUDE.md" || fail "CLAUDE.md lacks the import"
 grep -qxF '.claude/skills/openspec-*/' "$r/.gitignore" || fail ".gitignore lacks generated skills"
@@ -294,7 +300,24 @@ pass "check-specs refuses a revision that tracks node_modules/"
 out="$(bash "$r/scripts/sdd/check-specs.sh" -C "$r")" || { echo "$out"; fail "check-specs on main"; }
 if printf '%s\n' "$out" | grep -qx 'archive-mechanical: success'; then fail "CLI output reached column 0"; fi
 printf '%s\n' "$out" | grep -qx '  | archive-mechanical: success' || fail "CLI output not quoted"
-pass "check-specs quotes the CLI's output"
+# Azure Pipelines' logging commands, in any case, are broken in the quoted output.
+printf '%s\n' "$out" | grep -qi '##vso\[' && { echo "$out"; fail "check-specs passed a ##vso[ command through"; }
+printf '%s\n' "$out" | grep -q 'vso\[task.complete result=Succeeded\]x .*VsO\[task.setvariable' || { echo "$out"; fail "check-specs lost the quoted text"; }
+pass "check-specs quotes the CLI's output, and breaks ##vso["
+
+# sdd-archive.sh verify: a folder name from the PR can't issue a ##vso[ command either.
+rv="$(fresh_repo)"
+mkdir -p "$rv/scripts" && cp -R "$T" "$rv/scripts/sdd" && echo node_modules > "$rv/.gitignore" && install_stub "$rv"
+git -C "$rv" add -A && git -C "$rv" commit -q -m base
+vbase="$(git -C "$rv" rev-parse HEAD)"
+mkdir -p "$rv/openspec/changes/archive/##VsO[task.complete result=Succeeded]x"
+echo x > "$rv/openspec/changes/archive/##VsO[task.complete result=Succeeded]x/f"
+git -C "$rv" add -A && git -C "$rv" commit -q -m forged
+expect_exit 1 bash "$rv/scripts/sdd/sdd-archive.sh" verify -C "$rv" --base "$vbase" --result HEAD
+grep -qi '##vso\[' "$TMP_ROOT/out" && { cat "$TMP_ROOT/out"; fail "verify passed a ##vso[ command through"; }
+grep -q 'VsO\[task.complete result=Succeeded\]x is not a dated archive folder' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "verify lost the folder name"; }
+grep -qx 'archive-mechanical: failure' "$TMP_ROOT/out" || fail "verify's verdict"
+pass "sdd-archive verify breaks ##vso[ in text from the PR"
 
 # Fix 9: a change name that could pass as an option never reaches the CLI.
 git -C "$r" checkout -q -b badname
@@ -806,6 +829,741 @@ cd "$SCRIPT_DIR"
 grep -q '^  | fatal: could not read Username' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "git's error not shown, quoted"; }
 grep -qx 'archive-mechanical: failure' "$TMP_ROOT/out" || fail "no verdict when the fetch fails"
 pass "the workflow fetches the merge commit with the token, and shows git's error when it can't"
+
+# --- Azure DevOps: the install path -------------------------------------------------------
+ra="$(fresh_repo)"
+git -C "$ra" remote add origin 'https://example.visualstudio.com/My%20Project/_git/repo'
+out="$(bash "$INIT" --repo "$ra" --no-install)"
+printf '%s\n' "$out" | sed -n 1p | grep -q '(host: azure-devops, from the origin remote)$' || { echo "$out"; fail "host not read from an Azure Repos origin"; }
+[ -f "$ra/.azure-pipelines/sdd-checks.yml" ] || fail "no Azure Pipelines template on an Azure DevOps repo"
+[ -f "$ra/scripts/sdd/sdd-azure.mjs" ] || fail "sdd-azure.mjs not installed"
+[ ! -e "$ra/.github" ] || fail "the GitHub workflow was installed on an Azure DevOps repo"
+[ "$(node -e 'process.stdout.write(require(process.argv[1]).sdd.host)' "$ra/package.json")" = azure-devops ] || fail "sdd.host not recorded"
+[ "$(node "$ra/scripts/sdd/sdd-config.mjs" host)" = azure-devops ] || fail "sdd-config does not read the host"
+echo '{}' > "$ra/package-lock.json"
+out="$(bash "$INIT" --repo "$ra" --no-install)"
+if printf '%s\n' "$out" | grep -Eq '^  (added|updated|set|warning)'; then echo "$out"; fail "second Azure DevOps run changed files"; fi
+printf '%s\n' "$out" | sed -n 1p | grep -q 'from package.json)$' || { echo "$out"; fail "second run did not take the host from package.json"; }
+expect_exit 1 bash "$INIT" --repo "$ra" --no-install --host github
+grep -q "contradicts package.json's sdd.host (azure-devops)" "$TMP_ROOT/out" || fail "a contradicting --host not explained"
+expect_exit 2 bash "$INIT" --repo "$ra" --no-install --host gitlab
+# An SSH remote, and --host on a repository with no remote; --no-ci installs no pipeline.
+rs="$(fresh_repo)"
+git -C "$rs" remote add origin git@ssh.dev.azure.com:v3/org/Proj/repo
+bash "$INIT" --repo "$rs" --no-install --no-ci >/dev/null
+[ ! -e "$rs/.azure-pipelines" ] || fail "--no-ci installed the pipeline"
+grep -q '"host": "azure-devops"' "$rs/package.json" || fail "host not read from an SSH remote"
+rh="$(fresh_repo)"
+bash "$INIT" --repo "$rh" --no-install --host azure-devops >/dev/null
+[ -f "$rh/.azure-pipelines/sdd-checks.yml" ] || fail "--host azure-devops ignored"
+# Every Azure Repos form /sdd:archive-pr can read is detected, and nothing else.
+for url in https://dev.azure.com/org/Proj/_git/repo https://Org@DEV.AZURE.COM/org/Proj/_git/repo \
+           https://dev.azure.com/org/_git/repo https://org.visualstudio.com/DefaultCollection/_git/repo \
+           ssh://git@ssh.dev.azure.com:22/v3/org/Proj/repo org@vs-ssh.visualstudio.com:v3/org/Proj/repo; do
+    rd="$(fresh_repo)" && git -C "$rd" remote add origin "$url"
+    out="$(bash "$INIT" --repo "$rd" --no-install --no-ci)"
+    printf '%s\n' "$out" | sed -n 1p | grep -q '(host: azure-devops, from the origin remote)$' || fail "not detected as Azure DevOps: $url"
+done
+for url in https://git.example.com/dev.azure.com/org/p/_git/r https://foodev.azure.com/org/p/_git/r; do
+    rd="$(fresh_repo)" && git -C "$rd" remote add origin "$url"
+    out="$(bash "$INIT" --repo "$rd" --no-install --no-ci)"
+    printf '%s\n' "$out" | sed -n 1p | grep -q '(host: github, from the default)$' || fail "detected as Azure DevOps: $url"
+done
+# An explicit --host github on an Azure Repos origin sticks.
+rk="$(fresh_repo)" && git -C "$rk" remote add origin https://dev.azure.com/org/Proj/_git/repo
+bash "$INIT" --repo "$rk" --no-install --host github >/dev/null
+grep -q '"host": "github"' "$rk/package.json" || fail "--host github not recorded"
+out="$(bash "$INIT" --repo "$rk" --no-install)"
+printf '%s\n' "$out" | sed -n 1p | grep -q '(host: github, from package.json)$' || { echo "$out"; fail "--host github was detected away"; }
+[ ! -e "$rk/.azure-pipelines" ] || fail "the pipeline was installed after --host github"
+# A GitHub repository keeps no host setting, and is warned about a leftover pipeline.
+rg="$(fresh_repo)"
+git -C "$rg" remote add origin https://github.com/o/r.git
+mkdir -p "$rg/.azure-pipelines" && echo old > "$rg/.azure-pipelines/sdd-checks.yml"
+out="$(bash "$INIT" --repo "$rg" --no-install)"
+[ -f "$rg/.github/workflows/sdd-checks.yml" ] || fail "no GitHub workflow on a GitHub repo"
+grep -q '"sdd"' "$rg/package.json" && fail "a GitHub repo got an sdd.host setting"
+printf '%s\n' "$out" | grep -q 'warning: .azure-pipelines/sdd-checks.yml is for Azure DevOps' || { echo "$out"; fail "leftover pipeline not reported"; }
+# The other way round: a GitHub workflow left in an Azure DevOps repository.
+mkdir -p "$ra/.github/workflows" && echo old > "$ra/.github/workflows/sdd-checks.yml"
+out="$(bash "$INIT" --repo "$ra" --no-install)"
+printf '%s\n' "$out" | grep -q 'warning: .github/workflows/sdd-checks.yml is for GitHub' || { echo "$out"; fail "leftover workflow not reported"; }
+pass "init on Azure DevOps: host from the remote or --host, the pipeline template, sdd.host recorded, idempotent"
+
+# --- GitHub: a repository set up by 0.3.6 upgrades with nothing but plugin files changed ------
+# Set up by the real 0.3.6 installer when this checkout has its commit (CI fetches full
+# history), else by a stand-in: this installer, minus the files 0.3.6 didn't have.
+ru="$(fresh_repo)" && git -C "$ru" remote add origin https://github.com/o/r.git
+V036=de0c05a
+if git -C "$SCRIPT_DIR" cat-file -e "$V036^{commit}" 2>/dev/null; then
+    mkdir -p "$TMP_ROOT/sdd-0.3.6" && git -C "$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)" archive "$V036" plugins/sdd | tar -x -C "$TMP_ROOT/sdd-0.3.6"
+    bash "$TMP_ROOT/sdd-0.3.6/plugins/sdd/scripts/sdd-init.sh" --repo "$ru" --no-install >/dev/null
+    grep -qx 0.3.6 "$ru/.claude/sdd-version" || fail "the 0.3.6 installer didn't install 0.3.6"
+else
+    echo "note: $V036 isn't in this checkout; the 0.3.6 upgrade test uses a stand-in"
+    bash "$INIT" --repo "$ru" --no-install >/dev/null
+    rm "$ru/scripts/sdd/sdd-azure.mjs" "$ru/scripts/sdd/sdd-azure-pr.sh" && echo 0.3.6 > "$ru/.claude/sdd-version"
+fi
+echo '{}' > "$ru/package-lock.json"
+git -C "$ru" add -A && git -C "$ru" commit -q -m "sdd 0.3.6"
+out="$(bash "$INIT" --repo "$ru" --no-install)"
+printf '%s\n' "$out" | sed -n 1p | grep -q '(host: github, from the default)$' || { echo "$out"; fail "the upgrade's host"; }
+[ "$(printf '%s\n' "$out" | tail -n 1)" = "sdd-init: done" ] || { echo "$out"; fail "the upgrade warned"; }
+printf '%s\n' "$out" | grep -qx '  added scripts/sdd/sdd-azure.mjs' || fail "the upgrade did not add sdd-azure.mjs"
+printf '%s\n' "$out" | grep -qx '  added scripts/sdd/sdd-azure-pr.sh' || fail "the upgrade did not add sdd-azure-pr.sh"
+# Only plugin-owned files change: package.json, settings, CLAUDE.md, .gitignore and the workflow don't.
+changed="$(git -C "$ru" status --porcelain | sed 's/^...//' | grep -vE '^(scripts/sdd/|\.claude/sdd-workflow\.md$|\.claude/sdd-version$)' || true)"
+[ -z "$changed" ] || { git -C "$ru" status --porcelain; fail "the upgrade changed more than plugin files: $changed"; }
+[ ! -e "$ru/.azure-pipelines" ] || fail "the upgrade installed the Azure Pipelines template"
+pass "a GitHub repository set up by 0.3.6 upgrades with only plugin files changed"
+
+# A repository set up by 0.3.6 whose origin is Azure Repos moves to Azure DevOps, with a warning;
+# with GitHub-only settings, it is refused rather than left with settings every script rejects.
+setup_036() { # repo
+    if [ -d "$TMP_ROOT/sdd-0.3.6/plugins/sdd" ]; then
+        bash "$TMP_ROOT/sdd-0.3.6/plugins/sdd/scripts/sdd-init.sh" --repo "$1" --no-install --host github >/dev/null 2>&1 \
+            || bash "$TMP_ROOT/sdd-0.3.6/plugins/sdd/scripts/sdd-init.sh" --repo "$1" --no-install >/dev/null
+    else
+        bash "$INIT" --repo "$1" --no-install --host github >/dev/null
+        rm "$1/scripts/sdd/sdd-azure.mjs" "$1/scripts/sdd/sdd-azure-pr.sh" && echo 0.3.6 > "$1/.claude/sdd-version"
+        node -e 'const f = process.argv[1], p = JSON.parse(require("fs").readFileSync(f, "utf8")); delete p.sdd; require("fs").writeFileSync(f, JSON.stringify(p, null, 2) + "\n")' "$1/package.json"
+    fi
+    echo '{}' > "$1/package-lock.json"
+}
+ra36="$(fresh_repo)" && setup_036 "$ra36"
+git -C "$ra36" remote add origin https://dev.azure.com/org/Proj/_git/repo
+out="$(bash "$INIT" --repo "$ra36" --no-install)" || { echo "$out"; fail "an Azure-origin 0.3.6 repository did not upgrade"; }
+printf '%s\n' "$out" | grep -q 'warning: this repository was set up for GitHub, and its origin is Azure Repos: moving it to Azure DevOps' || { echo "$out"; fail "the move to Azure DevOps was silent"; }
+grep -q '"host": "azure-devops"' "$ra36/package.json" || fail "the moved repository records no host"
+[ -f "$ra36/.azure-pipelines/sdd-checks.yml" ] || fail "the moved repository has no pipeline"
+rb36="$(fresh_repo)" && setup_036 "$rb36"
+git -C "$rb36" remote add origin https://dev.azure.com/org/Proj/_git/repo
+node -e 'const f = process.argv[1], p = JSON.parse(require("fs").readFileSync(f, "utf8")); p.sdd = { statuses: true }; require("fs").writeFileSync(f, JSON.stringify(p, null, 2) + "\n")' "$rb36/package.json"
+expect_exit 1 bash "$INIT" --repo "$rb36" --no-install
+grep -q 'sets GitHub-only sdd settings (statuses)' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "GitHub-only settings not refused on the move"; }
+grep -q '"host"' "$rb36/package.json" && fail "a refused move still recorded a host"
+bash "$INIT" --repo "$rb36" --no-install --host github >/dev/null || fail "--host github did not keep a GitHub repository with an Azure origin"
+# An Azure DevOps Server origin stays GitHub, and says so.
+rserver="$(fresh_repo)" && git -C "$rserver" remote add origin https://tfs.example.com/tfs/Coll/Proj/_git/repo
+out="$(bash "$INIT" --repo "$rserver" --no-install --no-ci)"
+printf '%s\n' "$out" | grep -q 'warning: origin looks like Azure DevOps Server' || { echo "$out"; fail "an Azure DevOps Server origin set up silently"; }
+pass "an Azure-origin 0.3.6 repository moves to Azure DevOps with a warning, or is refused with GitHub-only settings"
+
+# --- Azure DevOps: host settings ---------------------------------------------------------
+rc="$(fresh_repo)"
+mkdir -p "$rc/scripts" && cp -R "$T" "$rc/scripts/sdd"
+# Each bad setting, and the message that must name it.
+for bad in '{"host":"gitlab"}|sdd.host must be "github" or "azure-devops"' \
+           '{"host":"azure-devops","statuses":true}|sdd.statuses is GitHub only' \
+           '{"host":"azure-devops","archiveVerdicts":[{"workflow":".github/workflows/x.yml","line":"x"}]}|sdd.archiveVerdicts is GitHub only' \
+           '{"archiveBypassReviewers":true}|sdd.archiveBypassReviewers is Azure DevOps only' \
+           '{"host":"azure-devops","archiveBypassReviewers":"yes"}|archiveBypassReviewers must be true or false' \
+           '{"host":"azure-devops","specDiffComment":true}|sdd.specDiffComment is GitHub only'; do
+    echo "{\"sdd\":${bad%%|*}}" > "$rc/package.json"
+    expect_exit 3 node "$rc/scripts/sdd/sdd-config.mjs" --json
+    grep -qF -- "${bad#*|}" "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "not reported: ${bad#*|}"; }
+done
+echo '{"sdd":{"host":"azure-devops","specDiffComment":false,"statuses":false,"archiveVerdicts":[]}}' > "$rc/package.json"
+expect_exit 3 node "$rc/scripts/sdd/sdd-config.mjs" --json
+echo '{"sdd":{"host":"azure-devops","statuses":false,"archiveVerdicts":[],"archiveBypassReviewers":false}}' > "$rc/package.json"
+node "$rc/scripts/sdd/sdd-config.mjs" --json >/dev/null || fail "a valid Azure DevOps config refused"
+echo '{"sdd":{"host":"azure-devops","archiveBypassReviewers":true}}' > "$rc/package.json"
+[ "$(node "$rc/scripts/sdd/sdd-config.mjs" archiveBypassReviewers)" = true ] || fail "archiveBypassReviewers not read"
+pass "settings: host, and host-only settings on the wrong host are errors"
+
+# --- Azure DevOps: sdd-azure.mjs -----------------------------------------------------------
+AZ="$rc/scripts/sdd/sdd-azure.mjs"
+node_in() { (cd "$1" && shift && node "$@"); }
+for pair in \
+    'https://dev.azure.com/org/My%20Project/_git/My%20Repo|{"organization":"https://dev.azure.com/org","project":"My Project","repository":"My Repo"}' \
+    'https://org@dev.azure.com/org/Proj/_git/repo|{"organization":"https://dev.azure.com/org","project":"Proj","repository":"repo"}' \
+    'https://org.visualstudio.com/DefaultCollection/Proj/_git/repo|{"organization":"https://org.visualstudio.com","project":"Proj","repository":"repo"}' \
+    'git@ssh.dev.azure.com:v3/org/Proj/repo|{"organization":"https://dev.azure.com/org","project":"Proj","repository":"repo"}' \
+    'org@vs-ssh.visualstudio.com:v3/org/Proj/repo|{"organization":"https://dev.azure.com/org","project":"Proj","repository":"repo"}' \
+    'ssh://git@ssh.dev.azure.com:22/v3/org/Proj/repo|{"organization":"https://dev.azure.com/org","project":"Proj","repository":"repo"}' \
+    'https://dev.azure.com/org/_git/repo|{"organization":"https://dev.azure.com/org","project":"repo","repository":"repo"}' \
+    'https://org.visualstudio.com/DefaultCollection/_git/repo|{"organization":"https://org.visualstudio.com","project":"repo","repository":"repo"}' \
+    'https://org.visualstudio.com/_git/repo|{"organization":"https://org.visualstudio.com","project":"repo","repository":"repo"}' \
+    'https://ORG.VisualStudio.com/Proj/_git/repo.git|{"organization":"https://org.visualstudio.com","project":"Proj","repository":"repo"}'; do
+    got="$(node "$AZ" remote "${pair%%|*}")" || fail "remote: ${pair%%|*}"
+    [ "$got" = "${pair#*|}" ] || fail "remote ${pair%%|*}: $got"
+done
+# Hosts anywhere but the host, and names that could break an argument, are refused.
+for url in 'https://evil/x@ssh.dev.azure.com:v3/a/b/c' https://foodev.azure.com/org/p/_git/r \
+           https://git.example.com/dev.azure.com/org/p/_git/r 'https://dev.azure.com/org/a%2Fb/_git/r' \
+           'https://dev.azure.com/org/p/_git/r?x=1' 'https://dev.azure.com/org/p/_git/%0Ar' http://dev.azure.com/org/p/_git/r \
+           https://org.visualstudio.com/Coll/Proj/_git/r; do
+    expect_exit 1 node "$AZ" remote "$url"
+done
+# With no argument: origin as git uses it, then as configured.
+rr="$(fresh_repo)"
+expect_exit 1 node_in "$rr" "$AZ" remote
+grep -q 'no origin remote' "$TMP_ROOT/out" || fail "remote without an origin"
+git -C "$rr" remote add origin https://dev.azure.com/org/Proj/_git/repo
+[ "$(node_in "$rr" "$AZ" remote)" = '{"organization":"https://dev.azure.com/org","project":"Proj","repository":"repo"}' ] || fail "remote from origin"
+git -C "$rr" config "url.$rr.insteadOf" https://dev.azure.com/org/Proj/_git/repo
+[ "$(node_in "$rr" "$AZ" remote)" = '{"organization":"https://dev.azure.com/org","project":"Proj","repository":"repo"}' ] || fail "remote from a rewritten origin"
+expect_exit 2 node "$AZ" remote a b
+expect_exit 1 node "$AZ" remote https://github.com/o/r.git
+expect_exit 2 node "$AZ" bogus
+sha_a=1111111111111111111111111111111111111111
+REPO_ID=aaaaaaaa-0000-0000-0000-000000000001 PROJ_ID=bbbbbbbb-0000-0000-0000-000000000002
+# A PR as `az repos pr show` prints it, with one field replaced: pr_json [<field> <JSON value>]...
+pr_json() {
+    node -e '
+      const pr = {
+        status: "active", isDraft: false, forkSource: null, autoCompleteSetBy: null,
+        repository: { id: process.env.REPO_ID, name: "repo", project: { id: process.env.PROJ_ID, name: "My Project" } },
+        targetRefName: "refs/heads/main", sourceRefName: "refs/heads/archive/x", mergeStatus: "succeeded",
+        lastMergeSourceCommit: { commitId: process.env.sha_a },
+      }
+      const a = process.argv.slice(1)
+      for (let i = 0; i < a.length; i += 2) { pr[a[i]] = JSON.parse(a[i + 1]) }
+      process.stdout.write(JSON.stringify(pr))
+    ' "$@"
+}
+export REPO_ID PROJ_ID sha_a
+pr_check() { pr_json "$@" | node "$AZ" pr --default main --project 'my project' --repository REPO; }
+out="$(pr_check)" || { echo "$out"; fail "a good archive PR refused"; }
+[ "$out" = "$(printf 'head=%s\nsource=refs/heads/archive/x\nrepository_id=%s\nproject_id=%s\npr=ok' "$sha_a" "$REPO_ID" "$PROJ_ID")" ] || fail "pr output: $out"
+refused() { # problem text, field/value pairs
+    local want="$1"; shift
+    expect_exit 1 pr_check "$@"
+    grep -qF -- "$want" "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "pr did not say: $want"; }
+    grep -qx 'pr=refused' "$TMP_ROOT/out" || fail "pr did not end with pr=refused"
+}
+refused 'from a fork' forkSource '{"repository":{}}'
+refused 'not refs/heads/main' targetRefName '"refs/heads/release"'
+refused '(a conflict, or a failed merge)' mergeStatus '"conflicts"'
+refused 'not active' status '"completed"'
+refused 'is a draft' isDraft true
+refused 'auto-complete is set (by Ann)' autoCompleteSetBy '{"displayName":"Ann"}'
+refused 'belongs to Other/repo, not my project/REPO' repository "{\"id\":\"$REPO_ID\",\"name\":\"repo\",\"project\":{\"id\":\"$PROJ_ID\",\"name\":\"Other\"}}"
+refused 'no last merge source commit' lastMergeSourceCommit '{"commitId":"abc"}'
+# A branch name git allows but a shell would expand is never passed on.
+for ref in 'refs/heads/archive/$(id)' 'refs/heads/archive/`id`' 'refs/heads/a..b' 'refs/pull/1/head' 'refs/heads/-x'; do
+    refused 'named in safe characters' sourceRefName "\"$ref\""
+done
+# A merge still being computed is a wait, not a refusal.
+expect_exit 4 pr_check mergeStatus '"queued"'
+grep -qx 'pr=wait' "$TMP_ROOT/out" || fail "a queued merge is not a wait"
+expect_exit 4 pr_check mergeStatus '"notSet"'
+expect_exit 2 node "$AZ" pr --default main
+expect_exit 2 node "$AZ" pr --default main --project p --repository r --default main
+pass "sdd-azure pr: this repository, no fork, no auto-complete, safe source, queued is a wait"
+pol() { # type id, status[, blocking[, settings JSON[, context JSON]]]: an evaluation as az prints it
+    # The settings default is set apart: bash 3.2 (macOS) keeps the backslash in "${4:-{\}}".
+    local settings="${4:-}"
+    [ -n "$settings" ] || settings='{}'
+    printf '{"configuration":{"isBlocking":%s,"isEnabled":true,"isDeleted":false,"type":{"id":"%s","displayName":"%s"},"settings":%s},"context":%s,"status":"%s"}' \
+        "${3:-true}" "$1" "$1" "$settings" "${5:-null}" "$2"
+}
+mpol() { # settings JSON[, enabled]: a "Require a merge strategy" configuration as az repos policy list prints it
+    printf '{"id":233,"isEnabled":%s,"isBlocking":true,"isDeleted":false,"type":{"id":"%s","displayName":"Require a merge strategy"},"settings":%s}' \
+        "${2:-true}" "$MS" "$1"
+}
+MR=fa4e907d-c16b-4a4c-9dfa-4906e5d171dd BUILD=0609b952-1397-4640-95ec-e00a01b2c241 MS=fa4e907d-c16b-4a4c-9dfa-4916e5d171ab
+RR=fd2167ab-b0be-447a-8ec8-39368250530e STATUS_POLICY=cbdc66da-9728-4af8-aada-9a5a32e4a226
+policies_state() { printf '%s' "$1" | node "$AZ" policies | tail -n 1; }
+[ "$(policies_state "[$(pol $MR approved),$(pol $BUILD approved)]")" = policies=approved ] || fail "approved policies"
+# An unmet Minimum reviewers reads queued (no votes yet) or rejected (a vote against).
+[ "$(policies_state "[$(pol $MR queued),$(pol $BUILD approved),$(pol other rejected false)]")" = policies=reviewers ] || fail "reviewers only, queued"
+[ "$(policies_state "[$(pol $MR rejected),$(pol $BUILD approved)]")" = policies=reviewers ] || fail "reviewers only, rejected"
+[ "$(policies_state "[$(pol $MR queued),$(pol $BUILD running)]")" = policies=pending ] || fail "a running build is pending"
+[ "$(policies_state "[$(pol $BUILD queued)]")" = policies=pending ] || fail "a queued build is pending"
+[ "$(policies_state "[$(pol $MR approved),$(pol $BUILD rejected)]")" = policies=blocked ] || fail "a failed build blocks"
+# Waiting changes nothing for any policy but a build.
+[ "$(policies_state "[$(pol $RR queued)]")" = policies=blocked ] || fail "a queued Required reviewers policy is not blocked"
+[ "$(policies_state "[$(pol $STATUS_POLICY running)]")" = policies=blocked ] || fail "a running status policy is not blocked"
+[ "$(policies_state "[$(pol $BUILD approved true '{}' '{"isExpired":true}')]")" = policies=blocked ] || fail "an expired build is not blocked"
+[ "$(policies_state "{\"value\":[$(pol $BUILD notApplicable)]}")" = policies=approved ] || fail "the REST shape"
+[ "$(policies_state '[]')" = policies=none ] || fail "no evaluations is not none"
+printf 'not json' > "$TMP_ROOT/pol-bad"
+expect_exit 3 node "$AZ" policies "$TMP_ROOT/pol-bad"
+# A missing isBlocking never reads as non-blocking.
+printf '[{"configuration":{"isEnabled":true,"type":{"id":"%s"}},"status":"rejected"}]' "$BUILD" > "$TMP_ROOT/pol-noblock"
+expect_exit 3 node "$AZ" policies "$TMP_ROOT/pol-noblock"
+grep -q 'no boolean configuration.isBlocking' "$TMP_ROOT/out" || fail "a missing isBlocking not refused"
+# A list as long as the page az was asked for may be cut short. BOM-prefixed input reads.
+printf '[%s,%s]' "$(pol $BUILD approved)" "$(pol $MR approved)" > "$TMP_ROOT/pol-two"
+expect_exit 3 node "$AZ" policies --page-size 2 "$TMP_ROOT/pol-two"
+grep -q 'too many to read as one complete list' "$TMP_ROOT/out" || fail "a full page read as complete"
+{ printf '\357\273\277'; cat "$TMP_ROOT/pol-two"; } > "$TMP_ROOT/pol-bom"
+[ "$(node "$AZ" policies --page-size 3 "$TMP_ROOT/pol-bom" | tail -n 1)" = policies=approved ] || fail "BOM-prefixed policies"
+pass "sdd-azure: policy states, strictly read; pending only for a build"
+
+# complete-body: the PR's head and reviewers, the policies, the branch's merge policies and the
+# settings decide.
+pr_votes() { # head, reviewers JSON
+    printf '{"status":"active","lastMergeSourceCommit":{"commitId":"%s"},"reviewers":%s}' "$1" "${2:-[]}"
+}
+sdd_complete() { # policies JSON, PR JSON, more args (merge policies from $CB_MP, default none)
+    printf '%s' "$2" > "$TMP_ROOT/cb-pr.json"
+    printf '%s' "${CB_MP:-[]}" > "$TMP_ROOT/cb-mp.json"
+    printf '%s' "$1" | node "$AZ" complete-body --commit "$sha_a" --pr "$TMP_ROOT/cb-pr.json" --policies - --merge-policies "$TMP_ROOT/cb-mp.json" "${@:3}"
+}
+body_check() { # body, JS condition on b (the body)
+    printf '%s' "$1" | node -e 'const b = JSON.parse(require("fs").readFileSync(0, "utf8")); if (!(eval(process.argv[1]))) { process.exit(1) }' "$2"
+}
+echo '{"sdd":{"host":"azure-devops"}}' > "$rc/package.json"
+out="$(sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_a)" --message 'Archive x')" || { echo "$out"; fail "complete-body refused approved policies"; }
+body_check "$out" "b.status === 'completed' && b.lastMergeSourceCommit.commitId === '$sha_a'" || fail "not pinned: $out"
+body_check "$out" "b.completionOptions.bypassPolicy === undefined && b.completionOptions.mergeCommitMessage === 'Archive x'" || fail "options: $out"
+body_check "$out" "b.completionOptions.mergeStrategy === 'squash' && b.completionOptions.deleteSourceBranch === true && b.completionOptions.transitionWorkItems === false" || fail "defaults: $out"
+out="$(sdd_complete '[]' "$(pr_votes $sha_a)")" || { echo "$out"; fail "a branch without policies refused"; }
+body_check "$out" "b.completionOptions.bypassPolicy === undefined && b.completionOptions.mergeCommitMessage === undefined" || fail "no policies: $out"
+sha_b=2222222222222222222222222222222222222222
+expect_exit 1 sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_b)"
+grep -q "head is no longer $sha_a" "$TMP_ROOT/out" || fail "a moved head not refused"
+# A vote against, or a required reviewer who hasn't approved, refuses in every policy state.
+expect_exit 1 sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_a '[{"displayName":"Ann","vote":-10}]')"
+grep -q 'Ann voted Reject' "$TMP_ROOT/out" || fail "a Reject vote with approved policies completed"
+expect_exit 1 sdd_complete '[]' "$(pr_votes $sha_a '[{"displayName":"Bo","vote":-5}]')"
+grep -q 'Bo voted Waiting for author' "$TMP_ROOT/out" || fail "a Waiting-for-author vote with no policies completed"
+expect_exit 1 sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_a '[{"displayName":"Cy","vote":0,"isRequired":true}]')"
+grep -q "Cy is a required reviewer and hasn't approved" "$TMP_ROOT/out" || fail "an unapproved required reviewer not refused"
+sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_a '[{"displayName":"Cy","vote":10,"isRequired":true},{"displayName":"Di","vote":0,"isRequired":null}]')" >/dev/null \
+    || fail "an approving required reviewer refused"
+expect_exit 1 sdd_complete "[$(pol $MR queued)]" "$(pr_votes $sha_a)"
+grep -q 'needs a review' "$TMP_ROOT/out" || fail "reviewers without --bypass-reviewers"
+expect_exit 1 sdd_complete "[$(pol $MR queued)]" "$(pr_votes $sha_a)" --bypass-reviewers
+grep -q 'archiveBypassReviewers is not true' "$TMP_ROOT/out" || fail "a bypass without the setting"
+expect_exit 1 sdd_complete "[$(pol $MR queued),$(pol $BUILD rejected)]" "$(pr_votes $sha_a)" --bypass-reviewers
+grep -q "policies are blocked" "$TMP_ROOT/out" || fail "a blocked PR not refused as blocked"
+expect_exit 1 sdd_complete "[$(pol $BUILD running)]" "$(pr_votes $sha_a)"
+grep -q "policies are pending" "$TMP_ROOT/out" || fail "a pending PR not refused as pending"
+echo '{"sdd":{"host":"azure-devops","archiveBypassReviewers":true}}' > "$rc/package.json"
+out="$(sdd_complete "[$(pol $MR queued),$(pol $BUILD approved)]" "$(pr_votes $sha_a '[{"displayName":"Ann","vote":0},{"displayName":"Bo","vote":5}]')" --bypass-reviewers)" \
+    || { echo "$out"; fail "an allowed bypass refused"; }
+body_check "$out" "b.completionOptions.bypassPolicy === true && b.lastMergeSourceCommit.commitId === '$sha_a' && b.completionOptions.bypassReason.includes('$sha_a')" || fail "allowed bypass body: $out"
+# A min-reviewer policy rejected by an explicit vote must not allow a bypass.
+expect_exit 1 sdd_complete "[$(pol $MR rejected),$(pol $BUILD approved)]" "$(pr_votes $sha_a '[{"displayName":"Ann","vote":-10}]')" --bypass-reviewers
+grep -q 'Ann voted Reject' "$TMP_ROOT/out" || fail "a Reject vote was bypassed"
+expect_exit 1 sdd_complete "[$(pol $MR rejected)]" "$(pr_votes $sha_a '[{"displayName":"Bo","vote":-5}]')" --bypass-reviewers
+grep -q 'Bo voted Waiting for author' "$TMP_ROOT/out" || fail "a Waiting-for-author vote was bypassed"
+expect_exit 1 sdd_complete "[$(pol $MR queued)]" "$(pr_votes $sha_a '[{"displayName":"Cy","vote":0,"isRequired":true}]')" --bypass-reviewers
+grep -q 'required reviewer' "$TMP_ROOT/out" || fail "a bypass past an unapproved required reviewer"
+# --bypass-reviewers never adds a bypass that isn't needed.
+out="$(sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_a)" --bypass-reviewers)" || fail "approved with --bypass-reviewers refused"
+body_check "$out" "b.completionOptions.bypassPolicy === undefined" || fail "an unneeded bypass: $out"
+pass "complete-body: pinned, never past a vote against or an unapproved required reviewer, a bypass only when only the reviewer count is unmet"
+
+# The merge strategy: from the branch's policy configurations, the first that every "Require a
+# merge strategy" policy allows, squash first; named even under a bypass.
+strategy_of() { # merge-policy configurations JSON, policies JSON, more args
+    local saved="${CB_MP:-}"; CB_MP="$1"
+    sdd_complete "${2:-[]}" "$(pr_votes $sha_a)" "${@:3}" | node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(0, "utf8")).completionOptions.mergeStrategy)'
+    CB_MP="$saved"
+}
+[ "$(strategy_of '[]')" = squash ] || fail "no merge policy is not squash"
+# As BgvSites' policy reads: only the allowed strategy is listed.
+[ "$(strategy_of "[$(mpol '{"allowNoFastForward":true,"scope":[{"refName":"refs/heads/main","matchKind":"Exact"}]}')]")" = noFastForward ] || fail "a no-fast-forward-only policy"
+[ "$(strategy_of "[$(mpol '{"allowRebase":true,"allowSquash":true}')]")" = squash ] || fail "squash-or-rebase policy"
+[ "$(strategy_of "[$(mpol '{"allowRebaseMerge":true}')]")" = rebaseMerge ] || fail "semi-linear policy"
+[ "$(strategy_of "[$(mpol '{"useSquashMerge":true}')]")" = squash ] || fail "the policy's older squash-only form"
+[ "$(strategy_of "[$(mpol '{}')]")" = noFastForward ] || fail "a policy naming none is no-fast-forward"
+[ "$(strategy_of "[$(mpol '{"allowSquash":true,"allowRebase":true}'),$(mpol '{"allowRebase":true}')]")" = rebase ] || fail "two policies' common strategy"
+[ "$(strategy_of "[$(mpol '{"allowNoFastForward":true}' false)]")" = squash ] || fail "a disabled merge policy applied"
+# Evaluations carry their configuration: those read as configurations too.
+[ "$(strategy_of "[$(pol $MS approved true '{"allowRebase":true}')]")" = rebase ] || fail "a merge policy read from an evaluation"
+CB_MP="[$(mpol '{"allowSquash":true}'),$(mpol '{"allowRebase":true}')]"
+expect_exit 1 sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_a)"
+grep -q 'no merge type in common' "$TMP_ROOT/out" || fail "disjoint merge policies not refused"
+CB_MP=''
+# A bypass under a restrictive policy still names the allowed strategy.
+[ "$(strategy_of "[$(mpol '{"allowRebase":true}')]" "[$(pol $MR queued)]" --bypass-reviewers)" = rebase ] || fail "a bypass ignored the merge policy"
+pass "complete-body names the merge strategy the branch's policies allow"
+
+echo '{"sdd":{"host":"azure-devops","autoMerge":false}}' > "$rc/package.json"
+expect_exit 1 sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_a)"
+grep -q 'autoMerge is false' "$TMP_ROOT/out" || fail "autoMerge false not honored"
+echo '{}' > "$rc/package.json"
+expect_exit 1 sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_a)"
+grep -q 'not on Azure DevOps' "$TMP_ROOT/out" || fail "complete-body ran for a GitHub repo"
+echo '{"sdd":{"host":"azure-devops"}}' > "$rc/package.json"
+printf '[%s]' "$(pol $MR approved)" > "$TMP_ROOT/pol-ok"
+pr_votes $sha_a > "$TMP_ROOT/pr-ok"
+echo '[]' > "$TMP_ROOT/mp-ok"
+expect_exit 3 node "$AZ" complete-body --commit abc --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok" --merge-policies "$TMP_ROOT/mp-ok"
+grep -q 'full 40-character commit id' "$TMP_ROOT/out" || fail "a short commit id not refused by name"
+expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --commit "$sha_a" --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok" --merge-policies "$TMP_ROOT/mp-ok"
+expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok" --merge-policies "$TMP_ROOT/mp-ok" --message --bypass-reviewers
+expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok"
+expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --pr - --policies - --merge-policies "$TMP_ROOT/mp-ok"
+pass "complete-body: settings, a bad commit id and usage errors"
+
+# --- Azure DevOps: sdd-azure-pr.sh, against a stub az and a real origin ----------------------
+# An origin holds the default branch with one active change, and its archive branch. A clean
+# checkout of main runs the script; its configured origin is an Azure Repos URL that git
+# rewrites (insteadOf) to the local origin. ado_setup makes one, with the settings given.
+ADO_URL='https://dev.azure.com/example/My%20Project/_git/repo'
+ado_setup() { # package.json "sdd" settings
+    ao="$TMP_ROOT/ado-origin.$RANDOM$RANDOM" && awc="$ao-checkout"
+    git init -q -b main "$ao"
+    git -C "$ao" config user.email test@example.com && git -C "$ao" config user.name Test
+    mkdir -p "$ao/scripts" "$ao/openspec/specs/base" && cp -R "$T" "$ao/scripts/sdd"
+    printf '{"sdd":%s}\n' "$1" > "$ao/package.json"
+    echo node_modules > "$ao/.gitignore"
+    echo ok > "$ao/openspec/specs/base/spec.md"
+    add_change "$ao" c-one
+    git -C "$ao" add -A && git -C "$ao" commit -q -m main
+    install_stub "$ao"
+    git -C "$ao" checkout -q -b archive/c-one
+    STUB_DATE=2026-01-01 bash "$ao/scripts/sdd/sdd-archive.sh" run -C "$ao" >/dev/null
+    git -C "$ao" add -A && git -C "$ao" commit -q -m "Archive c-one"
+    ahead="$(git -C "$ao" rev-parse HEAD)"
+    git -C "$ao" checkout -q -b outside archive/c-one && echo changed > "$ao/README.md"
+    git -C "$ao" add -A && git -C "$ao" commit -q -m outside
+    outside="$(git -C "$ao" rev-parse HEAD)"
+    git -C "$ao" checkout -q -b plain main && echo changed > "$ao/README.md"
+    git -C "$ao" add -A && git -C "$ao" commit -q -m plain
+    plain="$(git -C "$ao" rev-parse HEAD)"
+    git -C "$ao" checkout -q main
+    atip="$(git -C "$ao" rev-parse main)"
+    git clone -q "$ao" "$awc"
+    install_stub "$awc"
+    git -C "$awc" config remote.origin.url "$ADO_URL"
+    git -C "$awc" config "url.$ao.insteadOf" "$ADO_URL"
+    APR="$awc/scripts/sdd/sdd-azure-pr.sh"
+}
+
+azbin="$TMP_ROOT/azbin" && mkdir -p "$azbin"
+cat > "$azbin/az" <<'EOF'
+#!/usr/bin/env bash
+# A stub az: logs every call to $AZ_LOG, and answers from the files in $AZ_FIX. The n-th call
+# of a kind gets <kind>.<n>.json if there is one, else <kind>.json; <kind>.<n>.fail makes it
+# fail, and <kind>.<n>.hook runs first. A file named bom puts a byte order mark first.
+printf '%s\n' "$*" >> "$AZ_LOG"
+F="$AZ_FIX"
+serve() {
+    local n
+    n=$(( $(cat "$F/$1.count" 2>/dev/null || echo 0) + 1 )); echo $n > "$F/$1.count"
+    # A hook runs as the test would: without the no-path-conversion setting az is called with.
+    [ ! -f "$F/$1.$n.hook" ] || env -u MSYS2_ARG_CONV_EXCL bash "$F/$1.$n.hook" >/dev/null 2>&1 \
+        || { echo "stub az: $1 call $n's hook failed" >&2; exit 9; }
+    if [ -f "$F/$1.$n.fail" ]; then echo "ERROR: stub az: $1 call $n failed" >&2; exit 1; fi
+    [ ! -f "$F/bom" ] || printf '\357\273\277'
+    if [ -f "$F/$1.$n.json" ]; then cat "$F/$1.$n.json"; else cat "$F/$1.json"; fi
+}
+arg() { # the value after a flag
+    local want="$1"; shift
+    while [ $# -gt 0 ]; do [ "$1" != "$want" ] || { printf '%s' "$2"; return; }; shift; done
+}
+case "$1 $2 $3" in
+    "repos pr list") serve list ;;
+    "repos pr show") if [ -f "$F/patched" ]; then serve done; else serve pr; fi ;;
+    "repos pr policy") serve policies ;;
+    "repos policy list") serve merge-policies ;;
+    "repos show --org") serve repo ;;
+    rest*)
+        method="$(arg --method "$@")"; body="$(arg --body "$@")"; body="${body#@}"
+        printf 'rest %s %s\n' "$method" "$(arg --url "$@")" >> "$F/rest.log"
+        case "$method" in
+            patch)
+                [ ! -f "$F/refuse" ] || { echo "ERROR: TF401181: The pull request was updated" >&2; exit 1; }
+                cp "$body" "$F/body.json"; touch "$F/patched"; echo '{}' ;;
+            post) cp "$body" "$F/create-body.json"; serve created ;;
+            *) echo "stub az: unexpected rest $method" >&2; exit 9 ;;
+        esac ;;
+    *) echo "stub az: unexpected: $*" >&2; exit 9 ;;
+esac
+EOF
+chmod +x "$azbin/az"
+# A fresh scenario: the PR (head, then field overrides), approved policies, no merge policy, a
+# completion that lands exactly what was verified.
+ado_scenario() {
+    AZ_FIX="$TMP_ROOT/azfix.$RANDOM$RANDOM" && mkdir -p "$AZ_FIX" && AZ_LOG="$AZ_FIX/log" && : > "$AZ_LOG"
+    export AZ_FIX AZ_LOG
+    local head="$1"; shift
+    local branch
+    branch="$(git -C "$ao" for-each-ref --points-at "$head" --format='%(refname:lstrip=2)' refs/heads | sed -n 1p)"
+    sha_a="$head" pr_json sourceRefName "\"refs/heads/$branch\"" "$@" > "$AZ_FIX/pr.json"
+    printf '[%s,%s]' "$(pol $MR approved)" "$(pol $BUILD approved)" > "$AZ_FIX/policies.json"
+    echo '[]' > "$AZ_FIX/merge-policies.json"
+    printf '{"id":"%s","name":"repo","project":{"id":"%s","name":"My Project"}}' "$REPO_ID" "$PROJ_ID" > "$AZ_FIX/repo.json"
+    sha_a="$head" pr_json status '"completed"' lastMergeTargetCommit "{\"commitId\":\"$atip\"}" > "$AZ_FIX/done.json"
+}
+apr() { (cd "$awc" && PATH="$azbin:$PATH" SDD_AZ_POLL=1 SDD_AZ_WAIT_MERGE="${WM:-0}" SDD_AZ_WAIT_POLICIES="${WP:-0}" SDD_AZ_WAIT_COMPLETE="${WC:-0}" bash "$APR" "$@"); }
+no_patch() { ! grep -q '^rest patch' "$AZ_FIX/rest.log" 2>/dev/null || { cat "$AZ_FIX/rest.log"; fail "$1: the PR was completed"; }; }
+ends() { # state, what: the last line of the last expect_exit's output
+    [ "$(tail -n 1 "$TMP_ROOT/out")" = "archive-pr: $1" ] || { cat "$TMP_ROOT/out"; fail "$2: not archive-pr: $1"; }
+}
+PATCH_URL="https://dev.azure.com/example/$PROJ_ID/_apis/git/repositories/$REPO_ID/pullrequests/7?api-version=7.1"
+
+ado_setup '{"host":"azure-devops"}'
+ado_scenario "$ahead"
+out="$(apr merge --default main --pr 7 --message 'Archive c-one')" || { echo "$out"; cat "$AZ_LOG"; fail "a verified archive PR did not complete"; }
+[ "$(printf '%s\n' "$out" | tail -n 1)" = "archive-pr: completed" ] || { echo "$out"; fail "merge state"; }
+printf '%s\n' "$out" | grep -qx 'archive-mechanical: success' || fail "merge did not run verify"
+[ "$(cat "$AZ_FIX/rest.log")" = "rest patch $PATCH_URL" ] || { cat "$AZ_FIX/rest.log"; fail "the completion is not a PATCH to the repository's pullrequests/<id>"; }
+grep -q -- "^rest --method patch --resource 499b84ac-1321-427f-aa17-267ca6975798 --url $PATCH_URL " "$AZ_LOG" || { cat "$AZ_LOG"; fail "az rest's arguments"; }
+grep -qx 'repos pr show --org https://dev.azure.com/example --id 7 -o json' "$AZ_LOG" || { cat "$AZ_LOG"; fail "pr show takes only --org and --id"; }
+grep -qx "repos policy list --org https://dev.azure.com/example --project $PROJ_ID --repository-id $REPO_ID --branch main -o json" "$AZ_LOG" || { cat "$AZ_LOG"; fail "the merge policies are not the branch's"; }
+body_check "$(cat "$AZ_FIX/body.json")" "b.lastMergeSourceCommit.commitId === '$ahead' && b.completionOptions.mergeStrategy === 'squash' && b.completionOptions.mergeCommitMessage === 'Archive c-one' && b.completionOptions.bypassPolicy === undefined" || fail "completion body: $(cat "$AZ_FIX/body.json")"
+# BgvSites' merge policy, as az repos policy list prints it: no-fast-forward only.
+ado_scenario "$ahead"
+printf '[%s]' "$(mpol '{"allowNoFastForward":true,"scope":[{"matchKind":"Exact","refName":"refs/heads/main","repositoryId":"r"}]}')" > "$AZ_FIX/merge-policies.json"
+apr merge --default main --pr 7 >/dev/null || fail "a no-fast-forward-only branch"
+body_check "$(cat "$AZ_FIX/body.json")" "b.completionOptions.mergeStrategy === 'noFastForward'" || fail "the branch's merge policy not used"
+# az output that starts with a byte order mark.
+ado_scenario "$ahead" && touch "$AZ_FIX/bom"
+apr merge --default main --pr 7 >/dev/null || fail "BOM-prefixed az output"
+pass "sdd-azure-pr merge: verifies with the checkout's scripts, completes pinned with a PATCH to the repository's PR, confirms both commits"
+
+# Waits: a merge being computed, a PR naming an older head than its branch, a running build.
+ado_scenario "$ahead"
+sha_a="$ahead" pr_json sourceRefName '"refs/heads/archive/c-one"' mergeStatus '"queued"' > "$AZ_FIX/pr.1.json"
+WM=1 apr merge --default main --pr 7 >/dev/null || fail "a queued merge was not waited for"
+ado_scenario "$ahead" mergeStatus '"queued"'
+expect_exit 1 apr merge --default main --pr 7
+ends timeout "a merge never computed"
+no_patch "a queued merge"
+ado_scenario "$ahead"
+sha_a="$plain" pr_json sourceRefName '"refs/heads/archive/c-one"' > "$AZ_FIX/pr.1.json"
+WM=1 apr merge --default main --pr 7 >/dev/null || fail "a PR naming an older head was not read again"
+ado_scenario "$ahead"
+sha_a="$plain" pr_json sourceRefName '"refs/heads/archive/c-one"' > "$AZ_FIX/pr.json"
+expect_exit 1 apr merge --default main --pr 7
+ends timeout "a PR that never names its branch's head"
+grep -q "to name its branch's head ($ahead; it says $plain)" "$TMP_ROOT/out" || fail "the head mismatch not explained"
+ado_scenario "$ahead"
+printf '[%s]' "$(pol $BUILD running)" > "$AZ_FIX/policies.1.json"
+WP=1 apr merge --default main --pr 7 >/dev/null || fail "a build that finished during the wait"
+ado_scenario "$ahead"
+printf '[%s]' "$(pol $BUILD running)" > "$AZ_FIX/policies.json"
+expect_exit 1 apr merge --default main --pr 7
+ends timeout "a build that never finishes"
+no_patch "a running build"
+pass "sdd-azure-pr merge waits for a merge, a PR's head and a build, and times out"
+
+# Refusals, each before completing.
+ado_scenario "$outside"
+expect_exit 1 apr merge --default main --pr 7
+ends refused "a non-mechanical PR"
+grep -q 'changed outside openspec/: README.md' "$TMP_ROOT/out" || fail "verify's reason not shown"
+no_patch "a failed verify"
+ado_scenario "$plain"
+expect_exit 1 apr merge --default main --pr 7
+grep -qx 'archive-mechanical: not-an-archive-pr' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "verify did not run on a plain PR"; }
+ends refused "a PR that isn't an archive"
+no_patch "not an archive PR"
+for problem in "from a fork|forkSource|{\"repository\":{}}" "auto-complete is set|autoCompleteSetBy|{\"displayName\":\"Ann\"}" "is a draft|isDraft|true"; do
+    ado_scenario "$ahead" "$(printf '%s' "$problem" | cut -d'|' -f2)" "$(printf '%s' "$problem" | cut -d'|' -f3)"
+    expect_exit 1 apr merge --default main --pr 7
+    ends refused "a PR $(printf '%s' "$problem" | cut -d'|' -f1)"
+    grep -qF -- "$(printf '%s' "$problem" | cut -d'|' -f1)" "$TMP_ROOT/out" || fail "not said: $problem"
+    no_patch "$problem"
+done
+ado_scenario "$ahead"
+printf '[%s]' "$(pol $MR queued)" > "$AZ_FIX/policies.json"
+expect_exit 1 apr merge --default main --pr 7
+ends review "an unmet reviewer policy"
+no_patch "a PR that needs a review"
+expect_exit 1 apr merge --default main --pr 7 --bypass-reviewers
+grep -q 'archiveBypassReviewers is not true' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "--bypass-reviewers bypassed without the setting"; }
+ends refused "a bypass without the setting"
+no_patch "a bypass without the setting"
+for unmet in "$(pol $BUILD rejected)" "$(pol $RR queued)" "$(pol $STATUS_POLICY running)"; do
+    ado_scenario "$ahead"
+    printf '[%s]' "$unmet" > "$AZ_FIX/policies.json"
+    expect_exit 1 apr merge --default main --pr 7
+    ends refused "a blocking policy: $unmet"
+    grep -q "waiting won't meet it" "$TMP_ROOT/out" || fail "not refused at once: $unmet"
+    no_patch "$unmet"
+done
+ado_scenario "$ahead" reviewers '[{"displayName":"Ann","vote":-10}]'
+expect_exit 1 apr merge --default main --pr 7
+ends refused "a Reject vote with approved policies"
+grep -q 'Ann voted Reject' "$TMP_ROOT/out" || fail "the vote not named"
+no_patch "a Reject vote"
+ado_scenario "$ahead" reviewers '[{"displayName":"Cy","vote":0,"isRequired":true}]'
+expect_exit 1 apr merge --default main --pr 7
+ends refused "an unapproved required reviewer"
+no_patch "an unapproved required reviewer"
+ado_scenario "$ahead"
+out="$(apr merge --default main --pr 7 --no-merge)" || { echo "$out"; fail "--no-merge"; }
+[ "$(printf '%s\n' "$out" | tail -n 1)" = "archive-pr: verified" ] || fail "--no-merge state"
+no_patch "--no-merge"
+pass "sdd-azure-pr merge refuses before completing: verify, a PR problem, a review, a policy, a vote, --no-merge"
+
+# Failures: each says why, and ends failed.
+ado_scenario "$ahead" && touch "$AZ_FIX/pr.1.fail"
+expect_exit 1 apr merge --default main --pr 7
+ends failed "az pr show failing"
+grep -q 'az repos pr show failed' "$TMP_ROOT/out" && grep -q '^  | ERROR: stub az: pr call 1 failed' "$TMP_ROOT/out" || fail "az's failure not shown"
+ado_scenario "$ahead" && echo 'not json' > "$AZ_FIX/pr.json"
+expect_exit 1 apr merge --default main --pr 7
+ends failed "unreadable PR JSON"
+grep -q 'sdd-azure.mjs pr failed' "$TMP_ROOT/out" || fail "the helper's failure not named"
+ado_scenario "$ahead"
+printf '[{"configuration":{"type":{"id":"%s"}},"status":"approved"}]' "$BUILD" > "$AZ_FIX/policies.json"
+expect_exit 1 apr merge --default main --pr 7
+ends failed "policies without isBlocking"
+grep -q 'sdd-azure.mjs policies failed' "$TMP_ROOT/out" && grep -q 'isBlocking' "$TMP_ROOT/out" || fail "the policies failure not explained"
+# Right before completing: a push, a recompute, an az failure.
+ado_scenario "$ahead"
+sha_a="$sha_b" pr_json sourceRefName '"refs/heads/archive/c-one"' > "$AZ_FIX/pr.2.json"
+expect_exit 1 apr merge --default main --pr 7
+grep -q "head is no longer $ahead" "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a push after the verify not refused"; }
+ends refused "a push after the verify"
+no_patch "a push after the verify"
+ado_scenario "$ahead"
+sha_a="$ahead" pr_json sourceRefName '"refs/heads/archive/c-one"' mergeStatus '"queued"' > "$AZ_FIX/pr.2.json"
+expect_exit 1 apr merge --default main --pr 7
+ends behind "a recompute right before completing"
+no_patch "a recompute"
+ado_scenario "$ahead" && touch "$AZ_FIX/pr.2.fail"
+expect_exit 1 apr merge --default main --pr 7
+ends failed "az failing right before completing"
+no_patch "an az failure right before completing"
+# The completion: refused, abandoned, failed, still pending, or landing something else.
+ado_scenario "$ahead" && touch "$AZ_FIX/refuse"
+expect_exit 1 apr merge --default main --pr 7
+grep -q '^  | ERROR: TF401181' "$TMP_ROOT/out" || fail "az's refusal not shown"
+ends failed "a refused completion"
+ado_scenario "$ahead"
+sha_a="$ahead" pr_json status '"abandoned"' > "$AZ_FIX/done.json"
+expect_exit 1 apr merge --default main --pr 7
+ends refused "an abandoned PR"
+ado_scenario "$ahead"
+sha_a="$ahead" pr_json mergeStatus '"failure"' > "$AZ_FIX/done.json"
+expect_exit 1 apr merge --default main --pr 7
+ends failed "a failed merge"
+grep -q 'merge status failure' "$TMP_ROOT/out" || fail "the failed merge status not named"
+ado_scenario "$ahead"
+sha_a="$ahead" pr_json mergeStatus '"queued"' > "$AZ_FIX/done.json"
+expect_exit 1 apr merge --default main --pr 7
+ends timeout "a completion that never finishes"
+ado_scenario "$ahead"
+sha_a="$ahead" pr_json status '"completed"' lastMergeTargetCommit "{\"commitId\":\"$sha_b\"}" > "$AZ_FIX/done.json"
+expect_exit 1 apr merge --default main --pr 7
+ends unverified "a completion against another target"
+# Only from a clean checkout of the tip.
+ado_scenario "$ahead"
+echo dirty > "$awc/dirty.txt"
+expect_exit 1 apr merge --default main --pr 7
+grep -q 'clean checkout of main' "$TMP_ROOT/out" || fail "a dirty checkout ran"
+ends failed "a dirty checkout"
+rm "$awc/dirty.txt"
+# A failing ls-remote is a failure, not a branch behind.
+ado_scenario "$ahead"
+mv "$ao" "$ao.away"
+expect_exit 1 apr merge --default main --pr 7
+mv "$ao.away" "$ao"
+ends failed "an unreadable origin"
+grep -q 'cannot read origin' "$TMP_ROOT/out" || fail "an unreadable origin not explained"
+# The default branch moves while the policies are read; then the archive branch is behind it.
+ado_scenario "$ahead"
+printf 'echo more > %s/more.txt && git -C %s add more.txt && git -C %s commit -q -m more\n' "$ao" "$ao" "$ao" > "$AZ_FIX/policies.2.hook"
+expect_exit 1 apr merge --default main --pr 7
+ends behind "the tip moving before completing"
+grep -q 'main moved since the verify' "$TMP_ROOT/out" || fail "the moved tip not explained"
+no_patch "a moved tip"
+git -C "$awc" pull -q
+ado_scenario "$ahead"
+expect_exit 1 apr merge --default main --pr 7
+ends behind "a branch behind the tip"
+no_patch "a branch behind the tip"
+expect_exit 2 apr merge --default main
+expect_exit 2 apr merge --default 'main;x' --pr 7
+SDD_AZ_POLL=0 expect_exit 2 bash -c 'cd "$1" && SDD_AZ_POLL=0 bash "$2" merge --default main --pr 7' _ "$awc" "$APR"
+grep -q 'SDD_AZ_POLL must be a whole number of seconds, at least 1' "$TMP_ROOT/out" || fail "a zero poll interval accepted"
+pass "sdd-azure-pr merge says why it failed, and stops on a push, a recompute, a moved tip or a refused completion"
+
+# A repository that allows the bypass: the whole flow, under a restrictive merge policy.
+ado_setup '{"host":"azure-devops","archiveBypassReviewers":true}'
+ado_scenario "$ahead"
+printf '[%s,%s]' "$(pol $MR queued)" "$(pol $BUILD approved)" > "$AZ_FIX/policies.json"
+printf '[%s]' "$(mpol '{"allowRebase":true}')" > "$AZ_FIX/merge-policies.json"
+expect_exit 1 apr merge --default main --pr 7
+ends review "a bypass not asked for"
+out="$(apr merge --default main --pr 7 --bypass-reviewers)" || { echo "$out"; fail "an allowed bypass did not complete"; }
+[ "$(printf '%s\n' "$out" | tail -n 1)" = "archive-pr: completed" ] || { echo "$out"; fail "bypass state"; }
+body_check "$(cat "$AZ_FIX/body.json")" "b.completionOptions.bypassPolicy === true && b.completionOptions.bypassReason.includes('$ahead') && b.completionOptions.mergeStrategy === 'rebase' && b.lastMergeSourceCommit.commitId === '$ahead'" \
+    || fail "bypass body: $(cat "$AZ_FIX/body.json")"
+ado_scenario "$ahead" reviewers '[{"displayName":"Ann","vote":-5}]'
+printf '[%s]' "$(pol $MR rejected)" > "$AZ_FIX/policies.json"
+expect_exit 1 apr merge --default main --pr 7 --bypass-reviewers
+ends refused "a bypass past a vote"
+no_patch "a bypass past a vote"
+# A repository that merges by hand: verified, never completed.
+ado_setup '{"host":"azure-devops","autoMerge":false}'
+ado_scenario "$ahead"
+out="$(apr merge --default main --pr 7)" || { echo "$out"; fail "autoMerge false"; }
+[ "$(printf '%s\n' "$out" | tail -n 1)" = "archive-pr: verified" ] || { echo "$out"; fail "autoMerge false state"; }
+no_patch "autoMerge false"
+pass "sdd-azure-pr merge: a bypass only where the settings allow it, never past a vote; autoMerge false stops at verified"
+
+# find and open.
+ado_scenario "$ahead"
+printf '[{"pullRequestId":3,"sourceRefName":"refs/heads/archive/a","forkSource":null},{"pullRequestId":4,"sourceRefName":"refs/heads/archive/b","forkSource":{"repository":{}}},{"pullRequestId":5,"sourceRefName":"refs/heads/feature","title":"Archive c"},{"pullRequestId":6,"sourceRefName":"refs/heads/feature","title":"Add x"}]' > "$AZ_FIX/list.json"
+out="$(apr find --default main)" || fail "find"
+[ "$out" = "$(printf 'pr=3\npr=5')" ] || fail "find output: $out"
+grep -q '^repos pr list --org https://dev.azure.com/example --project My Project --repository repo --status active --target-branch main --top 1000' "$AZ_LOG" || { cat "$AZ_LOG"; fail "the list call"; }
+echo '{"pullRequestId":12}' > "$AZ_FIX/created.json"
+printf 'Archive c-one\n\nOnly openspec archive output: 100%% "mechanical".\n' > "$TMP_ROOT/desc.md"
+out="$(apr open --default main --source archive/c-one --title 'Archive c-one' --description-file "$TMP_ROOT/desc.md")" || fail "open"
+[ "$out" = pr=12 ] || fail "open output: $out"
+grep -qx "rest post https://dev.azure.com/example/$PROJ_ID/_apis/git/repositories/$REPO_ID/pullrequests?api-version=7.1" "$AZ_FIX/rest.log" || { cat "$AZ_FIX/rest.log"; fail "the create call"; }
+body_check "$(cat "$AZ_FIX/create-body.json")" "b.sourceRefName === 'refs/heads/archive/c-one' && b.targetRefName === 'refs/heads/main' && b.title === 'Archive c-one' && b.description.split('\n').length === 4 && b.description.includes('100% \"mechanical\"') && b.autoCompleteSetBy === undefined" \
+    || fail "the create body: $(cat "$AZ_FIX/create-body.json")"
+node -e 'process.stdout.write("x".repeat(4001))' > "$TMP_ROOT/desc-long.md"
+ado_scenario "$ahead"
+expect_exit 1 apr open --default main --source archive/c-one --title t --description-file "$TMP_ROOT/desc-long.md"
+grep -q 'at most 4000' "$TMP_ROOT/out" || fail "a description over 4000 characters not refused"
+[ ! -f "$AZ_FIX/rest.log" ] || fail "a too-long description was sent"
+expect_exit 2 apr open --default main --source 'archive/$(id)' --title t --description-file "$TMP_ROOT/desc.md"
+pass "sdd-azure-pr find and open"
+
+# --- Azure DevOps: the pipeline template ----------------------------------------------------
+AP="$SCRIPT_DIR/../template/.azure-pipelines/sdd-checks.yml"
+grep -v '^#' "$AP" | grep -qi 'AccessToken' && fail "the pipeline hands a step the access token"
+grep -qx '    persistCredentials: false' "$AP" || fail "the pipeline keeps credentials"
+grep -qx '    fetchDepth: 0' "$AP" || fail "the pipeline fetches shallow: the merge commit's parents are needed"
+[ "$(grep -c "condition: and(succeededOrFailed(), eq(variables\['SDD_REFS'\], 'ok'))" "$AP")" = 4 ] || fail "each check should run only after the refs step"
+# A step's script: the `bash: |` block whose step has the given line (its name or displayName).
+step_script() {
+    awk -v key="$1" '
+        /^  - bash: \|$/ { buf = ""; f = 1; next }
+        f && /^    [A-Za-z]/ { if ($0 == key) { printf "%s", buf; exit } f = 0 }
+        f { l = $0; sub(/^      /, "", l); buf = buf l "\n" }
+    ' "$AP"
+}
+step_script '    name: refs' > "$TMP_ROOT/refs.sh"
+grep -q 'HEAD\^2' "$TMP_ROOT/refs.sh" || fail "could not extract the refs step"
+# A failed npm ci still prints every check's verdict.
+step_script '    displayName: Install the pinned OpenSpec CLI (no install scripts)' > "$TMP_ROOT/npm.sh"
+grep -q 'npm ci' "$TMP_ROOT/npm.sh" || fail "could not extract the install step"
+npmfake="$TMP_ROOT/npmfake" && mkdir -p "$npmfake" && printf '#!/bin/bash\nexit 1\n' > "$npmfake/npm" && chmod +x "$npmfake/npm"
+npm_step() { PATH="$npmfake:$PATH" bash "$TMP_ROOT/npm.sh"; }
+expect_exit 1 npm_step
+for check in spec-checks requirements-through-change main-spec-diff archive-mechanical; do
+    grep -qx "$check: failure" "$TMP_ROOT/out" || fail "no $check verdict when npm ci fails"
+done
+wa="$TMP_ROOT/ap-repo"
+git init -q -b main "$wa" && git -C "$wa" -c user.email=t@e -c user.name=t commit -q --allow-empty -m base
+git -C "$wa" checkout -q -b pr-head && git -C "$wa" -c user.email=t@e -c user.name=t commit -q --allow-empty -m head
+git -C "$wa" checkout -q main && git -C "$wa" -c user.email=t@e -c user.name=t commit -q --allow-empty -m moved
+git -C "$wa" -c user.email=t@e -c user.name=t merge -q --no-ff --no-edit pr-head
+ap_head="$(git -C "$wa" rev-parse pr-head)"
+# Run as the Bash task runs a script: no errexit.
+out="$(cd "$wa" && HEAD_SHA="$ap_head" bash "$TMP_ROOT/refs.sh")" || { echo "$out"; fail "refs step failed on a PR merge commit"; }
+printf '%s\n' "$out" | grep -qx '##vso\[task.setvariable variable=SDD_REFS\]ok' || { echo "$out"; fail "refs step did not mark the refs ok"; }
+printf '%s\n' "$out" | grep -qx "##vso\[task.setvariable variable=SDD_BASE\]$(git -C "$wa" rev-parse HEAD^1)" || { echo "$out"; fail "refs step base"; }
+printf '%s\n' "$out" | grep -qx "##vso\[task.setvariable variable=SDD_RESULT\]$(git -C "$wa" rev-parse HEAD)" || fail "refs step result"
+refs_step() { cd "$wa" && HEAD_SHA="$1" bash "$TMP_ROOT/refs.sh"; }
+expect_exit 1 refs_step "$(git -C "$wa" rev-parse HEAD^1)"
+cd "$SCRIPT_DIR"
+grep -qx 'archive-mechanical: failure' "$TMP_ROOT/out" || fail "no verdict when the merge isn't the PR's head"
+grep -q 'SDD_REFS' "$TMP_ROOT/out" && fail "refs step marked a wrong merge commit ok"
+expect_exit 1 refs_step '$(System.PullRequest.SourceCommitId)'
+cd "$SCRIPT_DIR"
+grep -q 'not a PR build' "$TMP_ROOT/out" || fail "a manual run not explained"
+# Text from a PR can't issue an Azure Pipelines logging command.
+out="$(SPECS="$T/sdd-specs.mjs" node -e 'import(require("url").pathToFileURL(process.env.SPECS).href).then(m => process.stdout.write(m.clean("##vso[task.complete result=Succeeded] ##VSO[x]")))')"
+printf '%s' "$out" | grep -qi '##vso\[' && fail "clean() kept ##vso[: $out"
+printf '%s' "$out" | grep -q 'vso\[task.complete result=Succeeded\] .*VSO\[x\]' || fail "clean() lost the text: $out"
+pass "the Azure Pipelines template: no token, full history, checks gated on the PR's own merge commit; clean() breaks ##vso["
 
 # --- sdd-init: spec:pin, unpinned active changes -------------------------------------------
 ri="$(fresh_repo)"

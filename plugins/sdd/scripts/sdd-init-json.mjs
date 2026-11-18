@@ -1,7 +1,9 @@
 // JSON edits for sdd-init.sh. Adds what is missing and never overwrites a value the repo
 // already set: a different value is reported as a warning for the owner to reconcile.
 //
-//   node sdd-init-json.mjs package  <package.json>  <openspec-version>
+//   node sdd-init-json.mjs package  <package.json>  <openspec-version> [<host> [explicit|detected]]
+//       Records "sdd": { "host": <host> } for azure-devops, and for any host given explicitly
+//       (--host), so a later run without --host keeps it. github found by default isn't written.
 //   node sdd-init-json.mjs settings <settings.json> <marketplace-repo>
 //
 // Prints one line per edit (`added ...`) or conflict (`warning: ...`).
@@ -9,9 +11,9 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
 
-const [mode, file, arg] = process.argv.slice(2)
-if (!['package', 'settings'].includes(mode) || !file || !arg) {
-  console.error('usage: sdd-init-json.mjs package <package.json> <openspec-version>')
+const [mode, file, arg, host = 'github', how = 'detected'] = process.argv.slice(2)
+if (!['package', 'settings'].includes(mode) || !file || !arg || !['github', 'azure-devops'].includes(host) || !['explicit', 'detected'].includes(how)) {
+  console.error('usage: sdd-init-json.mjs package <package.json> <openspec-version> [github|azure-devops [explicit|detected]]')
   console.error('       sdd-init-json.mjs settings <settings.json> <marketplace-repo>')
   process.exit(2)
 }
@@ -79,6 +81,16 @@ if (mode === 'package') {
   ensure(scripts, 'spec:check', 'bash scripts/sdd/check-specs.sh', 'scripts["spec:check"]')
   ensure(scripts, 'spec:pin', 'node scripts/sdd/sdd-specs.mjs pin', 'scripts["spec:pin"]')
   ensure(scripts, 'prepare', 'node scripts/sdd/setup-agent-skills.mjs', 'scripts.prepare')
+  // Azure DevOps is written, so every later run and /sdd:archive-pr read the same host; so is a
+  // host given with --host, so a later run doesn't detect it away. GitHub found by default is
+  // the default, and isn't written. A non-object "sdd" is left for sdd-config to report.
+  if (host === 'azure-devops' || how === 'explicit') {
+    if (data.sdd === undefined || (typeof data.sdd === 'object' && data.sdd !== null && !Array.isArray(data.sdd))) {
+      ensure(section(data, 'sdd'), 'host', host, 'sdd.host')
+    } else {
+      console.log('warning: package.json "sdd" is not an object, so sdd.host was not recorded')
+    }
+  }
 } else {
   ensure(section(data, 'env'), 'OPENSPEC_TELEMETRY', '0', 'env.OPENSPEC_TELEMETRY')
   ensure(section(data, 'extraKnownMarketplaces'), 'tzander-skills',

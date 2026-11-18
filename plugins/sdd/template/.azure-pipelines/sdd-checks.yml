@@ -1,0 +1,121 @@
+# Installed by the sdd plugin (sdd-init). Re-running sdd-init overwrites this file.
+#
+# Spec checks for every PR, on Azure Pipelines. Create a pipeline from this file in Azure
+# DevOps, then add it to the default branch's Build Validation policy: Azure Repos ignores
+# YAML `pr:` triggers, so the policy is what queues it for a PR.
+#
+# ADVISORY, NOT A GATE ON ITS OWN. Azure Pipelines has no `pull_request_target`: a PR build
+# runs the PR's own copy of this file and of scripts/sdd/, so a PR can change what judges it.
+# A red build still means something is wrong; a green one proves nothing by itself. The
+# trustworthy archive check is /sdd:archive-pr's local re-run of `sdd-archive.sh verify` with the
+# default branch's scripts, and change PRs rest on review, as every PR on Azure DevOps does.
+#
+# The build checks out the PR's merge commit (refs/pull/<n>/merge): its first parent is the
+# target branch's tip, its second the PR's head. No step gets System.AccessToken.
+#
+# Each check prints its verdict as one line, `<check>: <state>`. The main specs as they will
+# read once the PR's changes are archived go to the build's summary tab (Extensions).
+#
+# The archive check fails an archive into any branch but the default one. Azure Pipelines has
+# no variable for the default branch: set a pipeline variable SDD_DEFAULT_BRANCH in the
+# pipeline's settings when it isn't `main`.
+
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+jobs:
+- job: checks
+  timeoutInMinutes: 15
+  variables:
+    OPENSPEC_TELEMETRY: '0'
+  steps:
+  - checkout: self
+    fetchDepth: 0
+    fetchTags: false
+    persistCredentials: false
+    displayName: Check out the PR's merge commit
+
+  - task: UseNode@1
+    inputs:
+      version: '22.x'
+    displayName: Install Node.js
+
+  - bash: |
+      # No check can run without the CLI: say so in every check's verdict line.
+      if ! npm ci --ignore-scripts; then
+        echo "- reason: npm ci failed, so no check ran"
+        echo "spec-checks: failure"
+        echo "requirements-through-change: failure"
+        echo "main-spec-diff: failure"
+        echo "archive-mechanical: failure"
+        exit 1
+      fi
+    displayName: Install the pinned OpenSpec CLI (no install scripts)
+
+  - bash: |
+      # The merge commit Azure DevOps built for this PR: its second parent must be the PR's
+      # head, or the checks would judge some other commit.
+      if ! printf '%s' "$HEAD_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+        echo "- reason: not a PR build (queue this pipeline from the default branch's Build Validation policy)"
+        echo "spec-checks: failure"
+        echo "requirements-through-change: failure"
+        echo "main-spec-diff: failure"
+        echo "archive-mechanical: failure"
+        exit 1
+      fi
+      result="$(git rev-parse HEAD)"
+      if [ "$(git rev-parse HEAD^2 2>/dev/null)" != "$HEAD_SHA" ]; then
+        echo "- reason: the checked-out commit $result is not the merge of the PR's head $HEAD_SHA"
+        echo "spec-checks: failure"
+        echo "requirements-through-change: failure"
+        echo "main-spec-diff: failure"
+        echo "archive-mechanical: failure"
+        exit 1
+      fi
+      echo "##vso[task.setvariable variable=SDD_RESULT]$result"
+      echo "##vso[task.setvariable variable=SDD_BASE]$(git rev-parse HEAD^1)"
+      echo "##vso[task.setvariable variable=SDD_REFS]ok"
+    name: refs
+    displayName: Find the PR's merge commit and base
+    env:
+      HEAD_SHA: $(System.PullRequest.SourceCommitId)
+
+  - bash: bash scripts/sdd/check-specs.sh --rev "$SDD_RESULT"
+    displayName: Specs validate, before and after archiving
+    condition: and(succeededOrFailed(), eq(variables['SDD_REFS'], 'ok'))
+
+  - bash: node scripts/sdd/sdd-specs.mjs requirements --base "$SDD_BASE" --result "$SDD_RESULT"
+    displayName: Requirements change only through a change
+    condition: and(succeededOrFailed(), eq(variables['SDD_REFS'], 'ok'))
+
+  - bash: |
+      set +e
+      out="$AGENT_TEMPDIRECTORY/sdd-spec-diff.md"
+      node scripts/sdd/sdd-specs.mjs spec-diff --base "$SDD_BASE" --result "$SDD_RESULT" --out "$out"
+      status=$?
+      if [ -f "$out" ]; then
+        echo "##vso[task.uploadsummary]$out"
+      fi
+      exit $status
+    displayName: Main specs after archiving
+    condition: and(succeededOrFailed(), eq(variables['SDD_REFS'], 'ok'))
+
+  # Last of the checks, so its verdict is the last archive-mechanical line in the log.
+  - bash: |
+      status=0
+      out="$(bash scripts/sdd/sdd-archive.sh verify --base "$SDD_BASE" --result "$SDD_RESULT")" || status=$?
+      default="refs/heads/${SDD_DEFAULT_BRANCH:-main}"
+      # An archive into any branch but the default one is never mechanical.
+      if [ "$TARGET_REF" != "$default" ] && [ "$(printf '%s\n' "$out" | tail -n 1)" = "archive-mechanical: success" ]; then
+        out="$(printf '%s\n' "$out" | sed '$d'; echo "- the target branch $TARGET_REF is not the default branch $default"; echo "archive-mechanical: failure")"
+        status=1
+      fi
+      printf '%s\n' "$out"
+      exit $status
+    displayName: Archive PR is mechanical
+    condition: and(succeededOrFailed(), eq(variables['SDD_REFS'], 'ok'))
+    env:
+      TARGET_REF: $(System.PullRequest.TargetBranch)

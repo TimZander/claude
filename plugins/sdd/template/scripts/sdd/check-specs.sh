@@ -66,9 +66,10 @@ internal() {
     exit 3
 }
 
-# Quotes command output: every line indented, workflow-command syntax broken.
+# Quotes command output: every line indented, workflow-command syntax (GitHub's `##[` and `::`,
+# Azure Pipelines' `##vso[` in any case) broken.
 quote() {
-    sed -e 's/##\[/#\\u0023[/g' -e 's/::/:\\u003a/g' -e "s/$(printf '\t')/ /g" -e 's/^/  | /'
+    sed -e 's/##\[/#\\u0023[/g' -e 's/##\([vV][sS][oO]\)\[/#\\u0023\1[/g' -e 's/::/:\\u003a/g' -e "s/$(printf '\t')/ /g" -e 's/^/  | /'
 }
 
 root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || internal "$dir is not a git repository"

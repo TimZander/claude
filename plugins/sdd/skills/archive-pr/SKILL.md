@@ -1,35 +1,55 @@
 ---
 name: archive-pr
-description: Archive the active OpenSpec changes in their own PR and merge it once CI shows the archive is mechanical. Use before starting new work when openspec/changes/ holds an active change, or right after a change's PR merges.
+description: Archive the active OpenSpec changes in their own PR and merge it once it is shown to be mechanical (on GitHub or Azure DevOps). Use before starting new work when openspec/changes/ holds an active change, or right after a change's PR merges.
 argument-hint: "[--no-merge]"
 ---
 
 # Archive PR
 
 A change is archived after its PR merges, in a PR that holds only `openspec archive` output.
-Such a PR merges without review once the `sdd-checks` job shows `archive-mechanical: success`
-against the current tip of the default branch, any extra verdicts the repository names pass,
-and the same check passes when you re-run it yourself. The scripts do the work; you decide and
-report.
+Such a PR merges without review once it is shown to be mechanical against the current tip of
+the default branch. The scripts do the work; you decide and report.
+
+How it is shown depends on the host (`host` below):
+- **GitHub:** the `sdd-checks` job shows `archive-mechanical: success`, any extra verdicts the
+  repository names pass, and the same check passes when you re-run it yourself (Step 3).
+- **Azure DevOps:** a PR build runs the PR's own pipeline YAML and scripts, so its verdict is
+  advisory. The gate is your own re-run with the default branch's scripts. The completion then
+  names the commit you verified, and is confirmed afterwards (Step 3A).
 
 ## Step 0: The repository's settings
 
-Run `node scripts/sdd/sdd-config.mjs --json` from the default branch's checkout. Two settings
-matter here:
-- `archiveVerdicts`: more verdicts that must be `success` before merging, each a workflow file
-  and a verdict line name (for example a repository's own pin check).
+Run `node scripts/sdd/sdd-config.mjs --json` from the default branch's checkout. The settings
+that matter here:
+- `host`: `github` (the default) or `azure-devops`. It picks Step 3 or Step 3A, and the tools
+  you use: `gh` on GitHub; on Azure DevOps, `az` with the `azure-devops` extension, signed in
+  (`az devops` with a login or a PAT), through `scripts/sdd/sdd-azure-pr.sh`. If the origin is
+  on Azure DevOps (`dev.azure.com`, `*.visualstudio.com`) but `host` says `github`, or
+  `scripts/sdd/sdd-azure-pr.sh` is missing, the repository's sdd files predate Azure DevOps
+  support, or were set up for GitHub on purpose: ask the owner. If `package.json` records
+  `"host": "github"`, `/sdd:init` keeps it, so the owner changes that setting first (or runs
+  `/sdd:init --host azure-devops` once it's gone); otherwise re-running `/sdd:init` moves the
+  repository to Azure DevOps. Then stop.
+- `archiveVerdicts` (GitHub): more verdicts that must be `success` before merging, each a
+  workflow file and a verdict line name (for example a repository's own pin check).
 - `autoMerge`: when `false`, stop before merging (as with `--no-merge`) and leave the merge to
   the owner.
+- `archiveBypassReviewers` (Azure DevOps): whether you may complete a verified archive PR past a
+  "Minimum number of reviewers" policy (Step 3A). Off unless the repository turned it on.
 
 If the command fails, the settings are invalid: report its message and don't merge.
 
 ## Step 1: Is there anything to archive?
 
-1. Find the default branch (`git symbolic-ref refs/remotes/origin/HEAD`, else `main`), fetch it,
+1. Find the default branch (`git symbolic-ref refs/remotes/origin/HEAD`, else `main`; on Azure
+   DevOps, where a clone's `origin/HEAD` can be stale, check it against `az repos show --org <org>
+   --project <project> --repository <repository> --query defaultBranch`), fetch it,
    and check whether an archive PR is already open: a PR **from a branch of this repository**
    (not a fork) whose branch starts with `archive/` or whose title starts with "Archive". If one
-   is open, go to Step 3 with it; never open a second. Never adopt a PR from a fork: its author
-   controls its workflows.
+   is open, go to Step 3 (3A on Azure DevOps) with it; never open a second. Never adopt a PR
+   from a fork: its author controls its workflows. On Azure DevOps,
+   `bash scripts/sdd/sdd-azure-pr.sh find --default <default>` lists them (`pr=<id>`, or
+   `pr=none`).
 2. From a clean tree on the updated default branch, run
    `bash scripts/sdd/sdd-archive.sh active`. If it prints nothing, there's nothing to archive:
    say so and stop.
@@ -53,9 +73,12 @@ If the command fails, the settings are invalid: report its message and don't mer
 5. Push and open the PR against the default branch, titled `Archive <changes>`, its body listing
    the changes and saying it holds only `openspec archive` output. If verify printed any
    `- note: ` lines, add them under **Unfinished tasks**, verbatim, so the record shows what was
-   left undone.
+   left undone. On Azure DevOps, write the body to a file and run `bash
+   scripts/sdd/sdd-azure-pr.sh open --default <default> --source <branch> --title "Archive
+   <changes>" --description-file <file>`; it prints `pr=<id>`, and never sets auto-complete
+   (auto-complete isn't pinned to a commit).
 
-## Step 3: Wait for the verdicts, then merge
+## Step 3 (GitHub): Wait for the verdicts, then merge
 
 1. **Find the right run.** List the workflow runs for the PR's head commit and accept only one
    whose workflow **path** is `.github/workflows/sdd-checks.yml`, whose **event** is
@@ -89,8 +112,67 @@ If the command fails, the settings are invalid: report its message and don't mer
 7. Otherwise don't merge: report the lines above each verdict that failed. The owner reviews the
    PR.
 
+## Step 3A (Azure DevOps): Verify, then complete pinned to the verified commit
+
+There is no trustworthy CI verdict to read here, so nothing in this step reads one: the PR
+build ran the PR's own scripts. `scripts/sdd/sdd-azure-pr.sh merge` does the whole step, and
+you act on its last line. Run it **from a clean checkout of the default branch's tip**, with its
+dependencies installed by `npm ci --ignore-scripts`: that checkout's scripts and `package.json`
+judge the PR, never the PR's own. `merge` refuses to run anywhere else.
+
+```
+bash scripts/sdd/sdd-azure-pr.sh merge --default <default> --pr <n> --message "Archive <changes>"
+```
+
+Add `--no-merge` when it was given, or when the user asked to merge themselves. Add
+`--bypass-reviewers` only on a second run, after a first one ended `review`, and only when
+`archiveBypassReviewers` is `true`.
+
+In order, it: reads the PR (`sdd-azure.mjs pr`: this repository, not a fork, no auto-complete,
+a safely named source branch, into the default branch, no conflict; it waits while the merge is
+being computed, or while the PR still names an older head than its branch); checks the head is
+based on the default branch's tip; runs `sdd-archive.sh verify` against that tip, and goes on
+only on `archive-mechanical: success`; reads the policies, waiting while a build is queued or
+running; reads the PR, its policies, the branch's policy configurations and the tip again right
+before completing; completes with the body `sdd-azure.mjs complete-body` builds, through a PATCH
+to the repository's `pullrequests/<id>`; and reads the PR until it is completed, confirming both
+the source and the target commit it merged. The body is pinned to the verified head as
+`lastMergeSourceCommit`, names the merge strategy the branch's "Require a merge strategy"
+policies allow (squash first, so no unverified intermediate commit lands), and deletes the
+source branch, as an archive branch has no further use. No completion goes past a reviewer who
+voted Reject or Waiting for author, or a required reviewer who hasn't approved.
+
+Act on its last line, `archive-pr: <state>`:
+- `completed`: merged. Report it.
+- `verified`: the archive is mechanical, and it stopped before completing, as asked.
+- `behind`: the PR's branch is behind the default branch, the tip moved during the run, or the
+  PR's merge was being recomputed. If the branch is behind, merge the default branch into it and
+  push; then run it again.
+- `review`: only "Minimum number of reviewers" is unmet. Leave the PR open and report that it
+  needs one approval; after it, running `/sdd:archive-pr` again checks everything again, and
+  completes the PR if it still may. **Never approve or vote on the PR yourself.** If
+  `archiveBypassReviewers` is `true`, you may run it again with `--bypass-reviewers`: it then
+  bypasses only when the reviewer count is still the only unmet blocking policy and no reviewer
+  stands against the PR. The bypass skips every policy at the moment Azure DevOps completes,
+  so anything that changes in the seconds after its last read is bypassed too; say in the report
+  that it was used. It needs the "Bypass policies when completing pull requests" permission.
+- `refused`: report the `- ` lines above it. A failed verify means the PR isn't a mechanical
+  archive of the default branch: the owner reviews it. A failed or expired `sdd-checks` build,
+  a vote against, or another unmet policy (Required reviewers, a linked work item, comments, a
+  status) is the owner's to resolve; it is refused at once, since waiting won't meet it.
+- `timeout`: Azure DevOps was still computing something (a merge, a build, the completion).
+  A build that never starts may need queueing by hand. Report it; run again later.
+- `unverified`: it completed with a source or target commit other than the ones verified. Say
+  so first in the report, so the owner reviews what landed.
+- `failed`: report the lines above it. Don't retry a refused completion with other options.
+
+The pin rests on Azure DevOps refusing a completion whose `lastMergeSourceCommit` isn't the
+PR's current head; no test here can exercise that, which is why the final confirmation exists.
+
 ## Step 4: Report
 
-The PR link, the changes archived, any unfinished tasks noted, each verdict and the base it was
-compared against, your own re-run's result, and whether it merged. Then the next work can branch from the updated default
+The PR link, the changes archived, any unfinished tasks noted, your own re-run's result and
+the base it was compared against, and whether it merged. On GitHub, each verdict too. On Azure
+DevOps, the last state `sdd-azure-pr.sh` printed, whether a reviewer bypass was used, and the
+completed source and target commits. Then the next work can branch from the updated default
 branch.
