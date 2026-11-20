@@ -18,9 +18,14 @@
 #
 #   bash sdd-azure-pr.sh merge --default <branch> --pr <id> [--no-merge] [--bypass-reviewers]
 #                              [--message <text>]
-#       1. Checks this checkout is clean and at the default branch's tip.
+#       1. Checks this checkout is clean and at the default branch's tip, and that npm's record
+#          of the install in node_modules matches the tip's package-lock.json (sdd-azure.mjs
+#          installed), so an OpenSpec CLI that a PR branch's `npm ci` installed isn't the one
+#          that verifies. It reads npm's records, not the files: code that rewrote node_modules
+#          in place isn't caught. On a mismatch: `npm ci --ignore-scripts --include=dev` here.
 #       2. Reads the PR (sdd-azure.mjs pr), and fetches its head; waits while the merge is
-#          being computed, or while the PR still names an older head than its branch.
+#          being computed, while the PR still names an older head than its branch, or while
+#          its merge was computed against another commit than the tip (lastMergeTargetCommit).
 #       3. Checks the head is based on the tip: an archive branch behind the default branch
 #          can't be verified against it.
 #       4. Runs sdd-archive.sh verify --base <tip> --result <head> from this checkout, and
@@ -32,6 +37,10 @@
 #          configurations and the default branch's tip again, and builds the body with
 #          sdd-azure.mjs complete-body: pinned to <head> (lastMergeSourceCommit), with the merge
 #          strategy the branch's policies allow, and a bypass only as complete-body allows one.
+#          The API pins only the source, so the target is checked here instead: the tip must
+#          still be <tip>, and Azure DevOps must have computed the PR's merge against <tip>
+#          (lastMergeTargetCommit). A push to the default branch in the seconds between this
+#          read and the PATCH isn't caught until step 8, as `unverified`.
 #       8. Completes the PR with a PATCH to the repository's pullrequests/<id> (az rest), then
 #          reads it until it is completed, and confirms both the source commit (<head>) and the
 #          target commit (<tip>) it merged.
@@ -40,21 +49,27 @@
 #         completed    merged, pinned, and both commits confirmed
 #         verified     the archive is mechanical; not completed (--no-merge, autoMerge false)
 #         behind       the PR's branch is behind the default branch, the tip moved, or the PR's
-#                      merge is being recomputed: merge the default branch into the branch if
-#                      it is behind, push, and run again
+#                      merge is being recomputed or was computed against another commit: merge
+#                      the default branch into the branch if it is behind, push, and run again;
+#                      otherwise just run again
 #         review       only "Minimum number of reviewers" is unmet: it needs an approval
 #         refused      the PR can't be adopted, or verify, a reviewer, the policies or the
 #                      settings refuse it
-#         timeout      still waiting on Azure DevOps (a merge, a build, the completion)
+#         timeout      still waiting on Azure DevOps (a merge, a build, the completion), or for
+#                      the PR's merge to be computed against the tip
 #         unverified   completed, but with a source or target commit other than the verified
 #                      ones: the owner must review what landed
-#         failed       an az call, a helper or this checkout failed
+#         failed       an az call, git, a helper or this checkout failed (node_modules not
+#                      installed from the tip's lock file, for one)
 #
 # Environment: SDD_AZ_WAIT_MERGE (default 120), SDD_AZ_WAIT_POLICIES (1200) and
 # SDD_AZ_WAIT_COMPLETE (120) are the longest waits in seconds (0: don't wait); SDD_AZ_POLL (10,
-# at least 1) the interval.
+# at least 1) the interval. az runs with PYTHONIOENCODING=utf-8, so non-ASCII names reach the
+# helpers intact on Windows, where az otherwise writes in the console's code page.
 #
-# Exit status: 0 completed or verified (or find/open done), 1 any other state, 2 usage error.
+# Exit status: 0 completed or verified, or find/open done; 1 any other state, or find/open
+# failed (an az call, or a list of open PRs too long to read as complete); 2 usage error. No
+# other status.
 
 set -euo pipefail
 
@@ -88,8 +103,14 @@ on_exit() {
     [ -z "$ROOT" ] || git -C "$ROOT" update-ref -d refs/sdd/archive-head 2>/dev/null || true
     if [ $ARMED -eq 1 ] && [ $STATE_PRINTED -eq 0 ]; then
         echo "archive-pr: failed"
-        [ $code -ne 0 ] || code=1
+        code=1
     fi
+    # Only the documented statuses: a command that stopped the script (git's 128, a helper's 3)
+    # is a failure, 1.
+    case $code in
+        0|1|2) ;;
+        *) code=1 ;;
+    esac
     exit $code
 }
 trap on_exit EXIT
@@ -109,9 +130,11 @@ jget() {
     ' "$1" "$2"
 }
 
-# az, with JSON output and no MSYS path conversion of its arguments (Git Bash on Windows).
+# az, with JSON output in UTF-8 (az on Windows otherwise writes in the console's code page,
+# which mangles or fails on a non-ASCII name), and no MSYS path conversion of its arguments
+# (Git Bash on Windows).
 azj() {
-    MSYS2_ARG_CONV_EXCL='*' az "$@" -o json
+    PYTHONIOENCODING=utf-8 MSYS2_ARG_CONV_EXCL='*' az "$@" -o json
 }
 
 # A path az (a Windows program under Git Bash) can open.
@@ -205,14 +228,18 @@ if [ "$MODE" = find ]; then
     azj repos pr list --org "$ORG" --project "$PROJECT" --repository "$REPOSITORY" \
         --status active --target-branch "$DEFAULT" --top "$PAGE" > "$TMP/list.json" 2> "$TMP/az.err" \
         || { say "az repos pr list failed:"; quoted "$TMP/az.err"; exit 1; }
-    node "$AZURE" find-archive --page-size "$PAGE" "$TMP/list.json"
+    node "$AZURE" find-archive --page-size "$PAGE" "$TMP/list.json" > "$TMP/find.out" 2> "$TMP/helper.err" \
+        || { say "sdd-azure.mjs find-archive failed:"; quoted "$TMP/helper.err"; exit 1; }
+    cat "$TMP/find.out"
     exit 0
 fi
 
 if [ "$MODE" = open ]; then
     load_ids || exit 1
-    # A JSON body, so the description reaches Azure DevOps as written, newlines and all.
-    node -e '
+    # A JSON body, so the description reaches Azure DevOps as written, newlines and all. No MSYS
+    # conversion of the arguments either (Git Bash on Windows would rewrite a title like
+    # `/c/x` as a Windows path): the one path among them is converted here.
+    MSYS2_ARG_CONV_EXCL='*' node -e '
         const fs = require("fs")
         const [source, target, title, file, max] = process.argv.slice(1)
         const description = fs.readFileSync(file, "utf8")
@@ -221,7 +248,7 @@ if [ "$MODE" = open ]; then
             process.exit(1)
         }
         process.stdout.write(JSON.stringify({ sourceRefName: `refs/heads/${source}`, targetRefName: `refs/heads/${target}`, title, description }))
-    ' "$SOURCE" "$DEFAULT" "$TITLE" "$DESC" "$DESCRIPTION_MAX" > "$TMP/create.json" || exit 1
+    ' "$SOURCE" "$DEFAULT" "$TITLE" "$(native_path "$DESC")" "$DESCRIPTION_MAX" > "$TMP/create.json" || exit 1
     az_rest post "$(repo_url "pullrequests?api-version=7.1")" "$TMP/create.json" > "$TMP/created.json" 2> "$TMP/az.err" \
         || { say "creating the PR failed:"; quoted "$TMP/az.err"; exit 1; }
     id="$(jget "$TMP/created.json" pullRequestId)"
@@ -232,8 +259,8 @@ fi
 
 # --- merge -------------------------------------------------------------------------------
 
-# Reads the PR into $TMP/pr.json and runs `sdd-azure.mjs pr` on it; sets HEAD_SHA, SOURCE_REF,
-# REPO_ID and PROJECT_ID. Returns 0 ok, 1 refused, 4 wait, 5 az failed, 6 the helper failed.
+# Reads the PR into $TMP/pr.json and runs `sdd-azure.mjs pr` on it; sets HEAD_SHA, TARGET_SHA,
+# SOURCE_REF, REPO_ID and PROJECT_ID. Returns 0 ok, 1 refused, 4 wait, 5 az failed, 6 the helper failed.
 read_pr() {
     azj repos pr show --org "$ORG" --id "$PR" > "$TMP/pr.json" 2> "$TMP/az.err" || return 5
     local status=0
@@ -242,6 +269,7 @@ read_pr() {
     case $status in
         0)
             HEAD_SHA="$(sed -n 's/^head=//p' "$TMP/pr.out")"
+            TARGET_SHA="$(sed -n 's/^target=//p' "$TMP/pr.out")"
             SOURCE_REF="$(sed -n 's/^source=//p' "$TMP/pr.out")"
             REPO_ID="$(sed -n 's/^repository_id=//p' "$TMP/pr.out")"
             PROJECT_ID="$(sed -n 's/^project_id=//p' "$TMP/pr.out")"
@@ -293,6 +321,37 @@ if [ "$(git -C "$ROOT" rev-parse HEAD)" != "$TIP" ] || [ -n "$(git -C "$ROOT" st
     say "run this from a clean checkout of $DEFAULT's tip ($TIP): its scripts and settings judge the PR"
     finish failed
 fi
+# node_modules is ignored, so a clean checkout can still hold what a PR branch's `npm ci`
+# installed: the CLI that verifies must be the one the tip's lock file pins. The lock is read
+# from the tip's commit, not the working tree, which an ignored or skip-worktree file escapes.
+# npm ci prefers npm-shrinkwrap.json, so this does too.
+lock_name=""
+for name in npm-shrinkwrap.json package-lock.json; do
+    if git -C "$ROOT" cat-file -e "$TIP:$name" 2>/dev/null; then
+        lock_name="$name"
+        break
+    fi
+done
+if [ -z "$lock_name" ]; then
+    say "$DEFAULT has no package-lock.json, so nothing pins the OpenSpec CLI that would verify: run \`npm install\` with npm 7 or later, commit the lock file, and run again"
+    finish failed
+fi
+git -C "$ROOT" show "$TIP:$lock_name" > "$TMP/lock.json" 2> "$TMP/git.err" \
+    || { say "cannot read $DEFAULT's $lock_name:"; quoted "$TMP/git.err"; finish failed; }
+status=0
+node "$AZURE" installed --lock "$TMP/lock.json" "$ROOT" > "$TMP/installed.out" 2> "$TMP/helper.err" || status=$?
+case $status in
+    0) ;;
+    1)
+        sed '/^installed=/d' "$TMP/installed.out"
+        say "node_modules was not installed from $DEFAULT's $lock_name, so the OpenSpec CLI that would verify isn't the pinned one: run \`npm ci --ignore-scripts --include=dev\` here, then run again (if the lock itself pins no OpenSpec, fix and commit the lock first)"
+        finish failed ;;
+    *)
+        say "sdd-azure.mjs installed failed:"
+        quoted "$TMP/helper.err"
+        say "a lock file or install record without \`packages\` comes from npm 6 or lockfileVersion 1: regenerate $lock_name with npm 7 or later and commit it, then run \`npm ci --ignore-scripts --include=dev\` here"
+        finish failed ;;
+esac
 
 # 2. The PR, once its merge is computed and its head is its branch's.
 waited=0
@@ -302,10 +361,17 @@ while :; do
     if [ $status -eq 0 ]; then
         git -C "$ROOT" fetch -q --no-tags origin "+$SOURCE_REF:refs/sdd/archive-head" 2> "$TMP/git.err" \
             || { say "cannot fetch $SOURCE_REF:"; quoted "$TMP/git.err"; finish failed; }
-        fetched="$(git -C "$ROOT" rev-parse refs/sdd/archive-head)"
-        [ "$fetched" != "$HEAD_SHA" ] || break
-        # Azure DevOps updates the PR's head a little after a push: read it again.
-        waiting_for="the PR to name its branch's head ($fetched; it says $HEAD_SHA)"
+        fetched="$(git -C "$ROOT" rev-parse refs/sdd/archive-head 2> "$TMP/git.err")" \
+            || { say "cannot read the fetched head:"; quoted "$TMP/git.err"; finish failed; }
+        if [ "$fetched" != "$HEAD_SHA" ]; then
+            # Azure DevOps updates the PR's head a little after a push: read it again.
+            waiting_for="the PR to name its branch's head ($fetched; it says $HEAD_SHA)"
+        elif [ "$TARGET_SHA" != "$TIP" ]; then
+            # And recomputes its merge a little after the default branch moves.
+            waiting_for="Azure DevOps to compute the PR's merge against $DEFAULT's tip $TIP (it says $TARGET_SHA; if it never does, $DEFAULT moved, or origin is a mirror that lags Azure DevOps)"
+        else
+            break
+        fi
     elif [ $status -eq 4 ]; then
         waiting_for="the PR's merge to be computed"
     else
@@ -320,10 +386,19 @@ done
 say "PR $PR: head $HEAD_SHA from $SOURCE_REF"
 
 # 3. Based on the tip.
-if ! git -C "$ROOT" merge-base --is-ancestor "$TIP" "$HEAD_SHA"; then
-    say "the PR's branch is behind $DEFAULT ($TIP): merge $DEFAULT into it, push, and run again"
-    finish behind
-fi
+# --is-ancestor exits 1 for "no"; anything else (128) is git failing, not a branch behind.
+status=0
+git -C "$ROOT" merge-base --is-ancestor "$TIP" "$HEAD_SHA" 2> "$TMP/git.err" || status=$?
+case $status in
+    0) ;;
+    1)
+        say "the PR's branch is behind $DEFAULT ($TIP): merge $DEFAULT into it, push, and run again"
+        finish behind ;;
+    *)
+        say "cannot tell whether the PR's head is based on $DEFAULT's tip (git merge-base exited $status):"
+        quoted "$TMP/git.err"
+        finish failed ;;
+esac
 
 # Everything from here judges this commit; a later read of the PR never replaces it.
 VERIFIED="$HEAD_SHA"
@@ -391,11 +466,23 @@ if [ "$now" != "$TIP" ]; then
     say "$DEFAULT moved since the verify ($TIP, now ${now:-gone}): run again"
     finish behind
 fi
-set -- --commit "$VERIFIED" --pr "$TMP/pr.json" --policies "$TMP/policies.json" --merge-policies "$TMP/merge-policies.json"
+# Azure DevOps' own view of the target: the commit it computed the PR's merge against, which
+# the completion merges onto. The tip check above reads origin, which can be a mirror (an
+# insteadOf rewrite) that lags; this reads Azure DevOps.
+# (read_pr has just set TARGET_SHA, a commit id sdd-azure.mjs pr checked the form of.)
+if [ "$TARGET_SHA" != "$TIP" ]; then
+    say "Azure DevOps computed the PR's merge against $TARGET_SHA, not the verified $TIP: $DEFAULT moved, or Azure DevOps hasn't recomputed the merge yet. Run again (if it keeps saying this while origin's $DEFAULT is $TIP, origin is a mirror that lags Azure DevOps: wait for it, or point origin at Azure DevOps)"
+    finish behind
+fi
+# complete-body checks the target again, as it checks the head: the body is never built for
+# another one. The message is text, not a path: no MSYS conversion (Git Bash on Windows) of the
+# arguments, the paths among them converted here.
+set -- --commit "$VERIFIED" --target "$TIP" --pr "$(native_path "$TMP/pr.json")" \
+    --policies "$(native_path "$TMP/policies.json")" --merge-policies "$(native_path "$TMP/merge-policies.json")"
 [ -z "$MESSAGE" ] || set -- "$@" --message "$MESSAGE"
 [ $BYPASS -eq 0 ] || set -- "$@" --bypass-reviewers
 status=0
-node "$AZURE" complete-body "$@" > "$TMP/body.json" 2> "$TMP/helper.err" || status=$?
+MSYS2_ARG_CONV_EXCL='*' node "$(native_path "$AZURE")" complete-body "$@" > "$TMP/body.json" 2> "$TMP/helper.err" || status=$?
 case $status in
     0) ;;
     1) cat "$TMP/body.json"; finish refused ;;
