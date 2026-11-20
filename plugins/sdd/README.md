@@ -240,7 +240,7 @@ advisory: a red build is a real failure, a green one proves nothing alone.
 | Main-spec diff | A PR comment | The build's summary tab, from the PR's own scripts |
 | The archive check `/sdd:archive-pr` relies on | CI's verdict, from a run it checks, plus its own re-run | Its own re-run of `verify` (`sdd-azure-pr.sh merge`), from a clean checkout of the default branch's tip against the PR head. No CI verdict is read |
 | A push after the check can't merge unchecked commits | Merge pinned with `--match-head-commit` | Likely, not proven: completion names the verified commit as `lastMergeSourceCommit`, which should make Azure DevOps refuse a newer head. The target can't be pinned: completion goes ahead only when the tip and the PR's `lastMergeTargetCommit` are still the verified tip, a few seconds before. The source and target commits that landed are confirmed afterwards, and a mismatch is reported as unverified |
-| The CLI that verifies is the pinned one | CI runs `npm ci` on the default branch | `sdd-azure-pr.sh merge` refuses unless `node_modules`' install record matches the checkout's `package-lock.json`, so an OpenSpec a PR branch installed never verifies |
+| The CLI that verifies is the pinned one | CI runs `npm ci` on the default branch | Its install record, not its files: `sdd-azure-pr.sh merge` refuses unless npm's record of the install in `node_modules` matches the default branch's lock file both ways, so an OpenSpec a PR branch's `npm ci` installed doesn't verify. Code that rewrote `node_modules` in place (an install script, a PR's script run in that checkout) isn't caught |
 | A PR from a fork, or from another repository, is never adopted | Yes | Yes (`forkSource`, and the PR's repository and project) |
 | A merge without review | Allowed for a verified archive PR | A minimum-reviewer policy stops it, unless `archiveBypassReviewers` is set and that is the only unmet blocking policy. The bypass then skips every policy at the moment of completion: it is judged on a fresh read right before, and anything that changes in the seconds between is bypassed too |
 | A reviewer's vote against is respected | n/a | Yes: no completion, bypass or not, goes past a Reject or Waiting-for-author vote, or a required reviewer who hasn't approved |
@@ -251,7 +251,10 @@ Unproven here, because no test can call Azure DevOps: that a completion naming a
 `lastMergeSourceCommit` other than the source branch's head is refused (Microsoft's REST
 reference describes the field, but not that check), and the policy evaluation fields and states
 `az repos pr policy list` prints. The confirmation after completing is what catches the first
-one failing.
+one failing. Unproven too: that `lastMergeTargetCommit` names the default branch's commit the
+PR's merge was last computed against, and that Azure DevOps recomputes it when that branch
+moves. If it lags, a run waits for it and then ends `timeout`; it never completes against a
+target other than the verified tip without the confirmation reporting it.
 
 **Default-branch code against a PR's content, in a pipeline.** Within one repository, no: the
 Build Validation build takes its YAML from the PR's merge commit, and checking out the default
@@ -262,6 +265,15 @@ could give a trustworthy verdict. It is untested here, and it costs a second rep
 pipeline definition outside this repository's control, and a way for `/sdd:archive-pr` to tell
 that pipeline's runs from any other. The local re-run already gives the archive gate without
 it, so sdd doesn't ship one.
+
+## Upgrading to 0.4.1 on Azure DevOps
+
+Re-run `/sdd:init` to install 0.4.1's `sdd-azure-pr.sh` and `sdd-azure.mjs`: the 0.4.1 skill
+expects them. `sdd-azure-pr.sh merge` now refuses to verify unless `node_modules` was installed
+from the default branch's lock file, so the checkout it runs in needs a committed
+`package-lock.json` of lockfileVersion 2 or later (npm 7+), and `npm ci --ignore-scripts` (dev
+dependencies included) run there with npm 7 or later. A repository on yarn or pnpm, or with an
+older lock, can't complete archive PRs until it commits one.
 
 ## Upgrading to 0.4.0 on Azure DevOps
 

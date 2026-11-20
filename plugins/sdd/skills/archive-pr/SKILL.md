@@ -128,34 +128,36 @@ Add `--no-merge` when it was given, or when the user asked to merge themselves. 
 `--bypass-reviewers` only on a second run, after a first one ended `review`, and only when
 `archiveBypassReviewers` is `true`.
 
-In order, it: checks the OpenSpec CLI in `node_modules` is the one the checkout's
-`package-lock.json` pins (`node_modules` is ignored, so a clean checkout can still hold what a
-PR branch's `npm ci` installed; on a mismatch it ends `failed` and asks for
-`npm ci --ignore-scripts`); reads the PR (`sdd-azure.mjs pr`: this repository, not a fork, no auto-complete,
-a safely named source branch, into the default branch, no conflict; it waits while the merge is
-being computed, or while the PR still names an older head than its branch); checks the head is
-based on the default branch's tip; runs `sdd-archive.sh verify` against that tip, and goes on
-only on `archive-mechanical: success`; reads the policies, waiting while a build is queued or
-running; reads the PR, its policies, the branch's policy configurations and the tip again right
-before completing, and goes on only if the tip is still the verified one and Azure DevOps
-computed the PR's merge against it (`lastMergeTargetCommit`: the API pins only the source);
-completes with the body `sdd-azure.mjs complete-body` builds, through a PATCH
-to the repository's `pullrequests/<id>`; and reads the PR until it is completed, confirming both
-the source and the target commit it merged. The body is pinned to the verified head as
-`lastMergeSourceCommit`, names the merge strategy the branch's "Require a merge strategy"
-policies allow (squash first: it lands one commit, so the branch's intermediate commits, which
-verify doesn't judge, stay out of the history; a policy that forbids squash brings them along),
-and deletes the
-source branch, as an archive branch has no further use. No completion goes past a reviewer who
-voted Reject or Waiting for author, or a required reviewer who hasn't approved.
+In order, it: checks npm's record of the install in `node_modules` matches the default branch's
+lock file (`node_modules` is ignored, so a clean checkout can still hold what a PR branch's
+`npm ci` installed; on a mismatch it ends `failed` with the remedy to run); reads the PR
+(`sdd-azure.mjs pr`: this repository, not a fork, no auto-complete, a safely named source
+branch, into the default branch, no conflict; it waits while the merge is being computed, while
+the PR still names an older head than its branch, or while its merge was computed against
+another commit than the tip); checks the head is based on the default branch's tip; runs
+`sdd-archive.sh verify` against that tip, and goes on only on `archive-mechanical: success`;
+reads the policies, waiting while a build is queued or running; reads the PR, its policies, the
+branch's policy configurations and the tip again right before completing, and goes on only if
+the tip is still the verified one and Azure DevOps computed the PR's merge against it
+(`lastMergeTargetCommit`: the API pins only the source); completes with the body
+`sdd-azure.mjs complete-body` builds, through a PATCH to the repository's `pullrequests/<id>`;
+and reads the PR until it is completed, confirming both the source and the target commit it
+merged. The body is pinned to the verified head as `lastMergeSourceCommit`, names the merge
+strategy the branch's "Require a merge strategy" policies allow (squash first: it lands one
+commit, so the branch's intermediate commits, which verify doesn't judge, stay out of the
+history; a policy that forbids squash brings them along), and deletes the source branch, as an
+archive branch has no further use. No completion goes past a reviewer who voted Reject or
+Waiting for author, or a required reviewer who hasn't approved.
 
 Act on its last line, `archive-pr: <state>`:
 - `completed`: merged. Report it.
 - `verified`: the archive is mechanical, and it stopped before completing, as asked.
 - `behind`: the PR's branch is behind the default branch, the tip moved during the run, or the
-  PR's merge was being recomputed or was computed against another commit than the verified tip
-  (the default branch moved, or `origin` is a mirror that lags Azure DevOps). If the branch is behind, merge the default branch into it and
-  push; then run it again.
+  PR's merge was being recomputed or was computed against another commit than the verified tip.
+  If the branch is behind, merge the default branch into it and push; then run it again. If it
+  keeps ending `behind` (or `timeout`, waiting for the merge to be computed against the tip)
+  while the branch isn't behind, `origin` may be a mirror that lags Azure DevOps: report it
+  rather than pushing anything.
 - `review`: only "Minimum number of reviewers" is unmet. Leave the PR open and report that it
   needs one approval; after it, running `/sdd:archive-pr` again checks everything again, and
   completes the PR if it still may. **Never approve or vote on the PR yourself.** If

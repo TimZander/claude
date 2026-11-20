@@ -19,8 +19,8 @@
 //       (`az repos pr show --id` finds PRs anywhere in the organization), active, not a draft,
 //       not from a fork, without auto-complete set, from a branch named in safe characters into
 //       the default branch, and its merge computed without conflicts. Prints a `- ` line per
-//       problem; when there is none, `head=<sha>`, `source=<ref>`, `repository_id=<guid>` and
-//       `project_id=<guid>`. Last line `pr=ok|wait|refused`: wait means the merge is still
+//       problem; when there is none, `head=<sha>`, `target=<sha>` (the target commit its merge
+//       was computed against), `source=<ref>`, `repository_id=<guid>` and `project_id=<guid>`. Last line `pr=ok|wait|refused`: wait means the merge is still
 //       being computed. Exit 0 ok, 4 wait, 1 refused.
 //
 //   node sdd-azure.mjs policies [--page-size <n>] [<file>|-]
@@ -38,15 +38,18 @@
 //       --page-size, a list that long may be cut short: exit 3. Exit 0 for approved or none,
 //       1 otherwise.
 //
-//   node sdd-azure.mjs installed [<dir>]
-//       Is the OpenSpec CLI in <dir>/node_modules (default: the current directory) the one
-//       <dir>/package-lock.json pins? Compares npm's record of the last install
-//       (node_modules/.package-lock.json) with the lock, package by package (version, resolved,
-//       integrity, link), and OpenSpec's own package.json version with the lock's. A package the
-//       lock doesn't name, or one installed from another lock (a PR branch's `npm ci`, say),
-//       fails it. It reads npm's records, not the files: an install script that rewrote them
-//       isn't caught, which is why sdd installs with --ignore-scripts. Prints a `- ` line per
-//       problem, then `installed=ok|mismatch`. Exit 0 ok, 1 mismatch.
+//   node sdd-azure.mjs installed [--lock <file>] [<dir>]
+//       Was <dir>/node_modules (default: the current directory) installed from the lock file
+//       (default: <dir>/package-lock.json)? Compares npm's record of the last install
+//       (node_modules/.package-lock.json) with the lock, both ways: every installed package
+//       must be one the lock names, at its version and link, and its integrity (its resolved
+//       URL where the lock pins no integrity); every package the lock pins, other than an
+//       optional or peer one, must be installed; OpenSpec's own package.json must carry the
+//       lock's version. So an install from another lock (a PR branch's `npm ci`, say) fails it.
+//       It reads npm's records, never the files: code that rewrote files in node_modules, or
+//       the record itself (an install script, a PR's script run in this checkout), isn't
+//       caught. Prints a `- ` line per problem, then `installed=ok|mismatch`. Exit 0 ok, 1
+//       mismatch, 3 a lock or record npm 6 or a lockfileVersion 1 lock wrote (no `packages`).
 //
 //   node sdd-azure.mjs complete-body --commit <sha> --target <sha> --pr <file>
 //                                    --policies <file> --merge-policies <file>
@@ -59,13 +62,13 @@
 //       against --target (`lastMergeTargetCommit`), the default branch's commit the PR was
 //       verified against. A push to the default branch between this read and the PATCH still
 //       lands the PR on a target nobody verified; the confirmation afterwards reports that as
-//       `unverified`. The merge
-//       strategy is named: the first of squash, noFastForward, rebaseMerge, rebase that every
-//       "Require a merge strategy" policy in --merge-policies (the branch's configurations,
-//       `az repos policy list --branch`) allows. Refuses (exit 1, a `- not completing:` line)
-//       unless the repository is on Azure DevOps, `autoMerge` is on, the PR's head is still
-//       <sha>, its merge was computed against --target, no reviewer voted Reject or Waiting for author, every required reviewer
-//       approved, and the policies are `approved` or `none`. The one exception: policies
+//       `unverified`. The merge strategy is named: the first of squash, noFastForward,
+//       rebaseMerge, rebase that every "Require a merge strategy" policy in --merge-policies
+//       (the branch's configurations, `az repos policy list --branch`) allows. Refuses (exit 1,
+//       a `- not completing:` line) unless the repository is on Azure DevOps, `autoMerge` is
+//       on, the PR's head is still <sha>, its merge was computed against --target, no reviewer
+//       voted Reject or Waiting for author, every required reviewer approved, and the policies
+//       are `approved` or `none`. The one exception: policies
 //       `reviewers`, --bypass-reviewers given and `archiveBypassReviewers` true; then the body
 //       bypasses policy, with a reason. A bypass skips every policy when Azure DevOps
 //       completes, including anything that changed after these reads. Settings come from this
@@ -249,8 +252,13 @@ export function checkPr(pr, { defaultBranch, project, repository }) {
   } else if (head === null) {
     problems.push('the PR has no last merge source commit')
   }
+  const onto = pr.lastMergeTargetCommit?.commitId
+  const target = typeof onto === 'string' && SHA.test(onto) ? onto : null
+  if (!wait && pr.mergeStatus === 'succeeded' && target === null) {
+    problems.push('the PR has no last merge target commit')
+  }
   const state = problems.length > 0 ? 'refused' : wait ? 'wait' : 'ok'
-  return { state, problems, head, source, repositoryId, projectId }
+  return { state, problems, head, target, source, repositoryId, projectId }
 }
 
 /**
@@ -348,9 +356,12 @@ const STRATEGIES = Object.freeze([
   ['rebase', 'allowRebase'],
 ])
 
-/** The fields of a lock entry that say what was installed. */
-const INSTALL_FIELDS = Object.freeze(['version', 'resolved', 'integrity', 'link'])
 const OPENSPEC = 'node_modules/@fission-ai/openspec'
+
+/** @param {Record<string, any>} object @param {string} key */
+function own(object, key) {
+  return Object.prototype.hasOwnProperty.call(object, key) ? object[key] : undefined
+}
 
 /**
  * A lock file's packages: its `packages` object, entries by install path.
@@ -367,40 +378,56 @@ function packagesOf(lock, what) {
 }
 
 /**
- * Is what npm installed (its record, node_modules/.package-lock.json) what the lock pins, and
- * OpenSpec's own package.json the version the lock names? Problems, one per line; none means
- * it is.
+ * Was node_modules installed from the lock? Compares npm's record of the install
+ * (node_modules/.package-lock.json) with the lock both ways, and OpenSpec's own package.json
+ * version with the lock's. What identifies a package is its version and link, and its
+ * integrity; its resolved URL only where the lock pins no integrity, since a registry setting
+ * (a mirror, replace-registry-host) can record another URL for the same tarball. Problems, one
+ * per line; none means it was.
  * @param {{ lock: unknown, installed: unknown, openspecVersion: unknown }} input
  * @returns {string[]}
  */
 export function installProblems({ lock, installed, openspecVersion }) {
   const want = packagesOf(lock, 'package-lock.json')
   const got = packagesOf(installed, 'node_modules/.package-lock.json')
+  /** @param {string} path */
+  const nameOf = path => oneLine(path.replace(/^node_modules\//, ''))
+  /** @param {unknown} value */
+  const shown = value => oneLine(value === undefined || value === null ? 'none' : typeof value === 'object' ? JSON.stringify(value) : value)
   const problems = []
-  if (want[OPENSPEC] === undefined) {
+  if (own(want, OPENSPEC) === undefined) {
     problems.push('package-lock.json pins no @fission-ai/openspec')
   }
-  if (got[OPENSPEC] === undefined) {
-    problems.push('npm\'s record of the install has no @fission-ai/openspec')
-  }
   for (const [path, entry] of Object.entries(got)) {
-    const name = oneLine(path.replace(/^node_modules\//, ''))
-    const pinned = want[path]
+    const pinned = own(want, path)
     if (pinned === undefined || pinned === null || typeof pinned !== 'object') {
-      problems.push(`${name}: installed, but package-lock.json doesn't name it`)
+      problems.push(`${nameOf(path)}: installed, but package-lock.json doesn't name it`)
       continue
     }
-    for (const field of INSTALL_FIELDS) {
-      const a = entry?.[field]
-      const b = pinned[field]
-      if (a !== b && !(a === undefined && b === undefined)) {
-        problems.push(`${name}: installed ${field} ${oneLine(a ?? 'none')}, the lock pins ${oneLine(b ?? 'none')}`)
+    const fields = ['version', 'link', pinned.integrity === undefined ? 'resolved' : 'integrity']
+    for (const field of fields) {
+      const a = entry?.[field] ?? undefined
+      const b = pinned[field] ?? undefined
+      // A field the lock leaves out pins nothing, except link: absent means not a link.
+      if (a !== b && (b !== undefined || field === 'link')) {
+        problems.push(`${nameOf(path)}: installed ${field} ${shown(a)}, the lock pins ${shown(b)}`)
       }
     }
   }
-  const pinnedVersion = want[OPENSPEC]?.version
+  for (const [path, pinned] of Object.entries(want)) {
+    // Installed packages only (the root and workspace folders aren't), and not those npm may
+    // leave out: optional ones (another platform's), and peers.
+    if (!path.startsWith('node_modules/') || pinned === null || typeof pinned !== 'object'
+      || pinned.optional === true || pinned.devOptional === true || pinned.peer === true) {
+      continue
+    }
+    if (own(got, path) === undefined) {
+      problems.push(`${nameOf(path)}: the lock pins it, but it isn't installed`)
+    }
+  }
+  const pinnedVersion = own(want, OPENSPEC)?.version
   if (pinnedVersion !== undefined && openspecVersion !== pinnedVersion) {
-    problems.push(`@fission-ai/openspec's package.json says ${oneLine(openspecVersion ?? 'nothing')}, the lock pins ${oneLine(pinnedVersion)}`)
+    problems.push(`@fission-ai/openspec's package.json says ${shown(openspecVersion)}, the lock pins ${shown(pinnedVersion)}`)
   }
   return problems
 }
@@ -515,7 +542,7 @@ export function completeBody({ commit, target, pr, policies, mergePolicies, bypa
   }
   const mergedOnto = pr.lastMergeTargetCommit?.commitId
   if (mergedOnto !== target) {
-    return { refused: `the PR's merge was computed against ${oneLine(mergedOnto ?? 'nothing')}, not ${target}: the default branch moved after it was verified` }
+    return { refused: `the PR's merge was computed against ${oneLine(mergedOnto ?? 'nothing')}, not ${target}: the default branch moved after it was verified, or Azure DevOps hasn't recomputed the merge yet` }
   }
   const objections = reviewerObjections(pr)
   if (objections.length > 0) {
@@ -608,7 +635,7 @@ const USAGE = `usage: sdd-azure.mjs remote [<url>]
        sdd-azure.mjs find-archive [--page-size <n>] [<file>|-]
        sdd-azure.mjs pr --default <branch> --project <name> --repository <name> [<file>|-]
        sdd-azure.mjs policies [--page-size <n>] [<file>|-]
-       sdd-azure.mjs installed [<dir>]
+       sdd-azure.mjs installed [--lock <file>] [<dir>]
        sdd-azure.mjs complete-body --commit <sha> --target <sha> --pr <file> --policies <file>
                                    --merge-policies <file> [--bypass-reviewers] [--message <text>]`
 
@@ -689,6 +716,7 @@ function main(args) {
     }
     if (result.state === 'ok') {
       console.log(`head=${result.head}`)
+      console.log(`target=${result.target}`)
       console.log(`source=${result.source}`)
       console.log(`repository_id=${result.repositoryId}`)
       console.log(`project_id=${result.projectId}`)
@@ -713,17 +741,26 @@ function main(args) {
     return state === 'approved' || state === 'none' ? 0 : 1
   }
   if (cmd === 'installed') {
-    if (rest.length > 1 || (rest.length === 1 && rest[0].startsWith('--'))) {
+    let lockFile
+    let args = rest
+    if (args[0] === '--lock') {
+      if (args[1] === undefined || args[1].startsWith('--')) {
+        return usage()
+      }
+      lockFile = args[1]
+      args = args.slice(2)
+    }
+    if (args.length > 1 || (args.length === 1 && args[0].startsWith('--'))) {
       return usage()
     }
-    const dir = rest[0] ?? '.'
-    const lockFile = join(dir, 'package-lock.json')
+    const dir = args[0] ?? '.'
+    lockFile = lockFile ?? join(dir, 'package-lock.json')
     const recordFile = join(dir, 'node_modules', '.package-lock.json')
     const packageFile = join(dir, OPENSPEC, 'package.json')
     /** @type {string[]} */
     let problems
     if (!existsSync(lockFile)) {
-      problems = ['there is no package-lock.json']
+      problems = [`there is no lock file (${oneLine(lockFile)})`]
     } else if (!existsSync(recordFile)) {
       problems = ['node_modules has no record of an npm install (node_modules/.package-lock.json)']
     } else {

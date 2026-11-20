@@ -18,11 +18,14 @@
 #
 #   bash sdd-azure-pr.sh merge --default <branch> --pr <id> [--no-merge] [--bypass-reviewers]
 #                              [--message <text>]
-#       1. Checks this checkout is clean and at the default branch's tip, and that the OpenSpec
-#          CLI in its node_modules is the one its package-lock.json pins (sdd-azure.mjs
-#          installed): a CLI a PR branch's `npm ci` installed never verifies anything.
+#       1. Checks this checkout is clean and at the default branch's tip, and that npm's record
+#          of the install in node_modules matches the tip's package-lock.json (sdd-azure.mjs
+#          installed), so an OpenSpec CLI that a PR branch's `npm ci` installed isn't the one
+#          that verifies. It reads npm's records, not the files: code that rewrote node_modules
+#          in place isn't caught. On a mismatch: `npm ci --ignore-scripts --include=dev` here.
 #       2. Reads the PR (sdd-azure.mjs pr), and fetches its head; waits while the merge is
-#          being computed, or while the PR still names an older head than its branch.
+#          being computed, while the PR still names an older head than its branch, or while
+#          its merge was computed against another commit than the tip (lastMergeTargetCommit).
 #       3. Checks the head is based on the tip: an archive branch behind the default branch
 #          can't be verified against it.
 #       4. Runs sdd-archive.sh verify --base <tip> --result <head> from this checkout, and
@@ -47,16 +50,17 @@
 #         verified     the archive is mechanical; not completed (--no-merge, autoMerge false)
 #         behind       the PR's branch is behind the default branch, the tip moved, or the PR's
 #                      merge is being recomputed or was computed against another commit: merge
-#                      the default branch into the branch if it is behind, push, and run again
+#                      the default branch into the branch if it is behind, push, and run again;
+#                      otherwise just run again
 #         review       only "Minimum number of reviewers" is unmet: it needs an approval
 #         refused      the PR can't be adopted, or verify, a reviewer, the policies or the
 #                      settings refuse it
-#         timeout      still waiting on Azure DevOps (a merge, a build, the completion)
+#         timeout      still waiting on Azure DevOps (a merge, a build, the completion), or for
+#                      the PR's merge to be computed against the tip
 #         unverified   completed, but with a source or target commit other than the verified
 #                      ones: the owner must review what landed
-#         failed       an az call, git, a helper or this checkout failed (OpenSpec not
-#                      installed from the tip's lock file, for one: run `npm ci
-#                      --ignore-scripts` here)
+#         failed       an az call, git, a helper or this checkout failed (node_modules not
+#                      installed from the tip's lock file, for one)
 #
 # Environment: SDD_AZ_WAIT_MERGE (default 120), SDD_AZ_WAIT_POLICIES (1200) and
 # SDD_AZ_WAIT_COMPLETE (120) are the longest waits in seconds (0: don't wait); SDD_AZ_POLL (10,
@@ -255,8 +259,8 @@ fi
 
 # --- merge -------------------------------------------------------------------------------
 
-# Reads the PR into $TMP/pr.json and runs `sdd-azure.mjs pr` on it; sets HEAD_SHA, SOURCE_REF,
-# REPO_ID and PROJECT_ID. Returns 0 ok, 1 refused, 4 wait, 5 az failed, 6 the helper failed.
+# Reads the PR into $TMP/pr.json and runs `sdd-azure.mjs pr` on it; sets HEAD_SHA, TARGET_SHA,
+# SOURCE_REF, REPO_ID and PROJECT_ID. Returns 0 ok, 1 refused, 4 wait, 5 az failed, 6 the helper failed.
 read_pr() {
     azj repos pr show --org "$ORG" --id "$PR" > "$TMP/pr.json" 2> "$TMP/az.err" || return 5
     local status=0
@@ -265,6 +269,7 @@ read_pr() {
     case $status in
         0)
             HEAD_SHA="$(sed -n 's/^head=//p' "$TMP/pr.out")"
+            TARGET_SHA="$(sed -n 's/^target=//p' "$TMP/pr.out")"
             SOURCE_REF="$(sed -n 's/^source=//p' "$TMP/pr.out")"
             REPO_ID="$(sed -n 's/^repository_id=//p' "$TMP/pr.out")"
             PROJECT_ID="$(sed -n 's/^project_id=//p' "$TMP/pr.out")"
@@ -317,19 +322,34 @@ if [ "$(git -C "$ROOT" rev-parse HEAD)" != "$TIP" ] || [ -n "$(git -C "$ROOT" st
     finish failed
 fi
 # node_modules is ignored, so a clean checkout can still hold what a PR branch's `npm ci`
-# installed: the CLI that verifies must be the one this checkout's lock file pins.
+# installed: the CLI that verifies must be the one the tip's lock file pins. The lock is read
+# from the tip's commit, not the working tree, which an ignored or skip-worktree file escapes.
+# npm ci prefers npm-shrinkwrap.json, so this does too.
+lock_name=""
+for name in npm-shrinkwrap.json package-lock.json; do
+    if git -C "$ROOT" cat-file -e "$TIP:$name" 2>/dev/null; then
+        lock_name="$name"
+        break
+    fi
+done
+if [ -z "$lock_name" ]; then
+    say "$DEFAULT has no package-lock.json, so nothing pins the OpenSpec CLI that would verify: run \`npm install\` with npm 7 or later, commit the lock file, and run again"
+    finish failed
+fi
+git -C "$ROOT" show "$TIP:$lock_name" > "$TMP/lock.json" 2> "$TMP/git.err" \
+    || { say "cannot read $DEFAULT's $lock_name:"; quoted "$TMP/git.err"; finish failed; }
 status=0
-node "$AZURE" installed "$ROOT" > "$TMP/installed.out" 2> "$TMP/helper.err" || status=$?
+node "$AZURE" installed --lock "$TMP/lock.json" "$ROOT" > "$TMP/installed.out" 2> "$TMP/helper.err" || status=$?
 case $status in
     0) ;;
     1)
         sed '/^installed=/d' "$TMP/installed.out"
-        say "the OpenSpec CLI in node_modules is not the one $DEFAULT's package-lock.json pins: run \`npm ci --ignore-scripts\` here, then run again"
+        say "node_modules was not installed from $DEFAULT's $lock_name, so the OpenSpec CLI that would verify isn't the pinned one: run \`npm ci --ignore-scripts --include=dev\` here, then run again (if the lock itself pins no OpenSpec, fix and commit the lock first)"
         finish failed ;;
     *)
         say "sdd-azure.mjs installed failed:"
         quoted "$TMP/helper.err"
-        say "run \`npm ci --ignore-scripts\` here, then run again"
+        say "a lock file or install record without \`packages\` comes from npm 6 or lockfileVersion 1: regenerate $lock_name with npm 7 or later and commit it, then run \`npm ci --ignore-scripts --include=dev\` here"
         finish failed ;;
 esac
 
@@ -343,9 +363,15 @@ while :; do
             || { say "cannot fetch $SOURCE_REF:"; quoted "$TMP/git.err"; finish failed; }
         fetched="$(git -C "$ROOT" rev-parse refs/sdd/archive-head 2> "$TMP/git.err")" \
             || { say "cannot read the fetched head:"; quoted "$TMP/git.err"; finish failed; }
-        [ "$fetched" != "$HEAD_SHA" ] || break
-        # Azure DevOps updates the PR's head a little after a push: read it again.
-        waiting_for="the PR to name its branch's head ($fetched; it says $HEAD_SHA)"
+        if [ "$fetched" != "$HEAD_SHA" ]; then
+            # Azure DevOps updates the PR's head a little after a push: read it again.
+            waiting_for="the PR to name its branch's head ($fetched; it says $HEAD_SHA)"
+        elif [ "$TARGET_SHA" != "$TIP" ]; then
+            # And recomputes its merge a little after the default branch moves.
+            waiting_for="Azure DevOps to compute the PR's merge against $DEFAULT's tip $TIP (it says $TARGET_SHA; if it never does, $DEFAULT moved, or origin is a mirror that lags Azure DevOps)"
+        else
+            break
+        fi
     elif [ $status -eq 4 ]; then
         waiting_for="the PR's merge to be computed"
     else
@@ -443,10 +469,9 @@ fi
 # Azure DevOps' own view of the target: the commit it computed the PR's merge against, which
 # the completion merges onto. The tip check above reads origin, which can be a mirror (an
 # insteadOf rewrite) that lags; this reads Azure DevOps.
-target="$(jget "$TMP/pr.json" lastMergeTargetCommit.commitId)" \
-    || { say "cannot read the PR's last merge target commit"; finish failed; }
-if [ "$target" != "$TIP" ]; then
-    say "Azure DevOps computed the PR's merge against ${target:-no commit}, not the verified $TIP: $DEFAULT moved, or origin isn't Azure DevOps' copy of it. Run again"
+# (read_pr has just set TARGET_SHA, a commit id sdd-azure.mjs pr checked the form of.)
+if [ "$TARGET_SHA" != "$TIP" ]; then
+    say "Azure DevOps computed the PR's merge against $TARGET_SHA, not the verified $TIP: $DEFAULT moved, or Azure DevOps hasn't recomputed the merge yet. Run again (if it keeps saying this while origin's $DEFAULT is $TIP, origin is a mirror that lags Azure DevOps: wait for it, or point origin at Azure DevOps)"
     finish behind
 fi
 # complete-body checks the target again, as it checks the head: the body is never built for
