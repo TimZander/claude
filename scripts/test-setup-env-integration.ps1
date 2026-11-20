@@ -10,6 +10,12 @@ $RepoRoot = Split-Path $PSScriptRoot -Parent
 $SettingsSource = Join-Path (Join-Path $RepoRoot 'standards') 'settings.json'
 
 $script:fail = 0
+# Expected counts come from the team file itself, so trimming the allowlist
+# never breaks this test.
+$TeamFile = Get-Content -Path $SettingsSource -Raw | ConvertFrom-Json
+$TeamAllowCount = @($TeamFile.permissions.allow).Count
+$TeamAskCount = @($TeamFile.permissions.ask).Count
+
 function Chk($cond, $d) { if ($cond) { Write-Host "  ok: $d" } else { Write-Host "  FAIL: $d"; $script:fail++ } }
 
 # Replicate setup-env.ps1's merge+write to a temp target; return the written text.
@@ -39,7 +45,9 @@ $raw = Invoke-Sync @'
 $back = $raw | ConvertFrom-Json
 Chk ($null -ne $back) "written file is valid JSON"
 Chk (@($back.PSObject.Properties.Name | Where-Object { $_ -match '\s' }).Count -eq 0) "no whitespace/garbage key in output"
-Chk ($back.permissions.allow.Count -ge 95) "team allow entries present (count=$($back.permissions.allow.Count))"
+Chk ($back.permissions.allow.Count -ge $TeamAllowCount) "team allow entries present (count=$($back.permissions.allow.Count))"
+Chk (@($back.permissions.ask).Count -eq $TeamAskCount) "team ask rules present (count=$(@($back.permissions.ask).Count))"
+Chk ($back.attribution.commit -eq '' -and $back.attribution.pr -eq '') "team attribution (empty commit/pr) carried over"
 Chk (@($back.permissions.allow) -contains 'Bash(dotnet test *)') "personal allow entry preserved (union)"
 Chk ($raw -match '"deny":\s*\[') "single-element deny stays an ARRAY (not collapsed to scalar)"
 Chk ($back.tui -eq 'dark') "scalar pref preserved"
@@ -52,7 +60,7 @@ Chk ($raw2.Trim() -eq $raw.Trim()) "second sync is idempotent (no churn/reorder 
 # 3. A null permissions value heals to the team allowlist instead of crashing.
 $raw3 = Invoke-Sync '{ "permissions": null, "tui": "x" }'
 $b3 = $raw3 | ConvertFrom-Json
-Chk ($b3.permissions.allow.Count -ge 95) "null permissions heals to the team allowlist (no crash)"
+Chk ($b3.permissions.allow.Count -ge $TeamAllowCount) "null permissions heals to the team allowlist (no crash)"
 
 Write-Host "---"
 if ($script:fail -gt 0) { Write-Host "INTEGRATION FAILED: $script:fail check(s)"; exit 1 }

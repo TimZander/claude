@@ -1,7 +1,7 @@
 name: validate-settings
 
-# Enforce the allowlist guard on every change to the team settings or its
-# tooling, so a mutating allow entry cannot merge without the check running.
+# Enforce the settings guard on every change to the team settings or its
+# tooling, so a dangerous key or allow entry cannot merge without the check running.
 on:
   pull_request:
     paths:
@@ -10,7 +10,6 @@ on:
       - "standards/allowlist_common.py"
       - "standards/measure-allowlist-impact.py"
       - "standards/test-*.py"
-      - "standards/test-*.sh"
       - ".github/workflows/validate-settings.yml"
   push:
     branches: [main]
@@ -23,9 +22,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-      - name: Validate allowlist has no dangerous entries
+      - name: Validate what the team settings file may grant
         run: python3 standards/validate-settings.py
       - name: Unit-test the shared allowlist logic
         run: python3 standards/test-allowlist-common.py
-      - name: Smoke-test the validator
-        run: bash standards/test-validate-settings.sh
+      - name: Unit-test the validator
+        run: python3 standards/test-validate-settings.py

@@ -23,10 +23,34 @@ def parse_bash_prefix(entry: str):
     """Return the command prefix inside a `Bash(<prefix>[:*| *])` allow entry.
 
     Handles both the `:*` and the space-` *` wildcard forms and a bare
-    `Bash(cmd)`. Returns None for non-Bash rules (Write(...), mcp__..., etc.).
+    `Bash(cmd)`. Returns None for non-Bash rules (Edit(...), mcp__..., etc.).
     """
     m = re.match(r"^Bash\((.*?)(?::\*| \*)?\)$", entry)
     return m.group(1).strip() if m else None
+
+
+def has_trailing_wildcard(entry: str) -> bool:
+    """True if a Bash rule ends in a word wildcard (` *` or `:*`)."""
+    return entry.endswith(":*)") or entry.endswith(" *)")
+
+
+def bash_rule_matches(rule: str, command: str) -> bool:
+    """True if a `Bash(...)` permission rule matches one command, following the
+    documented Claude Code semantics (https://code.claude.com/docs/en/permissions):
+    `*` matches any text including spaces and may appear anywhere; a trailing
+    `:*` is the same as ` *`; and a trailing ` *` that is the rule's only
+    wildcard also matches the bare command. Quoting is not modeled.
+    """
+    m = re.fullmatch(r"Bash\((.*)\)", rule, re.DOTALL)
+    if not m:
+        return False
+    pattern = m.group(1)
+    if pattern.endswith(":*"):
+        pattern = pattern[:-2] + " *"
+    if pattern.endswith(" *") and pattern.count("*") == 1 and command == pattern[:-2]:
+        return True
+    regex = ".*".join(re.escape(part) for part in pattern.split("*"))
+    return re.fullmatch(regex, command, re.DOTALL) is not None
 
 
 def seg_matches(seg: str, prefixes) -> bool:
