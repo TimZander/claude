@@ -155,7 +155,8 @@ reason its verdicts are advisory. `/sdd:archive-pr` reads them from the default 
 | `archiveBypassReviewers` | `false` | Azure DevOps only. `true`: `/sdd:archive-pr` may complete an archive PR it verified past a "Minimum number of reviewers" policy, when that is the only blocking policy not met and no reviewer voted Reject or Waiting for author. Without this setting it never bypasses, and it never approves or votes |
 
 Setting `specDiffComment`, `statuses` or `archiveVerdicts` on Azure DevOps, or
-`archiveBypassReviewers` on GitHub, is an error, not a silent no-op.
+`archiveBypassReviewers` on GitHub, to anything but its default is an error, not a silent
+no-op. Written at its default, each is accepted on either host.
 
 ## Base pins
 
@@ -265,6 +266,26 @@ could give a trustworthy verdict. It is untested here, and it costs a second rep
 pipeline definition outside this repository's control, and a way for `/sdd:archive-pr` to tell
 that pipeline's runs from any other. The local re-run already gives the archive gate without
 it, so sdd doesn't ship one.
+
+## Upgrading to 0.4.2 on Azure DevOps
+
+Re-run `/sdd:init` to install 0.4.2's `sdd-azure-pr.sh`, `sdd-azure.mjs` and `sdd-config.mjs`.
+What changes in behavior:
+- A "Minimum number of reviewers" policy a vote rejected now ends `refused`, not `review`: only
+  one still waiting for approvals can be bypassed. Reviewers and votes, a build's expiry and a
+  merge-strategy policy's settings are read strictly: one missing from what `az` prints ends
+  `failed` rather than reading as no objection, a current build or any strategy. Merge-strategy
+  policies are read from the PR's own policy evaluations too.
+- verify failing to run in the checkout (OpenSpec not installed, say) ends `failed`, not
+  `refused`. A build queued again right before completing ends `timeout`, to run again.
+- `"specDiffComment": true` is accepted on Azure DevOps (the default, so it asks for nothing
+  Azure DevOps can't do); `false` is still an error there.
+- `sdd-azure-pr.sh` first checks for `node`, `az` and az's `azure-devops` extension, rejects an
+  option its mode doesn't take or one given twice, holds `--default` and `--source` to the same
+  rule as a PR's source branch, and bounds each `SDD_AZ_*` wait at 86400 seconds. It fetches a
+  PR's head into a ref of its own run (`refs/sdd/archive-pr-<id>-<pid>`), kept and named when a
+  completion is `unverified`, since completing deletes the source branch. `find` reads past the
+  first page of open PRs, so a page Azure DevOps cut short is never read as the whole list.
 
 ## Upgrading to 0.4.1 on Azure DevOps
 

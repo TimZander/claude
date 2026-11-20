@@ -158,7 +158,8 @@ Act on its last line, `archive-pr: <state>`:
   keeps ending `behind` (or `timeout`, waiting for the merge to be computed against the tip)
   while the branch isn't behind, `origin` may be a mirror that lags Azure DevOps: report it
   rather than pushing anything.
-- `review`: only "Minimum number of reviewers" is unmet. Leave the PR open and report that it
+- `review`: only "Minimum number of reviewers" is unmet, still waiting for approvals (one a
+  vote rejected is `refused`). Leave the PR open and report that it
   needs one approval; after it, running `/sdd:archive-pr` again checks everything again, and
   completes the PR if it still may. **Never approve or vote on the PR yourself.** If
   `archiveBypassReviewers` is `true`, you may run it again with `--bypass-reviewers`: it then
@@ -173,8 +174,11 @@ Act on its last line, `archive-pr: <state>`:
 - `timeout`: Azure DevOps was still computing something (a merge, a build, the completion).
   A build that never starts may need queueing by hand. Report it; run again later.
 - `unverified`: it completed with a source or target commit other than the ones verified. Say
-  so first in the report, so the owner reviews what landed.
+  so first in the report, so the owner reviews what landed, and name the ref the output says
+  keeps the verified commit (completing deleted the source branch).
 - `failed`: report the lines above it. Don't retry a refused completion with other options.
+  When verify couldn't run, or `node`, `az` or its `azure-devops` extension is missing, the
+  problem is this checkout's, not the PR's: say so, with the remedy the output gives.
 
 The pin rests on Azure DevOps refusing a completion whose `lastMergeSourceCommit` isn't the
 PR's current head; no test here can exercise that, which is why the final confirmation exists.

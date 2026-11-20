@@ -1840,9 +1840,10 @@ printf 'x\n' > "$TMP_ROOT/desc-guid.md"
 expect_exit 1 apr open --default main --source archive/c-one --title t --description-file "$TMP_ROOT/desc-guid.md"
 grep -q 'no repository or project id' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a repository id that isn't a GUID used"; }
 [ ! -f "$AZ_FIX/rest.log" ] || fail "a PR was opened with an id that isn't a GUID"
+ado_scenario "$ahead"
 echo '{"pullRequestId":12}' > "$AZ_FIX/created.json"
 printf 'Archive c-one\n\nOnly openspec archive output: 100%% "mechanical".\n' > "$TMP_ROOT/desc.md"
-out="$(apr open --default main --source archive/c-one --title 'Archive c-one' --description-file "$TMP_ROOT/desc.md")" || fail "open"
+out="$(apr open --default main --source archive/c-one --title 'Archive c-one' --description-file "$TMP_ROOT/desc.md" 2>&1)" || { echo "$out"; fail "open"; }
 [ "$out" = pr=12 ] || fail "open output: $out"
 grep -qx "rest post https://dev.azure.com/example/$PROJ_ID/_apis/git/repositories/$REPO_ID/pullrequests?api-version=7.1" "$AZ_FIX/rest.log" || { cat "$AZ_FIX/rest.log"; fail "the create call"; }
 body_check "$(cat "$AZ_FIX/create-body.json")" "b.sourceRefName === 'refs/heads/archive/c-one' && b.targetRefName === 'refs/heads/main' && b.title === 'Archive c-one' && b.description.split('\n').length === 4 && b.description.includes('100% \"mechanical\"') && b.autoCompleteSetBy === undefined" \

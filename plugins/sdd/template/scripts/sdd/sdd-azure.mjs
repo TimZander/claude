@@ -9,10 +9,13 @@
 //       `origin` of the current directory's repository, as git uses it and as configured), as
 //       JSON. Exit 1 when it isn't one.
 //
-//   node sdd-azure.mjs find-archive [--page-size <n>] [<file>|-]
+//   node sdd-azure.mjs find-archive [--page-size <n>] [--after <file>] [<file>|-]
 //       Reads `az repos pr list -o json` and prints `pr=<id>` for each open archive PR from
 //       this repository's own branches (an `archive/` branch or a title starting "Archive", no
-//       fork), or `pr=none`. With --page-size, a list that long may be cut short: exit 3.
+//       fork), or `pr=none`. With --page-size, a list that long may be cut short: exit 3. With
+//       --after, the list past this one (`--skip <its length>`) must be empty: Azure DevOps
+//       can return a shorter page than asked for, so a list shorter than the page isn't proof
+//       on its own (exit 3).
 //
 //   node sdd-azure.mjs pr --default <branch> --project <name> --repository <name> [<file>|-]
 //       Checks a PR as `az repos pr show -o json` prints it: in this project and repository
@@ -29,12 +32,15 @@
 //         none       no policy evaluations: Azure DevOps still checks a completion itself
 //         approved   every enabled blocking policy is approved or not applicable
 //         pending    none failed, but a build is still queued or running: wait, read again
-//         reviewers  the only unmet blocking policies are "Minimum number of reviewers"
-//         blocked    any other blocking policy isn't met: a failed or expired build, and any
-//                    other policy not yet approved (Required reviewers, comments, work items,
-//                    a status), which waiting won't change
-//       Every evaluation must carry a boolean `configuration.isBlocking` (exit 3 otherwise), so
-//       a field missing from the input never makes a policy count as non-blocking. With
+//         reviewers  the only unmet blocking policies are "Minimum number of reviewers",
+//                    still waiting for approvals (queued)
+//         blocked    any other blocking policy isn't met: a failed or expired build, a
+//                    "Minimum number of reviewers" a vote rejected, and any other policy not
+//                    yet approved (Required reviewers, comments, work items, a status), which
+//                    waiting won't change
+//       Every evaluation must carry a boolean `configuration.isBlocking`, and an approved build
+//       a boolean `context.isExpired` (exit 3 otherwise), so a field missing from the input
+//       never makes a policy count as non-blocking, or a build as current. With
 //       --page-size, a list that long may be cut short: exit 3. Exit 0 for approved or none,
 //       1 otherwise.
 //
@@ -64,7 +70,9 @@
 //       lands the PR on a target nobody verified; the confirmation afterwards reports that as
 //       `unverified`. The merge strategy is named: the first of squash, noFastForward,
 //       rebaseMerge, rebase that every "Require a merge strategy" policy in --merge-policies
-//       (the branch's configurations, `az repos policy list --branch`) allows. Refuses (exit 1,
+//       (the branch's configurations, `az repos policy list --branch`) or --policies (the PR's
+//       evaluations) allows. The body also deletes the source branch (`deleteSourceBranch`):
+//       an archive branch has no further use, and it never transitions work items. Refuses (exit 1,
 //       a `- not completing:` line) unless the repository is on Azure DevOps, `autoMerge` is
 //       on, the PR's head is still <sha>, its merge was computed against --target, no reviewer
 //       voted Reject or Waiting for author, every required reviewer approved, and the policies
@@ -87,7 +95,6 @@ export const MINIMUM_REVIEWERS = 'fa4e907d-c16b-4a4c-9dfa-4906e5d171dd'
 export const MERGE_STRATEGY = 'fa4e907d-c16b-4a4c-9dfa-4916e5d171ab'
 
 const SHA = /^[0-9a-f]{40}$/
-const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/
 const GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 
 export class InputError extends Error {}
@@ -174,9 +181,24 @@ export function isSafeRef(ref) {
     && !ref.includes('..') && !ref.includes('//') && !ref.endsWith('/') && !ref.endsWith('.lock')
 }
 
-/** One line of untrusted text for a `- ` line. @param {unknown} text */
+/**
+ * Whether a branch name (without refs/heads/) is safe, by isSafeRef's rule. sdd-azure-pr.sh's
+ * safe_branch is the same rule in bash; the tests hold both to one list of names.
+ * @param {unknown} name
+ * @returns {boolean}
+ */
+export function isSafeBranch(name) {
+  return typeof name === 'string' && isSafeRef(`refs/heads/${name}`)
+}
+
+/**
+ * One line of untrusted text for a `- ` line, with logging-command syntax broken as the other
+ * sdd scripts break it: GitHub's `##[` and `::`, and Azure Pipelines' `##vso[` (in any case).
+ * @param {unknown} text
+ */
 function oneLine(text) {
-  return String(text).replace(/[\r\n\t]+/g, ' ')
+  return String(text).replace(/[\r\n\t]+/g, ' ').replace(/##\[/g, '#\\u0023[').replace(/##(vso)\[/gi, '#\\u0023$1[')
+    .replace(/::/g, ':\\u003a')
 }
 
 /**
@@ -300,10 +322,12 @@ export const BUILD = '0609b952-1397-4640-95ec-e00a01b2c241'
  *              still checked by Azure DevOps itself, and nothing may be bypassed
  *   approved   every enabled blocking policy is approved or not applicable
  *   pending    none failed, but a build is still queued or running
- *   reviewers  the only unmet blocking policies are "Minimum number of reviewers"
- *   blocked    any other blocking policy isn't met: a failed or expired build, and any other
- *              policy not yet approved (Required reviewers, comments, work items, a status),
- *              which waiting won't change
+ *   reviewers  the only unmet blocking policies are "Minimum number of reviewers", still
+ *              waiting for approvals (queued)
+ *   blocked    any other blocking policy isn't met: a failed or expired build, a "Minimum
+ *              number of reviewers" a vote rejected, and any other policy not yet approved
+ *              (Required reviewers, comments, work items, a status), which waiting won't change
+ * An approved Build Validation must say whether it expired (a boolean context.isExpired).
  * @param {unknown} input
  * @returns {{ state: 'none' | 'approved' | 'pending' | 'reviewers' | 'blocked', unmet: string[] }}
  */
@@ -323,13 +347,19 @@ export function judgePolicies(input) {
     }
     const typeId = String(config.type?.id ?? '').toLowerCase()
     const name = oneLine(config.type?.displayName ?? (typeId || 'unknown policy'))
-    // An expired build reads approved, but Azure DevOps won't complete on it.
+    // An expired build reads approved, but Azure DevOps won't complete on it. Read strictly: an
+    // approved build that doesn't say whether it expired is never taken as current.
+    if (typeId === BUILD && x.status === 'approved' && typeof x.context?.isExpired !== 'boolean') {
+      throw new InputError('an approved build policy evaluation has no boolean context.isExpired')
+    }
     const expired = typeId === BUILD && x.context?.isExpired === true
     if ((x.status === 'approved' && !expired) || x.status === 'notApplicable') {
       continue
     }
     unmet.push(`- ${name}: ${expired ? 'expired (queue the build again)' : oneLine(x.status)}`)
-    if (typeId === MINIMUM_REVIEWERS) {
+    // Only a count still waiting for approvals (queued) is the reviewer count alone: rejected
+    // means a vote against, and any other status is unexpected. A bypass skips neither.
+    if (typeId === MINIMUM_REVIEWERS && x.status === 'queued') {
       reviewers = true
     } else if (typeId === BUILD && !expired && (x.status === 'queued' || x.status === 'running')) {
       pending = true
@@ -467,7 +497,11 @@ export function mergeStrategy(input) {
     if (String(config.type.id ?? '').toLowerCase() !== MERGE_STRATEGY || !isLive(config)) {
       continue
     }
-    const settings = config.settings !== null && typeof config.settings === 'object' ? config.settings : {}
+    // Read strictly: settings that can't be read never mean "any strategy".
+    if (config.settings === null || typeof config.settings !== 'object' || Array.isArray(config.settings)) {
+      throw new InputError('a merge-strategy policy has no settings object')
+    }
+    const settings = config.settings
     const named = STRATEGIES.some(([, key]) => typeof settings[key] === 'boolean')
     /** @type {Set<string>} */
     let here
@@ -491,16 +525,18 @@ export function mergeStrategy(input) {
  * @returns {string[]}
  */
 export function reviewerObjections(pr) {
-  if (pr.reviewers === undefined || pr.reviewers === null) {
-    return []
-  }
+  // Read strictly: az always prints the list (empty when nobody reviews), and every vote is a
+  // number. Neither missing may read as "no objection".
   if (!Array.isArray(pr.reviewers)) {
     throw new InputError('the PR\'s reviewers must be an array')
   }
   const out = []
   for (const x of pr.reviewers) {
     const who = oneLine(x?.displayName ?? x?.uniqueName ?? 'a reviewer')
-    const vote = typeof x?.vote === 'number' ? x.vote : 0
+    if (typeof x?.vote !== 'number' || !Number.isFinite(x.vote)) {
+      throw new InputError(`a reviewer's vote must be a number (${who})`)
+    }
+    const vote = x.vote
     if (vote < 0) {
       out.push(`${who} voted ${vote <= -10 ? 'Reject' : 'Waiting for author'}`)
     } else if (x?.isRequired === true && vote <= 0) {
@@ -549,7 +585,9 @@ export function completeBody({ commit, target, pr, policies, mergePolicies, bypa
     return { refused: `a reviewer stands against the PR, which sdd never completes past: ${objections.join('; ')}` }
   }
   const { state } = judgePolicies(policies)
-  const merge = mergeStrategy(mergePolicies)
+  // The branch's configurations and the PR's own evaluations, which name every policy that
+  // applies to the PR: one inherited, or scoped by prefix, that the branch's list misses counts.
+  const merge = mergeStrategy([...configurationsOf(mergePolicies), ...evaluationsOf(policies)])
   if ('refused' in merge) {
     return merge
   }
@@ -632,7 +670,7 @@ function isMain() {
 }
 
 const USAGE = `usage: sdd-azure.mjs remote [<url>]
-       sdd-azure.mjs find-archive [--page-size <n>] [<file>|-]
+       sdd-azure.mjs find-archive [--page-size <n>] [--after <file>] [<file>|-]
        sdd-azure.mjs pr --default <branch> --project <name> --repository <name> [<file>|-]
        sdd-azure.mjs policies [--page-size <n>] [<file>|-]
        sdd-azure.mjs installed [--lock <file>] [<dir>]
@@ -676,12 +714,28 @@ function main(args) {
     return 0
   }
   if (cmd === 'find-archive') {
-    const { pageSize, file, ok } = pageArgs(rest)
-    if (!ok) {
+    let after = null
+    let args = rest
+    const at = rest.indexOf('--after')
+    if (at >= 0) {
+      after = rest[at + 1]
+      if (after === undefined || after.startsWith('--')) {
+        return usage()
+      }
+      args = [...rest.slice(0, at), ...rest.slice(at + 2)]
+    }
+    const { pageSize, file, ok } = pageArgs(args)
+    if (!ok || args.includes('--after')) {
       return usage()
     }
     const list = readJson(file)
     fullPage(list, pageSize, 'open PRs')
+    if (after !== null) {
+      const more = readJson(after)
+      if (!Array.isArray(more) || more.length > 0) {
+        throw new InputError(`the list past the first ${Array.isArray(list) ? list.length : 0} open PRs isn't empty: Azure DevOps returned a shorter page than asked for, so the list is cut short`)
+      }
+    }
     const ids = findArchivePrs(list)
     for (const id of ids) {
       console.log(`pr=${id}`)
@@ -707,7 +761,7 @@ function main(args) {
         return usage()
       }
     }
-    if (!opts['--default'] || !opts['--project'] || !opts['--repository'] || !BRANCH.test(opts['--default'])) {
+    if (!opts['--default'] || !opts['--project'] || !opts['--repository'] || !isSafeBranch(opts['--default'])) {
       return usage()
     }
     const result = checkPr(readJson(file), { defaultBranch: opts['--default'], project: opts['--project'], repository: opts['--repository'] })

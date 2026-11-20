@@ -26,7 +26,8 @@
 // Some settings belong to one host. `specDiffComment`, `statuses` and `archiveVerdicts` are
 // GitHub only (on Azure DevOps the diff goes to the build summary, and the pipeline is required
 // in a Build Validation policy instead); `archiveBypassReviewers` is Azure DevOps only. Setting
-// one for the other host is an error, never a silent no-op.
+// one to anything but its default for the other host is an error, never a silent no-op; its
+// default asks for nothing the other host can't honor, so it is accepted, for every one of them.
 //
 // The settings always come from the checkout these scripts run from. On GitHub, CI runs the
 // base branch's checkout, so they never come from a PR's tree. On Azure DevOps, a PR build runs
@@ -141,8 +142,8 @@ export function readConfig(root = TRUSTED_ROOT) {
     if (config.archiveVerdicts.length > 0) {
       throw new ConfigError('package.json sdd.archiveVerdicts is GitHub only: on Azure DevOps, require each pipeline in a Build Validation policy')
     }
-    // Its default stands for GitHub; set at all, it says something Azure DevOps can't honor.
-    if ('specDiffComment' in raw) {
+    // Off asks for no diff, which Azure DevOps can't honor: it always writes the build summary.
+    if (!config.specDiffComment) {
       throw new ConfigError('package.json sdd.specDiffComment is GitHub only: on Azure DevOps, the main-spec diff always goes to the build summary')
     }
   } else if (config.archiveBypassReviewers) {

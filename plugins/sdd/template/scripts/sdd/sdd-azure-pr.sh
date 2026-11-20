@@ -9,7 +9,8 @@
 #
 #   bash sdd-azure-pr.sh find  --default <branch>
 #       Prints `pr=<id>` for each open archive PR from this repository's own branches, or
-#       `pr=none`.
+#       `pr=none`. It reads the list past the first page too, which must be empty: a page
+#       Azure DevOps cut shorter than asked for is never read as the whole list.
 #
 #   bash sdd-azure-pr.sh open  --default <branch> --source <branch> --title <text>
 #                              --description-file <file>
@@ -23,20 +24,26 @@
 #          installed), so an OpenSpec CLI that a PR branch's `npm ci` installed isn't the one
 #          that verifies. It reads npm's records, not the files: code that rewrote node_modules
 #          in place isn't caught. On a mismatch: `npm ci --ignore-scripts --include=dev` here.
-#       2. Reads the PR (sdd-azure.mjs pr), and fetches its head; waits while the merge is
+#       2. Reads the PR (sdd-azure.mjs pr), and fetches its head into a ref of this run's own,
+#          refs/sdd/archive-pr-<id>-<pid>, deleted on exit (kept when `unverified`, and named:
+#          completing deletes the PR's source branch); waits while the merge is
 #          being computed, while the PR still names an older head than its branch, or while
 #          its merge was computed against another commit than the tip (lastMergeTargetCommit).
 #       3. Checks the head is based on the tip: an archive branch behind the default branch
 #          can't be verified against it.
 #       4. Runs sdd-archive.sh verify --base <tip> --result <head> from this checkout, and
-#          goes on only on `archive-mechanical: success`. This re-run is the gate: CI on Azure
-#          DevOps runs the PR's own scripts.
+#          goes on only when its last line is `archive-mechanical: success` and the line before
+#          it `- compared base <tip> with result <head>`. This re-run is the gate: CI on Azure
+#          DevOps runs the PR's own scripts. verify failing to run here (exit 2 or 3: OpenSpec
+#          not installed, say) is this checkout's failure, `failed`, never a verdict on the PR.
 #       5. Stops here with --no-merge or `"autoMerge": false`.
 #       6. Reads the policies, waiting while a build is queued or running.
 #       7. Right before completing, reads the PR, its policies, the branch's policy
 #          configurations and the default branch's tip again, and builds the body with
 #          sdd-azure.mjs complete-body: pinned to <head> (lastMergeSourceCommit), with the merge
-#          strategy the branch's policies allow, and a bypass only as complete-body allows one.
+#          strategy the branch's policies allow, deleting the source branch
+#          (`deleteSourceBranch`), and a bypass only as complete-body allows one. A build queued
+#          again since step 6 ends `timeout`: run again once it finishes.
 #          The API pins only the source, so the target is checked here instead: the tip must
 #          still be <tip>, and Azure DevOps must have computed the PR's merge against <tip>
 #          (lastMergeTargetCommit). A push to the default branch in the seconds between this
@@ -58,13 +65,18 @@
 #         timeout      still waiting on Azure DevOps (a merge, a build, the completion), or for
 #                      the PR's merge to be computed against the tip
 #         unverified   completed, but with a source or target commit other than the verified
-#                      ones: the owner must review what landed
+#                      ones: the owner must review what landed. The verified commit stays in
+#                      this repository as the run's ref, which the output names
 #         failed       an az call, git, a helper or this checkout failed (node_modules not
-#                      installed from the tip's lock file, for one)
+#                      installed from the tip's lock file, verify unable to run, for two)
+#
+# Every mode first checks that node, az and az's azure-devops extension are installed. Options
+# belong to a mode, each given once. Branch names follow sdd-azure.mjs's rule: [A-Za-z0-9._/-],
+# starting with a letter or digit, without `..`, `//`, a trailing `/` or `.lock`.
 #
 # Environment: SDD_AZ_WAIT_MERGE (default 120), SDD_AZ_WAIT_POLICIES (1200) and
 # SDD_AZ_WAIT_COMPLETE (120) are the longest waits in seconds (0: don't wait); SDD_AZ_POLL (10,
-# at least 1) the interval. az runs with PYTHONIOENCODING=utf-8, so non-ASCII names reach the
+# at least 1) the interval. Each is at most 86400. az runs with PYTHONIOENCODING=utf-8, so non-ASCII names reach the
 # helpers intact on Windows, where az otherwise writes in the console's code page.
 #
 # Exit status: 0 completed or verified, or find/open done; 1 any other state, or find/open
@@ -89,6 +101,10 @@ STATE_PRINTED=0
 ARMED=0
 TMP=""
 ROOT=""
+# The ref this run fetches the PR's head into: its own, so two runs, or a ref of the same name,
+# never clobber each other. KEEP_REF keeps it past exit.
+HEAD_REF=""
+KEEP_REF=0
 finish() {
     STATE_PRINTED=1
     echo "archive-pr: $1"
@@ -100,7 +116,9 @@ finish() {
 on_exit() {
     local code=$?
     [ -z "$TMP" ] || rm -rf "$TMP"
-    [ -z "$ROOT" ] || git -C "$ROOT" update-ref -d refs/sdd/archive-head 2>/dev/null || true
+    if [ -n "$HEAD_REF" ] && [ $KEEP_REF -eq 0 ]; then
+        git -C "$ROOT" update-ref -d "$HEAD_REF" 2>/dev/null || true
+    fi
     if [ $ARMED -eq 1 ] && [ $STATE_PRINTED -eq 0 ]; then
         echo "archive-pr: failed"
         code=1
@@ -152,14 +170,34 @@ az_rest() {
     fi
 }
 
-# A whole number of seconds from the environment, at least $3.
+# A whole number of seconds from the environment, from $3 to SECS_MAX. At most six digits are
+# read, so bash's arithmetic never sees a number too large for it.
+SECS_MAX=86400
 secs() {
     local v="${!1:-$2}"
-    if ! [[ "$v" =~ ^[0-9]+$ ]] || [ $((10#$v)) -lt "$3" ]; then
-        echo "sdd-azure-pr: $1 must be a whole number of seconds, at least $3" >&2
+    if ! [[ "$v" =~ ^[0-9]{1,6}$ ]] || [ $((10#$v)) -lt "$3" ] || [ $((10#$v)) -gt $SECS_MAX ]; then
+        echo "sdd-azure-pr: $1 must be a whole number of seconds, at least $3 and at most $SECS_MAX" >&2
         exit 2
     fi
     printf '%s' $((10#$v))
+}
+
+# A branch name sdd-azure.mjs's isSafeRef accepts under refs/heads/: the same rule.
+safe_branch() {
+    [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || return 1
+    case "$1" in
+        *..*|*//*|*/|*.lock) return 1 ;;
+    esac
+}
+
+GUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+
+# What every mode needs, each with its remedy.
+preflight() {
+    command -v node >/dev/null 2>&1 || { say "node is not installed: install Node.js, then run again"; return 1; }
+    command -v az >/dev/null 2>&1 || { say "az is not installed: install the Azure CLI (https://aka.ms/azcli), then run \`az extension add --name azure-devops\` and sign in (\`az login\`, or a PAT in AZURE_DEVOPS_EXT_PAT)"; return 1; }
+    azj extension show --name azure-devops > /dev/null 2> "$TMP/az.err" \
+        || { say "az's azure-devops extension is not installed: run \`az extension add --name azure-devops\`, then run again"; quoted "$TMP/az.err"; return 1; }
 }
 
 load_remote() {
@@ -169,9 +207,12 @@ load_remote() {
         return 1
     fi
     printf '%s' "$remote" > "$TMP/remote.json"
-    ORG="$(jget "$TMP/remote.json" organization)"
-    PROJECT="$(jget "$TMP/remote.json" project)"
-    REPOSITORY="$(jget "$TMP/remote.json" repository)"
+    # Called as `if ! load_remote`, where set -e is off: each value is checked.
+    ORG="$(jget "$TMP/remote.json" organization)" || ORG=""
+    PROJECT="$(jget "$TMP/remote.json" project)" || PROJECT=""
+    REPOSITORY="$(jget "$TMP/remote.json" repository)" || REPOSITORY=""
+    [ -n "$ORG" ] && [ -n "$PROJECT" ] && [ -n "$REPOSITORY" ] \
+        || { say "cannot read origin's organization, project and repository"; return 1; }
 }
 
 # The repository's and its project's ids, for the REST API.
@@ -180,7 +221,7 @@ load_ids() {
         || { say "az repos show failed:"; quoted "$TMP/az.err"; return 1; }
     REPO_ID="$(jget "$TMP/repo.json" id)"
     PROJECT_ID="$(jget "$TMP/repo.json" project.id)"
-    [ -n "$REPO_ID" ] && [ -n "$PROJECT_ID" ] || { say "az repos show printed no repository or project id"; return 1; }
+    [[ "$REPO_ID" =~ $GUID_RE ]] && [[ "$PROJECT_ID" =~ $GUID_RE ]] || { say "az repos show printed no repository or project id (a GUID)"; return 1; }
 }
 
 # The repository's REST URL, with a path and query after it.
@@ -191,7 +232,18 @@ repo_url() {
 DEFAULT=""; PR=""; SOURCE=""; TITLE=""; DESC=""; MESSAGE=""; NO_MERGE=0; BYPASS=0
 [ $# -ge 1 ] || usage
 MODE="$1"; shift
+# The options each mode takes; each may be given once.
+case "$MODE" in
+    find) OPTIONS=" --default " ;;
+    open) OPTIONS=" --default --source --title --description-file " ;;
+    merge) OPTIONS=" --default --pr --message --no-merge --bypass-reviewers " ;;
+    *) usage ;;
+esac
+SEEN=" "
 while [ $# -gt 0 ]; do
+    case "$OPTIONS" in *" $1 "*) ;; *) usage ;; esac
+    case "$SEEN" in *" $1 "*) usage ;; esac
+    SEEN="$SEEN$1 "
     case "$1" in
         --default) [ $# -ge 2 ] || usage; DEFAULT="$2"; shift 2 ;;
         --pr) [ $# -ge 2 ] || usage; PR="$2"; shift 2 ;;
@@ -204,12 +256,10 @@ while [ $# -gt 0 ]; do
         *) usage ;;
     esac
 done
-[[ "$DEFAULT" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || usage
+safe_branch "$DEFAULT" || usage
 case "$MODE" in
-    find) ;;
-    open) [ -n "$TITLE" ] && [ -f "$DESC" ] && [[ "$SOURCE" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || usage ;;
+    open) [ -n "$TITLE" ] && [ -f "$DESC" ] && safe_branch "$SOURCE" || usage ;;
     merge) [[ "$PR" =~ ^[1-9][0-9]*$ ]] || usage ;;
-    *) usage ;;
 esac
 POLL="$(secs SDD_AZ_POLL 10 1)"
 WAIT_MERGE="$(secs SDD_AZ_WAIT_MERGE 120 0)"
@@ -219,16 +269,27 @@ WAIT_COMPLETE="$(secs SDD_AZ_WAIT_COMPLETE 120 0)"
 [ "$MODE" != merge ] || ARMED=1
 ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 TMP="$(mktemp -d)"
-if ! load_remote; then
+if ! preflight || ! load_remote; then
     [ "$MODE" != merge ] || finish failed
     exit 1
 fi
 
 if [ "$MODE" = find ]; then
-    azj repos pr list --org "$ORG" --project "$PROJECT" --repository "$REPOSITORY" \
-        --status active --target-branch "$DEFAULT" --top "$PAGE" > "$TMP/list.json" 2> "$TMP/az.err" \
+    list_prs() { # more az arguments
+        azj repos pr list --org "$ORG" --project "$PROJECT" --repository "$REPOSITORY" \
+            --status active --target-branch "$DEFAULT" "$@"
+    }
+    list_prs --top "$PAGE" > "$TMP/list.json" 2> "$TMP/az.err" \
         || { say "az repos pr list failed:"; quoted "$TMP/az.err"; exit 1; }
-    node "$AZURE" find-archive --page-size "$PAGE" "$TMP/list.json" > "$TMP/find.out" 2> "$TMP/helper.err" \
+    # Azure DevOps may return fewer than --top: the list past this page must be empty.
+    count="$(jget "$TMP/list.json" length)" || count=""
+    set --
+    if [[ "$count" =~ ^[1-9][0-9]*$ ]]; then
+        list_prs --skip "$count" --top "$PAGE" > "$TMP/more.json" 2> "$TMP/az.err" \
+            || { say "az repos pr list failed:"; quoted "$TMP/az.err"; exit 1; }
+        set -- --after "$TMP/more.json"
+    fi
+    node "$AZURE" find-archive --page-size "$PAGE" ${1+"$@"} "$TMP/list.json" > "$TMP/find.out" 2> "$TMP/helper.err" \
         || { say "sdd-azure.mjs find-archive failed:"; quoted "$TMP/helper.err"; exit 1; }
     cat "$TMP/find.out"
     exit 0
@@ -359,9 +420,10 @@ while :; do
     status=0
     read_pr || status=$?
     if [ $status -eq 0 ]; then
-        git -C "$ROOT" fetch -q --no-tags origin "+$SOURCE_REF:refs/sdd/archive-head" 2> "$TMP/git.err" \
+        HEAD_REF="refs/sdd/archive-pr-$PR-$$"
+        git -C "$ROOT" fetch -q --no-tags origin "+$SOURCE_REF:$HEAD_REF" 2> "$TMP/git.err" \
             || { say "cannot fetch $SOURCE_REF:"; quoted "$TMP/git.err"; finish failed; }
-        fetched="$(git -C "$ROOT" rev-parse refs/sdd/archive-head 2> "$TMP/git.err")" \
+        fetched="$(git -C "$ROOT" rev-parse "$HEAD_REF" 2> "$TMP/git.err")" \
             || { say "cannot read the fetched head:"; quoted "$TMP/git.err"; finish failed; }
         if [ "$fetched" != "$HEAD_SHA" ]; then
             # Azure DevOps updates the PR's head a little after a push: read it again.
@@ -405,9 +467,18 @@ VERIFIED="$HEAD_SHA"
 
 # 4. The gate: verify, with this checkout's scripts.
 # Exit 0 also means not-an-archive-pr: only the success line itself lets it through.
-verify_out="$(bash "$SCRIPT_DIR/sdd-archive.sh" verify -C "$ROOT" --base "$TIP" --result "$VERIFIED" 2>&1)" || true
+verify_status=0
+verify_out="$(bash "$SCRIPT_DIR/sdd-archive.sh" verify -C "$ROOT" --base "$TIP" --result "$VERIFIED" 2>&1)" || verify_status=$?
 printf '%s\n' "$verify_out"
-if [ "$(printf '%s\n' "$verify_out" | tail -n 1)" != "archive-mechanical: success" ]; then
+# 2 and 3 are verify failing to run here (usage, or this checkout: OpenSpec not installed, say),
+# not a verdict on the PR.
+if [ $verify_status -ge 2 ]; then
+    say "verify could not run (sdd-archive.sh exited $verify_status): the lines above say what in this checkout to fix. Fix it and run again; this says nothing about the PR"
+    finish failed
+fi
+# The verdict is the last non-empty line, right after the comparison of exactly these commits.
+verdict="$(printf '%s\n' "$verify_out" | awk 'NF { before = last; last = $0 } END { print before; print last }')"
+if [ "$verdict" != "$(printf -- '- compared base %s with result %s\narchive-mechanical: success' "$TIP" "$VERIFIED")" ]; then
     say "verify did not pass: this is not a mechanical archive of $DEFAULT. Report the lines above and leave the PR to its owner"
     finish refused
 fi
@@ -458,6 +529,11 @@ fi
 status=0
 read_policies || status=$?
 [ $status -eq 0 ] || policies_failed $status
+if [ "$POLICIES" = pending ]; then
+    sed '/^policies=/d' "$TMP/policies.out"
+    say "a build was queued again right before completing: run again once it finishes"
+    finish timeout
+fi
 azj repos policy list --org "$ORG" --project "$PROJECT_ID" --repository-id "$REPO_ID" --branch "$DEFAULT" \
     > "$TMP/merge-policies.json" 2> "$TMP/az.err" \
     || { say "az repos policy list failed:"; quoted "$TMP/az.err"; finish failed; }
@@ -523,6 +599,9 @@ merged_target="$(jget "$TMP/done.json" lastMergeTargetCommit.commitId)"
 say "completed: source $merged_source, target $merged_target, merge strategy $(jget "$TMP/body.json" completionOptions.mergeStrategy)"
 if [ "$merged_source" != "$VERIFIED" ] || [ "$merged_target" != "$TIP" ]; then
     say "UNVERIFIED: it completed with source $merged_source and target $merged_target, but $VERIFIED was verified against $TIP. The owner must review what landed"
+    # Completing deleted the source branch: the verified commit stays here for that review.
+    KEEP_REF=1
+    say "the verified commit is kept as $HEAD_REF in this repository; delete it with \`git update-ref -d $HEAD_REF\` once reviewed"
     finish unverified
 fi
 finish completed
