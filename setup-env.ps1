@@ -87,82 +87,31 @@ Write-Host ''
 
 Write-Host '=== Team Standards ==='
 
-$StartMarker = '<!-- TEAM-STANDARDS:tzander-skills:START -->'
-$EndMarker = '<!-- TEAM-STANDARDS:tzander-skills:END -->'
-
 $StandardsFile = Join-Path (Join-Path $RepoRoot 'standards') 'CLAUDE.md'
 $ClaudeDir = Join-Path $HOME '.claude'
 $TargetFile = Join-Path $ClaudeDir 'CLAUDE.md'
+$StandardsFailed = $false
+
+if (-not (Test-Path $ClaudeDir)) {
+    New-Item -ItemType Directory -Path $ClaudeDir -Force | Out-Null
+}
 
 if (-not (Test-Path $StandardsFile)) {
     Write-Warning "Standards file not found: $StandardsFile"
 }
 else {
-    $StandardsContent = Get-Content -Path $StandardsFile -Raw
-
-    $ManagedSection = @"
-$StartMarker
-$StandardsContent
-$EndMarker
-"@
-
-    if (-not (Test-Path $ClaudeDir)) {
-        New-Item -ItemType Directory -Path $ClaudeDir -Force | Out-Null
+    # The splice lives in its own script so it can be tested in isolation
+    # (scripts/test-sync-teamstandards.ps1). When it refuses (damaged
+    # markers), the settings sync below is independent, so carry on and fail
+    # at the end.
+    . (Join-Path (Join-Path $RepoRoot 'scripts') 'Sync-TeamStandards.ps1')
+    try {
+        Sync-TeamStandards -TargetFile $TargetFile -StandardsFile $StandardsFile
     }
-
-    if (-not (Test-Path $TargetFile)) {
-        Set-Content -Path $TargetFile -Value $ManagedSection -NoNewline
-        Write-Host "Created $TargetFile with team standards."
-    }
-    else {
-        $ExistingContent = Get-Content -Path $TargetFile -Raw
-
-        if ($ExistingContent -match [regex]::Escape($StartMarker)) {
-            $Pattern = [regex]::Escape($StartMarker) + '[\s\S]*?' + [regex]::Escape($EndMarker)
-
-            $OldSectionPattern = [regex]::Escape($StartMarker) + '\r?\n([\s\S]*?)\r?\n' + [regex]::Escape($EndMarker)
-            $OldSection = [regex]::Match($ExistingContent, $OldSectionPattern).Groups[1].Value
-
-            $UpdatedContent = [regex]::Replace($ExistingContent, $Pattern, $ManagedSection)
-
-            if ($UpdatedContent -eq $ExistingContent) {
-                Write-Host "Team standards in $TargetFile are already up to date."
-            }
-            else {
-                $OldLines = $OldSection -split '\r?\n'
-                $NewLines = $StandardsContent.TrimEnd() -split '\r?\n'
-                $Diff = Compare-Object -ReferenceObject $OldLines -DifferenceObject $NewLines
-                if ($Diff) {
-                    Write-Host 'Changes:'
-                    foreach ($d in $Diff) {
-                        if ($d.SideIndicator -eq '=>') {
-                            Write-Host "  + $($d.InputObject)"
-                        }
-                        else {
-                            Write-Host "  - $($d.InputObject)"
-                        }
-                    }
-                }
-
-                Set-Content -Path $TargetFile -Value $UpdatedContent -NoNewline
-                Write-Host "Updated team standards in $TargetFile."
-            }
-        }
-        else {
-            $Separator = "`n`n"
-            if ($ExistingContent -and -not $ExistingContent.EndsWith("`n")) {
-                $Separator = "`n`n"
-            }
-            elseif ($ExistingContent -and $ExistingContent.EndsWith("`n`n")) {
-                $Separator = ''
-            }
-            elseif ($ExistingContent -and $ExistingContent.EndsWith("`n")) {
-                $Separator = "`n"
-            }
-            $AppendedContent = $ExistingContent + $Separator + $ManagedSection
-            Set-Content -Path $TargetFile -Value $AppendedContent -NoNewline
-            Write-Host "Appended team standards to $TargetFile."
-        }
+    catch {
+        $StandardsFailed = $true
+        Write-Host "error: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host 'Team standards were not synced; continuing with the remaining steps.' -ForegroundColor Red
     }
 }
 
@@ -207,4 +156,8 @@ else {
 }
 
 Write-Host ''
+if ($StandardsFailed) {
+    Write-Host '=== Setup finished with errors: team standards were not synced (see above) ===' -ForegroundColor Red
+    exit 1
+}
 Write-Host '=== Setup complete ==='

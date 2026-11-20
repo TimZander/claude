@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Smoke test for setup-env.sh's BSD/macOS diff-preview fallback.
+# Smoke test for the BSD/macOS diff-preview fallback used by
+# scripts/sync-standards.sh (the team-standards splice setup-env.sh runs).
 #
 # What's covered: the extracted awk program at scripts/diff-preview.awk,
 # which is the logic that can diverge between GNU and BSD diff output.
@@ -7,7 +8,7 @@
 # with `-- ` that would false-match the unified-diff header regex before
 # the NR-based fix).
 #
-# What's NOT covered: the GNU-vs-BSD detection probe at setup-env.sh:141
+# What's NOT covered: the GNU-vs-BSD detection probe in scripts/sync-standards.sh
 # (requires a mock `diff` that rejects --*-line-format flags). Test that
 # manually by running the script on each platform.
 #
