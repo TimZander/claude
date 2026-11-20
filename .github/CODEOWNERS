@@ -1,0 +1,14 @@
+# Files that setup-env copies onto every developer's machine, and the checks
+# that guard them. A change here reaches everyone at their next sync, so it
+# needs an owner's review. Enforced only while branch protection on main has
+# "Require review from Code Owners" turned on.
+
+/standards/              @TimZander
+/hooks/                  @TimZander
+/setup-env.sh            @TimZander
+/setup-env.ps1           @TimZander
+/scripts/sync-standards.sh       @TimZander
+/scripts/Sync-TeamStandards.ps1  @TimZander
+/scripts/merge_settings.py       @TimZander
+/scripts/Merge-JsonObjects.ps1   @TimZander
+/.github/                @TimZander

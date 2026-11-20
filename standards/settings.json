@@ -1,8 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Write(/tmp/pastedlog-*)",
-      "Write(.claude-scratch/**)",
+      "Edit(//tmp/pastedlog-*)",
+      "Edit(.claude-scratch/**)",
 
       "Bash(gh pr view:*)",
       "Bash(gh pr list:*)",
@@ -18,7 +18,7 @@
       "Bash(gh label list:*)",
       "Bash(gh release view:*)",
       "Bash(gh search:*)",
-      "Bash(gh auth status:*)",
+      "Bash(gh auth status)",
 
       "Bash(az account show:*)",
       "Bash(az account list:*)",
@@ -38,7 +38,6 @@
       "mcp__azure-devops__wit_query_by_wiql",
       "mcp__azure-devops__wit_list_work_item_comments",
       "mcp__azure-devops__wit_my_work_items",
-      "mcp__azure-devops__wit_get_work_item_attachment",
       "mcp__azure-devops__wit_get_work_item_type",
       "mcp__azure-devops__wit_get_query",
       "mcp__azure-devops__wit_get_query_results_by_id",
@@ -92,7 +91,6 @@
       "Bash(git diff-tree:*)",
       "Bash(git diff-index:*)",
       "Bash(git config --get:*)",
-      "Bash(git config --list:*)",
       "Bash(git worktree list:*)",
 
       "mcp__newrelic__execute_nrql_query",
@@ -102,6 +100,31 @@
       "mcp__newrelic__list_change_events",
       "mcp__newrelic__convert_time_period_to_epoch_ms"
     ],
+    "ask": [
+      "Bash(git log *--output*)",
+      "Bash(git diff *--output*)",
+      "Bash(git show *--output*)",
+      "Bash(git rev-list *--output*)",
+      "Bash(git shortlog *--output*)",
+      "Bash(git diff-tree *--output*)",
+      "Bash(git diff-index *--output*)",
+      "Bash(git blame *--output*)",
+      "Bash(git blame *--con*)",
+
+      "Bash(git config --list *)",
+      "Bash(gh auth status *t*)",
+      "mcp__azure-devops__wit_get_work_item_attachment",
+
+      "Bash(git push *--force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * -f*)",
+      "Bash(git push * +*)",
+      "Bash(git commit *--amend*)"
+    ],
     "deny": []
+  },
+  "attribution": {
+    "commit": "",
+    "pr": ""
   }
 }
