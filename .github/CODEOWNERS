@@ -1,0 +1,35 @@
+# Code owners for the files setup-env copies onto every developer's machine,
+# and for the checks that guard them. A merge to any of these paths changes
+# every developer's environment at their next sync.
+#
+# This file only blocks merges once branch protection on `main` has
+# "Require review from Code Owners" turned on. See README.md, "Code owners".
+
+# Team standards and settings synced into ~/.claude/
+/standards/                              @TimZander
+
+# Global git hooks installed into ~/.git-hooks/
+/hooks/                                  @TimZander
+
+# Setup entry points
+/setup-env.sh                            @TimZander
+/setup-env.ps1                           @TimZander
+
+# Scripts setup-env runs to sync standards and merge settings
+/scripts/sync-standards.sh               @TimZander
+/scripts/Sync-TeamStandards.ps1          @TimZander
+/scripts/merge_settings.py               @TimZander
+/scripts/Merge-JsonObjects.ps1           @TimZander
+/scripts/diff-preview.awk                @TimZander
+
+# Tests that guard those scripts and setup-env
+/scripts/test_sync-standards.sh          @TimZander
+/scripts/test-sync-teamstandards.ps1     @TimZander
+/scripts/test_merge_settings.py          @TimZander
+/scripts/test-merge-jsonobjects.ps1      @TimZander
+/scripts/test_setup-env.sh               @TimZander
+/scripts/test-setup-env-integration.ps1  @TimZander
+/scripts/test_no-git-config-get-footgun.sh @TimZander
+
+# CI workflows, PR template, and this file
+/.github/                                @TimZander
