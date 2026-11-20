@@ -47,7 +47,7 @@ Run the setup script to bootstrap your local environment — installs global git
 ./setup-env.ps1
 ```
 
-Re-run after pulling updates to pick up new hooks or standard changes.
+Re-run after pulling updates to pick up new hooks, standards or permission rules. Permission changes reach your machine only when you re-run it: a grant the team withdraws stays active in your `~/.claude/settings.json` until the next sync adds the `ask` rule that takes it back.
 
 ### What it does
 
@@ -55,6 +55,7 @@ Re-run after pulling updates to pick up new hooks or standard changes.
 2. **Team standards** — Syncs `standards/CLAUDE.md` into `~/.claude/CLAUDE.md`, between the `TEAM-STANDARDS` START and END marker lines. Everything outside those markers is yours and is kept exactly as written. Before each update the previous file is copied to `~/.claude/CLAUDE.md.team-sync.bak` (one copy, replaced on the next update; it holds your personal content too, so keep it out of anything you publish).
    - If the markers are damaged (one missing, duplicated, or not on a line of its own), setup changes nothing in that file, finishes the other steps, and exits with an error. Fix the markers by hand — or delete the whole team block, markers included, so it is re-appended — then re-run.
    - On Windows PowerShell the file must be UTF-8; setup refuses to rewrite a file in another encoding rather than altering your text.
+3. **Team settings** — Merges `standards/settings.json` into `~/.claude/settings.json`: read-only commands that run without a prompt, `ask` rules that always prompt (force pushes, `--amend`, flags that write files or print credentials), and `attribution` turned off for commits and PRs. Your own entries are kept; the merge only adds.
 
 ### Per-repo opt-out
 

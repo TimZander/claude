@@ -10,7 +10,6 @@ on:
       - "standards/allowlist_common.py"
       - "standards/measure-allowlist-impact.py"
       - "standards/test-*.py"
-      - "standards/test-*.sh"
       - ".github/workflows/validate-settings.yml"
   push:
     branches: [main]
@@ -23,7 +22,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-      - name: Validate allowlist has no dangerous entries
+      - name: Validate what the team settings file may grant
         run: python3 standards/validate-settings.py
       - name: Unit-test the shared allowlist logic
         run: python3 standards/test-allowlist-common.py

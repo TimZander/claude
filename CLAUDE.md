@@ -12,14 +12,16 @@ This repository doesn't use spec-driven development (sdd).
 
 The shared `~/.claude/CLAUDE.md` (team coding standards) is sourced from `standards/CLAUDE.md` in this repo. When asked to add or edit shared/team rules, modify `standards/CLAUDE.md` — not the developer's `~/.claude/CLAUDE.md` directly.
 
-The shared `~/.claude/settings.json` (team permission rules and settings) is sourced from `standards/settings.json`. The sync scripts deep-merge team settings into the user's existing settings (arrays are unioned, objects are merged, personal entries are preserved). When asked to add or edit shared settings, modify `standards/settings.json`.
+The shared `~/.claude/settings.json` (team permission rules and settings) is sourced from `standards/settings.json`. The sync scripts deep-merge team settings into the user's existing settings (arrays are unioned, objects are merged, personal entries are preserved). When asked to add or edit shared settings, modify `standards/settings.json`, and run `standards/validate-settings.py`: the team file may hold only `permissions.allow`/`ask`/`deny` and `attribution`, and its header explains what each rule list may contain.
+
+Because the merge only ever adds entries, removing an `allow` rule does not take it away from developers who already synced it. To revoke a grant, keep an `ask` rule that matches it (Claude Code checks `ask` before `allow`) and list it in `POLICY_ASK` in the validator so it cannot be deleted by accident. Team `ask` rules also cannot be opted out of personally — the next sync re-adds them.
 
 ### Where standards live
 
 | Location | Scope | What belongs here |
 |---|---|---|
 | `standards/CLAUDE.md` | All repos, all developers | Coding conventions, review standards, CLI references (e.g., GraphQL snippets), workflow rules |
-| `standards/settings.json` | All repos, all developers | Tool permissions, environment variables, hooks |
+| `standards/settings.json` | All repos, all developers | Permission rules (`allow`/`ask`/`deny`) and `attribution` only — the validator rejects `env`, `hooks` and every other key |
 | `CLAUDE.md` (this file) | This repo only | Repo structure, plugin instructions, repo-specific references (e.g., SQL/TFVC for this project) |
 | `~/.claude/CLAUDE.md` | All repos, one developer | Private credentials, connection strings, personal overrides (never edit directly — managed by sync scripts + personal additions) |
 
