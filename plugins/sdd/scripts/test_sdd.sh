@@ -1007,6 +1007,8 @@ expect_exit 2 node "$AZ" remote a b
 expect_exit 1 node "$AZ" remote https://github.com/o/r.git
 expect_exit 2 node "$AZ" bogus
 sha_a=1111111111111111111111111111111111111111
+# The target commit a PR's merge was computed against (lastMergeTargetCommit).
+tgt_a=3333333333333333333333333333333333333333
 REPO_ID=aaaaaaaa-0000-0000-0000-000000000001 PROJ_ID=bbbbbbbb-0000-0000-0000-000000000002
 # A PR as `az repos pr show` prints it, with one field replaced: pr_json [<field> <JSON value>]...
 pr_json() {
@@ -1016,13 +1018,14 @@ pr_json() {
         repository: { id: process.env.REPO_ID, name: "repo", project: { id: process.env.PROJ_ID, name: "My Project" } },
         targetRefName: "refs/heads/main", sourceRefName: "refs/heads/archive/x", mergeStatus: "succeeded",
         lastMergeSourceCommit: { commitId: process.env.sha_a },
+        lastMergeTargetCommit: { commitId: process.env.tgt_a },
       }
       const a = process.argv.slice(1)
       for (let i = 0; i < a.length; i += 2) { pr[a[i]] = JSON.parse(a[i + 1]) }
       process.stdout.write(JSON.stringify(pr))
     ' "$@"
 }
-export REPO_ID PROJ_ID sha_a
+export REPO_ID PROJ_ID sha_a tgt_a
 pr_check() { pr_json "$@" | node "$AZ" pr --default main --project 'my project' --repository REPO; }
 out="$(pr_check)" || { echo "$out"; fail "a good archive PR refused"; }
 [ "$out" = "$(printf 'head=%s\nsource=refs/heads/archive/x\nrepository_id=%s\nproject_id=%s\npr=ok' "$sha_a" "$REPO_ID" "$PROJ_ID")" ] || fail "pr output: $out"
@@ -1094,13 +1097,13 @@ pass "sdd-azure: policy states, strictly read; pending only for a build"
 
 # complete-body: the PR's head and reviewers, the policies, the branch's merge policies and the
 # settings decide.
-pr_votes() { # head, reviewers JSON
-    printf '{"status":"active","lastMergeSourceCommit":{"commitId":"%s"},"reviewers":%s}' "$1" "${2:-[]}"
+pr_votes() { # head, reviewers JSON, target (default $tgt_a)
+    printf '{"status":"active","lastMergeSourceCommit":{"commitId":"%s"},"lastMergeTargetCommit":{"commitId":"%s"},"reviewers":%s}' "$1" "${3:-$tgt_a}" "${2:-[]}"
 }
 sdd_complete() { # policies JSON, PR JSON, more args (merge policies from $CB_MP, default none)
     printf '%s' "$2" > "$TMP_ROOT/cb-pr.json"
     printf '%s' "${CB_MP:-[]}" > "$TMP_ROOT/cb-mp.json"
-    printf '%s' "$1" | node "$AZ" complete-body --commit "$sha_a" --pr "$TMP_ROOT/cb-pr.json" --policies - --merge-policies "$TMP_ROOT/cb-mp.json" "${@:3}"
+    printf '%s' "$1" | node "$AZ" complete-body --commit "$sha_a" --target "$tgt_a" --pr "$TMP_ROOT/cb-pr.json" --policies - --merge-policies "$TMP_ROOT/cb-mp.json" "${@:3}"
 }
 body_check() { # body, JS condition on b (the body)
     printf '%s' "$1" | node -e 'const b = JSON.parse(require("fs").readFileSync(0, "utf8")); if (!(eval(process.argv[1]))) { process.exit(1) }' "$2"
@@ -1115,6 +1118,12 @@ body_check "$out" "b.completionOptions.bypassPolicy === undefined && b.completio
 sha_b=2222222222222222222222222222222222222222
 expect_exit 1 sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_b)"
 grep -q "head is no longer $sha_a" "$TMP_ROOT/out" || fail "a moved head not refused"
+# The target too: a PR whose merge Azure DevOps computed against another commit of the default
+# branch than the verified one never completes.
+expect_exit 1 sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_a '[]' $sha_b)"
+grep -q "merge was computed against $sha_b, not $tgt_a" "$TMP_ROOT/out" || fail "a moved target not refused"
+expect_exit 1 sdd_complete "[$(pol $MR approved)]" '{"status":"active","lastMergeSourceCommit":{"commitId":"'"$sha_a"'"}}'
+grep -q "merge was computed against nothing, not $tgt_a" "$TMP_ROOT/out" || fail "a PR without a target commit not refused"
 # A vote against, or a required reviewer who hasn't approved, refuses in every policy state.
 expect_exit 1 sdd_complete "[$(pol $MR approved)]" "$(pr_votes $sha_a '[{"displayName":"Ann","vote":-10}]')"
 grep -q 'Ann voted Reject' "$TMP_ROOT/out" || fail "a Reject vote with approved policies completed"
@@ -1184,12 +1193,15 @@ echo '{"sdd":{"host":"azure-devops"}}' > "$rc/package.json"
 printf '[%s]' "$(pol $MR approved)" > "$TMP_ROOT/pol-ok"
 pr_votes $sha_a > "$TMP_ROOT/pr-ok"
 echo '[]' > "$TMP_ROOT/mp-ok"
-expect_exit 3 node "$AZ" complete-body --commit abc --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok" --merge-policies "$TMP_ROOT/mp-ok"
+expect_exit 3 node "$AZ" complete-body --commit "$sha_a" --target abc --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok" --merge-policies "$TMP_ROOT/mp-ok"
+grep -q -- '--target must be a full 40-character commit id' "$TMP_ROOT/out" || fail "a short target id not refused by name"
+expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok" --merge-policies "$TMP_ROOT/mp-ok"
+expect_exit 3 node "$AZ" complete-body --commit abc --target "$tgt_a" --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok" --merge-policies "$TMP_ROOT/mp-ok"
 grep -q 'full 40-character commit id' "$TMP_ROOT/out" || fail "a short commit id not refused by name"
-expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --commit "$sha_a" --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok" --merge-policies "$TMP_ROOT/mp-ok"
-expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok" --merge-policies "$TMP_ROOT/mp-ok" --message --bypass-reviewers
-expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok"
-expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --pr - --policies - --merge-policies "$TMP_ROOT/mp-ok"
+expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --target "$tgt_a" --commit "$sha_a" --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok" --merge-policies "$TMP_ROOT/mp-ok"
+expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --target "$tgt_a" --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok" --merge-policies "$TMP_ROOT/mp-ok" --message --bypass-reviewers
+expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --target "$tgt_a" --pr "$TMP_ROOT/pr-ok" --policies "$TMP_ROOT/pol-ok"
+expect_exit 2 node "$AZ" complete-body --commit "$sha_a" --target "$tgt_a" --pr - --policies - --merge-policies "$TMP_ROOT/mp-ok"
 pass "complete-body: settings, a bad commit id and usage errors"
 
 # --- Azure DevOps: sdd-azure-pr.sh, against a stub az and a real origin ----------------------
@@ -1197,6 +1209,22 @@ pass "complete-body: settings, a bad commit id and usage errors"
 # checkout of main runs the script; its configured origin is an Azure Repos URL that git
 # rewrites (insteadOf) to the local origin. ado_setup makes one, with the settings given.
 ADO_URL='https://dev.azure.com/example/My%20Project/_git/repo'
+# A lock entry: name, version, integrity.
+lock_entry() {
+    printf '"node_modules/%s":{"version":"%s","resolved":"https://registry.npmjs.org/%s/-/x-%s.tgz","integrity":"%s","dev":true}' "$1" "$2" "$1" "$2" "$3"
+}
+OS_GOOD="$(lock_entry @fission-ai/openspec 1.14.1 sha512-good)"
+DEP_GOOD="$(lock_entry dep 1.0.0 sha512-dep)"
+# package-lock.json as npm writes it, with the entries given.
+lock_file() { # dir, entries
+    printf '{"name":"x","lockfileVersion":3,"requires":true,"packages":{"":{"devDependencies":{"@fission-ai/openspec":"1.14.1"}},%s}}\n' "$2" > "$1/package-lock.json"
+}
+# What npm leaves after an install: its record of it (node_modules/.package-lock.json), and
+# OpenSpec's own package.json.
+stamp_install() { # dir, hidden lock entries, installed OpenSpec version
+    printf '{"name":"x","lockfileVersion":3,"requires":true,"packages":{%s}}\n' "$2" > "$1/node_modules/.package-lock.json"
+    printf '{"name":"@fission-ai/openspec","version":"%s"}\n' "$3" > "$1/node_modules/@fission-ai/openspec/package.json"
+}
 ado_setup() { # package.json "sdd" settings
     ao="$TMP_ROOT/ado-origin.$RANDOM$RANDOM" && awc="$ao-checkout"
     git init -q -b main "$ao"
@@ -1205,6 +1233,7 @@ ado_setup() { # package.json "sdd" settings
     printf '{"sdd":%s}\n' "$1" > "$ao/package.json"
     echo node_modules > "$ao/.gitignore"
     echo ok > "$ao/openspec/specs/base/spec.md"
+    lock_file "$ao" "$OS_GOOD,$DEP_GOOD"
     add_change "$ao" c-one
     git -C "$ao" add -A && git -C "$ao" commit -q -m main
     install_stub "$ao"
@@ -1222,6 +1251,7 @@ ado_setup() { # package.json "sdd" settings
     atip="$(git -C "$ao" rev-parse main)"
     git clone -q "$ao" "$awc"
     install_stub "$awc"
+    stamp_install "$awc" "$OS_GOOD,$DEP_GOOD" 1.14.1
     git -C "$awc" config remote.origin.url "$ADO_URL"
     git -C "$awc" config "url.$ao.insteadOf" "$ADO_URL"
     APR="$awc/scripts/sdd/sdd-azure-pr.sh"
@@ -1234,6 +1264,7 @@ cat > "$azbin/az" <<'EOF'
 # of a kind gets <kind>.<n>.json if there is one, else <kind>.json; <kind>.<n>.fail makes it
 # fail, and <kind>.<n>.hook runs first. A file named bom puts a byte order mark first.
 printf '%s\n' "$*" >> "$AZ_LOG"
+printf 'PYTHONIOENCODING=%s\n' "${PYTHONIOENCODING:-}" >> "$AZ_FIX/env.log"
 F="$AZ_FIX"
 serve() {
     local n
@@ -1275,6 +1306,8 @@ ado_scenario() {
     AZ_FIX="$TMP_ROOT/azfix.$RANDOM$RANDOM" && mkdir -p "$AZ_FIX" && AZ_LOG="$AZ_FIX/log" && : > "$AZ_LOG"
     export AZ_FIX AZ_LOG
     local head="$1"; shift
+    # The PR's merge, computed against the tip.
+    tgt_a="$atip"
     local branch
     branch="$(git -C "$ao" for-each-ref --points-at "$head" --format='%(refname:lstrip=2)' refs/heads | sed -n 1p)"
     sha_a="$head" pr_json sourceRefName "\"refs/heads/$branch\"" "$@" > "$AZ_FIX/pr.json"
@@ -1308,6 +1341,8 @@ body_check "$(cat "$AZ_FIX/body.json")" "b.completionOptions.mergeStrategy === '
 # az output that starts with a byte order mark.
 ado_scenario "$ahead" && touch "$AZ_FIX/bom"
 apr merge --default main --pr 7 >/dev/null || fail "BOM-prefixed az output"
+# az on Windows writes in the console's code page unless told otherwise: every call asks for UTF-8.
+[ -s "$AZ_FIX/env.log" ] && ! grep -vqx 'PYTHONIOENCODING=utf-8' "$AZ_FIX/env.log" || { cat "$AZ_FIX/env.log"; fail "az not asked for UTF-8 output"; }
 pass "sdd-azure-pr merge: verifies with the checkout's scripts, completes pinned with a PATCH to the repository's PR, confirms both commits"
 
 # Waits: a merge being computed, a PR naming an older head than its branch, a running build.
@@ -1438,6 +1473,35 @@ ado_scenario "$ahead"
 sha_a="$ahead" pr_json status '"completed"' lastMergeTargetCommit "{\"commitId\":\"$sha_b\"}" > "$AZ_FIX/done.json"
 expect_exit 1 apr merge --default main --pr 7
 ends unverified "a completion against another target"
+# The target: Azure DevOps computed the PR's merge against another commit than the verified tip
+# (the default branch moved, or the remote git reads is a mirror that lags).
+ado_scenario "$ahead"
+sha_a="$ahead" tgt_a="$sha_b" pr_json sourceRefName '"refs/heads/archive/c-one"' > "$AZ_FIX/pr.2.json"
+expect_exit 1 apr merge --default main --pr 7
+ends behind "a PR merged against another target"
+grep -q "Azure DevOps computed the PR's merge against $sha_b, not the verified $atip" "$TMP_ROOT/out" || fail "the moved target not explained"
+no_patch "a PR merged against another target"
+# OpenSpec must be the one the tip's package-lock.json pins: never one a PR branch installed.
+os_refused() { # what
+    expect_exit 1 apr merge --default main --pr 7
+    ends failed "$1"
+    grep -q 'npm ci --ignore-scripts' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "$1: no remedy given"; }
+    ! grep -q '^archive-mechanical:' "$TMP_ROOT/out" || fail "$1: verify ran"
+    no_patch "$1"
+    stamp_install "$awc" "$OS_GOOD,$DEP_GOOD" 1.14.1
+}
+ado_scenario "$ahead"
+stamp_install "$awc" "$(lock_entry @fission-ai/openspec 1.14.1 sha512-evil),$DEP_GOOD" 1.14.1
+os_refused "OpenSpec installed from another lock"
+grep -q '@fission-ai/openspec: installed integrity sha512-evil, the lock pins sha512-good' "$TMP_ROOT/out" || fail "the integrity mismatch not named"
+stamp_install "$awc" "$OS_GOOD,$(lock_entry dep 9.9.9 sha512-dep)" 1.14.1
+os_refused "a dependency installed from another lock"
+stamp_install "$awc" "$OS_GOOD,$DEP_GOOD,$(lock_entry extra 1.0.0 sha512-x)" 1.14.1
+os_refused "a package the lock doesn't name"
+stamp_install "$awc" "$OS_GOOD,$DEP_GOOD" 1.15.0
+os_refused "an OpenSpec whose own version differs"
+rm "$awc/node_modules/.package-lock.json"
+os_refused "no record of an npm install"
 # Only from a clean checkout of the tip.
 ado_scenario "$ahead"
 echo dirty > "$awc/dirty.txt"
@@ -1464,6 +1528,32 @@ ado_scenario "$ahead"
 expect_exit 1 apr merge --default main --pr 7
 ends behind "a branch behind the tip"
 no_patch "a branch behind the tip"
+# git failing is a failure, never a branch behind, and every failure exits 1.
+REAL_GIT="$(command -v git)" && export REAL_GIT
+gitshim="$TMP_ROOT/gitshim" && mkdir -p "$gitshim"
+cat > "$gitshim/git" <<'SHIM'
+#!/usr/bin/env bash
+# Fails one git command as git does on a broken repository: exit 128.
+for a in "$@"; do
+    case "$GIT_SHIM_FAIL:$a" in
+        merge-base:merge-base|archive-head:refs/sdd/archive-head) echo "fatal: shim" >&2; exit 128 ;;
+    esac
+done
+exec "$REAL_GIT" "$@"
+SHIM
+chmod +x "$gitshim/git"
+shimmed() { # what fails, then the merge
+    (cd "$awc" && PATH="$gitshim:$azbin:$PATH" GIT_SHIM_FAIL="$1" SDD_AZ_POLL=1 SDD_AZ_WAIT_MERGE=0 bash "$APR" merge --default main --pr 7)
+}
+ado_scenario "$ahead"
+expect_exit 1 shimmed merge-base
+ends failed "git merge-base failing"
+grep -q 'cannot tell whether' "$TMP_ROOT/out" || fail "a failing merge-base not explained"
+no_patch "git merge-base failing"
+ado_scenario "$ahead"
+expect_exit 1 shimmed archive-head
+ends failed "git rev-parse failing"
+no_patch "git rev-parse failing"
 expect_exit 2 apr merge --default main
 expect_exit 2 apr merge --default 'main;x' --pr 7
 SDD_AZ_POLL=0 expect_exit 2 bash -c 'cd "$1" && SDD_AZ_POLL=0 bash "$2" merge --default main --pr 7' _ "$awc" "$APR"
@@ -1513,6 +1603,17 @@ expect_exit 1 apr open --default main --source archive/c-one --title t --descrip
 grep -q 'at most 4000' "$TMP_ROOT/out" || fail "a description over 4000 characters not refused"
 [ ! -f "$AZ_FIX/rest.log" ] || fail "a too-long description was sent"
 expect_exit 2 apr open --default main --source 'archive/$(id)' --title t --description-file "$TMP_ROOT/desc.md"
+# A title that looks like a path reaches Azure DevOps as written (Git Bash rewrites such an
+# argument to a Windows path for a Windows program like node, unless told not to).
+ado_scenario "$ahead" && echo '{"pullRequestId":12}' > "$AZ_FIX/created.json"
+apr open --default main --source archive/c-one --title '/c/Archive c-one' --description-file "$TMP_ROOT/desc.md" >/dev/null || fail "open with a path-like title"
+body_check "$(cat "$AZ_FIX/create-body.json")" "b.title === '/c/Archive c-one'" || fail "the title was rewritten: $(cat "$AZ_FIX/create-body.json")"
+# A full page of PRs may be cut short: a failure (1), said so, never a pr= line.
+ado_scenario "$ahead"
+node -e 'process.stdout.write(JSON.stringify(Array.from({ length: 1000 }, (_, i) => ({ pullRequestId: i + 1, sourceRefName: "refs/heads/feature", title: "x" }))))' > "$AZ_FIX/list.json"
+expect_exit 1 apr find --default main
+grep -q 'cut short' "$TMP_ROOT/out" || fail "a full page not explained"
+! grep -q '^pr=' "$TMP_ROOT/out" || fail "a full page printed a PR line"
 pass "sdd-azure-pr find and open"
 
 # --- Azure DevOps: the pipeline template ----------------------------------------------------
