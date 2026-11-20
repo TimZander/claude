@@ -90,6 +90,7 @@ Write-Host '=== Team Standards ==='
 $StandardsFile = Join-Path (Join-Path $RepoRoot 'standards') 'CLAUDE.md'
 $ClaudeDir = Join-Path $HOME '.claude'
 $TargetFile = Join-Path $ClaudeDir 'CLAUDE.md'
+$StandardsFailed = $false
 
 if (-not (Test-Path $ClaudeDir)) {
     New-Item -ItemType Directory -Path $ClaudeDir -Force | Out-Null
@@ -100,10 +101,18 @@ if (-not (Test-Path $StandardsFile)) {
 }
 else {
     # The splice lives in its own script so it can be tested in isolation
-    # (scripts/test-sync-teamstandards.ps1). It throws when the markers are
-    # damaged, which stops setup here.
+    # (scripts/test-sync-teamstandards.ps1). When it refuses (damaged
+    # markers), the settings sync below is independent, so carry on and fail
+    # at the end.
     . (Join-Path (Join-Path $RepoRoot 'scripts') 'Sync-TeamStandards.ps1')
-    Sync-TeamStandards -TargetFile $TargetFile -StandardsFile $StandardsFile
+    try {
+        Sync-TeamStandards -TargetFile $TargetFile -StandardsFile $StandardsFile
+    }
+    catch {
+        $StandardsFailed = $true
+        Write-Host "error: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host 'Team standards were not synced; continuing with the remaining steps.' -ForegroundColor Red
+    }
 }
 
 Write-Host ''
@@ -147,4 +156,8 @@ else {
 }
 
 Write-Host ''
+if ($StandardsFailed) {
+    Write-Host '=== Setup finished with errors: team standards were not synced (see above) ===' -ForegroundColor Red
+    exit 1
+}
 Write-Host '=== Setup complete ==='

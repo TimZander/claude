@@ -16,6 +16,7 @@ on:
       - "scripts/Sync-TeamStandards.ps1"
       - "scripts/test-sync-teamstandards.ps1"
       - "scripts/diff-preview.awk"
+      - "standards/CLAUDE.md"
       - "standards/settings.json"
       - ".github/workflows/test-setup-env.yml"
   push:

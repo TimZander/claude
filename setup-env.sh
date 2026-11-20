@@ -96,15 +96,19 @@ echo "=== Team Standards ==="
 STANDARDS_FILE="$REPO_ROOT/standards/CLAUDE.md"
 CLAUDE_DIR="$HOME/.claude"
 TARGET_FILE="$CLAUDE_DIR/CLAUDE.md"
+STANDARDS_FAILED=0
 mkdir -p "$CLAUDE_DIR"
 
 if [ ! -f "$STANDARDS_FILE" ]; then
     echo "Warning: Standards file not found: $STANDARDS_FILE" >&2
 else
     # The splice lives in its own script so it can be tested in isolation
-    # (scripts/test_sync-standards.sh). It refuses to write when the markers
-    # are damaged, which stops setup here under set -e.
-    bash "$REPO_ROOT/scripts/sync-standards.sh" "$TARGET_FILE" "$STANDARDS_FILE"
+    # (scripts/test_sync-standards.sh). When it refuses (damaged markers), the
+    # settings sync below is independent, so carry on and fail at the end.
+    if ! bash "$REPO_ROOT/scripts/sync-standards.sh" "$TARGET_FILE" "$STANDARDS_FILE"; then
+        STANDARDS_FAILED=1
+        echo "Team standards were not synced; continuing with the remaining steps." >&2
+    fi
 fi
 
 echo ""
@@ -152,4 +156,8 @@ else
 fi
 
 echo ""
+if [ "$STANDARDS_FAILED" -ne 0 ]; then
+    echo "=== Setup finished with errors: team standards were not synced (see above) ===" >&2
+    exit 1
+fi
 echo "=== Setup complete ==="

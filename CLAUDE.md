@@ -28,10 +28,10 @@ The shared `~/.claude/settings.json` (team permission rules and settings) is sou
 Run `./setup-env.sh` (bash) or `./setup-env.ps1` (PowerShell) to bootstrap the local environment:
 
 1. **Git hooks** — Installs global hooks from `hooks/` to `~/.git-hooks/` (controlled by `hooks/hooks.json`). Sets `core.hooksPath` globally.
-2. **Team standards** — Syncs `standards/CLAUDE.md` into `~/.claude/CLAUDE.md`.
+2. **Team standards** — Syncs `standards/CLAUDE.md` into `~/.claude/CLAUDE.md` between the TEAM-STANDARDS markers, via `scripts/sync-standards.sh` / `scripts/Sync-TeamStandards.ps1` (tests: `scripts/test_sync-standards.sh`, `scripts/test-sync-teamstandards.ps1`). Content outside the markers is kept byte for byte; the previous file is copied to `~/.claude/CLAUDE.md.team-sync.bak` before an update. Damaged markers make this step change nothing and setup exit non-zero after the remaining steps. `standards/CLAUDE.md` must never contain the marker lines.
 3. **Team settings** — Deep-merges `standards/settings.json` into `~/.claude/settings.json`.
 
-The script is idempotent — safe to re-run at any time. It replaces the old `sync-standards` scripts.
+The script is idempotent — safe to re-run at any time.
 
 ### Per-repo hook opt-out
 
