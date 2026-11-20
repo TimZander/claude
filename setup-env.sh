@@ -93,79 +93,18 @@ echo ""
 
 echo "=== Team Standards ==="
 
-START_MARKER='<!-- TEAM-STANDARDS:tzander-skills:START -->'
-END_MARKER='<!-- TEAM-STANDARDS:tzander-skills:END -->'
-
 STANDARDS_FILE="$REPO_ROOT/standards/CLAUDE.md"
 CLAUDE_DIR="$HOME/.claude"
 TARGET_FILE="$CLAUDE_DIR/CLAUDE.md"
+mkdir -p "$CLAUDE_DIR"
 
 if [ ! -f "$STANDARDS_FILE" ]; then
     echo "Warning: Standards file not found: $STANDARDS_FILE" >&2
 else
-    STANDARDS_CONTENT="$(cat "$STANDARDS_FILE")"
-    MANAGED_SECTION="${START_MARKER}
-${STANDARDS_CONTENT}
-${END_MARKER}"
-
-    mkdir -p "$CLAUDE_DIR"
-
-    if [ ! -f "$TARGET_FILE" ]; then
-        printf '%s' "$MANAGED_SECTION" > "$TARGET_FILE"
-        echo "Created $TARGET_FILE with team standards."
-    elif grep -qF "$START_MARKER" "$TARGET_FILE"; then
-        EXISTING_CONTENT="$(cat "$TARGET_FILE")"
-
-        OLD_SECTION_FILE="$(mktemp)"
-        awk -v start="$START_MARKER" -v end="$END_MARKER" '
-            $0 == start { capture=1; next }
-            $0 == end { capture=0; next }
-            capture { print }
-        ' "$TARGET_FILE" > "$OLD_SECTION_FILE"
-
-        SECTION_FILE="$(mktemp)"
-        printf '%s\n' "$MANAGED_SECTION" > "$SECTION_FILE"
-        UPDATED_CONTENT="$(awk -v start="$START_MARKER" -v end="$END_MARKER" -v sfile="$SECTION_FILE" '
-            $0 == start { printing=0; while ((getline line < sfile) > 0) print line; close(sfile); next }
-            $0 == end { printing=1; next }
-            printing!=0 { print }
-        ' "$TARGET_FILE")"
-        rm -f "$SECTION_FILE"
-
-        if [ "$UPDATED_CONTENT" = "$EXISTING_CONTENT" ]; then
-            echo "Team standards in $TARGET_FILE are already up to date."
-        else
-            NEW_SECTION_FILE="$(mktemp)"
-            printf '%s\n' "$STANDARDS_CONTENT" > "$NEW_SECTION_FILE"
-            echo "Changes:"
-            if diff --old-line-format='' --new-line-format='' --unchanged-line-format='' /dev/null /dev/null >/dev/null 2>&1; then
-                diff "$OLD_SECTION_FILE" "$NEW_SECTION_FILE" \
-                    --old-line-format='  - %L' \
-                    --new-line-format='  + %L' \
-                    --unchanged-line-format='' || true
-            else
-                # BSD diff (macOS) lacks --*-line-format; post-process a unified diff instead.
-                { diff -u "$OLD_SECTION_FILE" "$NEW_SECTION_FILE" || true; } \
-                    | awk -f "$REPO_ROOT/scripts/diff-preview.awk"
-            fi
-            rm -f "$NEW_SECTION_FILE"
-
-            printf '%s' "$UPDATED_CONTENT" > "$TARGET_FILE"
-            echo "Updated team standards in $TARGET_FILE."
-        fi
-        rm -f "$OLD_SECTION_FILE"
-    else
-        if [ -s "$TARGET_FILE" ]; then
-            TAIL_CHAR="$(tail -c 1 "$TARGET_FILE")"
-            if [ "$TAIL_CHAR" != "" ]; then
-                printf '\n\n' >> "$TARGET_FILE"
-            else
-                printf '\n' >> "$TARGET_FILE"
-            fi
-        fi
-        printf '%s' "$MANAGED_SECTION" >> "$TARGET_FILE"
-        echo "Appended team standards to $TARGET_FILE."
-    fi
+    # The splice lives in its own script so it can be tested in isolation
+    # (scripts/test_sync-standards.sh). It refuses to write when the markers
+    # are damaged, which stops setup here under set -e.
+    bash "$REPO_ROOT/scripts/sync-standards.sh" "$TARGET_FILE" "$STANDARDS_FILE"
 fi
 
 echo ""

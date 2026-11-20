@@ -11,6 +11,11 @@ on:
       - "scripts/test-setup-env-integration.ps1"
       - "scripts/merge_settings.py"
       - "scripts/test_merge_settings.py"
+      - "scripts/sync-standards.sh"
+      - "scripts/test_sync-standards.sh"
+      - "scripts/Sync-TeamStandards.ps1"
+      - "scripts/test-sync-teamstandards.ps1"
+      - "scripts/diff-preview.awk"
       - "standards/settings.json"
       - ".github/workflows/test-setup-env.yml"
   push:
@@ -37,3 +42,21 @@ jobs:
         run: python3 scripts/test_merge_settings.py
       - name: setup-env.sh syntax check
         run: bash -n setup-env.sh
+      - name: Team-standards splice test (bash)
+        run: bash scripts/test_sync-standards.sh
+      - name: Team-standards splice test (pwsh)
+        shell: pwsh
+        run: ./scripts/test-sync-teamstandards.ps1
+
+  # Developers run setup-env.ps1 on native Windows, often under Windows
+  # PowerShell 5.1, which the Linux/macOS pwsh runs above do not cover.
+  windows-standards-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Team-standards splice test (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./scripts/test-sync-teamstandards.ps1
+      - name: Team-standards splice test (Git Bash)
+        shell: bash
+        run: bash scripts/test_sync-standards.sh
