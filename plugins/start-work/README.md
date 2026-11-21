@@ -32,6 +32,6 @@ Worktrees keep new work isolated from the main checkout: uncommitted changes and
 
 ## Requirements
 
-- `git` 2.20+ (worktree support)
+- `git` 2.31+ (worktree support and `rev-parse --path-format`)
 - **GitHub:** `gh` CLI authenticated for the target repo
 - **ADO:** `az` CLI with the `azure-devops` extension and the Azure DevOps MCP server, both already required by `improve-stories`

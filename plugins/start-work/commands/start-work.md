@@ -65,14 +65,16 @@ If Glob returns multiple candidates, skip any whose version directory (the paren
 ## Step 4: Run Git Hygiene and create the branch
 
 ```bash
-bash <resolved-script-path> --slug "<slug>" --id "<id>" [--base "<base>"] [--no-worktree]
+bash <resolved-script-path> --slug '<slug>' --id '<id>' [--base '<base>'] [--no-worktree]
 ```
+
+Wrap every value in **single quotes**, never double quotes: inside double quotes the shell expands `$(...)`, backticks and `$VAR` before the script can check the value. If the user's `--base` contains a single quote, stop and ask for the branch name again — no valid branch name needs one. Pass `--base <branch>` as two arguments; split a `--base=<branch>` the user typed.
 
 Capture the last lines of stdout:
 - `BRANCH=branches/<id>-<slug>` (always present)
 - `WORKTREE_PATH=.claude/worktrees/<id>-<slug>` (present only in worktree mode)
 
-If the script exits non-zero, surface its stderr verbatim and stop. The script's failure modes are: dirty working tree (user must commit, stash, or discard), branch already exists locally (user must rename or delete the existing branch), worktree path already exists (likely a paused-and-resumed card — surface that), unreachable origin (network/auth issue), `--base` is not a valid branch name (it must not start with `-`), or `--base` doesn't exist on origin.
+If the script exits non-zero, surface its stderr verbatim and stop. The script's failure modes are: dirty working tree (user must commit, stash, or discard), branch already exists locally (user must rename or delete the existing branch), worktree path already exists (likely a paused-and-resumed card — surface that), unreachable origin (network/auth issue), an argument problem such as an option without a value or a `--base` that is not a plain branch name (no spaces, `..`, `@{`, `:`, and not starting with `-` or `+`), or `--base` doesn't exist on origin. A `--base` like `origin/main` or `refs/heads/main` is rejected or not found — pass the bare branch name, `main`.
 
 Omit `--id` if the card has no numeric identifier (rare — typically a developer-initiated branch with no tracked work item). The script handles this: branch becomes `branches/<slug>` with no numeric prefix.
 
