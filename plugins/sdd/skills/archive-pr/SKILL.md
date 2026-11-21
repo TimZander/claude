@@ -23,7 +23,8 @@ Run `node scripts/sdd/sdd-config.mjs --json` from the default branch's checkout.
 that matter here:
 - `host`: `github` (the default) or `azure-devops`. It picks Step 3 or Step 3A, and the tools
   you use: `gh` on GitHub; on Azure DevOps, `az` with the `azure-devops` extension, signed in
-  (`az devops` with a login or a PAT), through `scripts/sdd/sdd-azure-pr.sh`. If the origin is
+  with `az login` (opening and completing a PR go through `az rest`, which a PAT alone doesn't
+  sign in), through `scripts/sdd/sdd-azure-pr.sh`. If the origin is
   on Azure DevOps (`dev.azure.com`, `*.visualstudio.com`) but `host` says `github`, or
   `scripts/sdd/sdd-azure-pr.sh` is missing, the repository's sdd files predate Azure DevOps
   support, or were set up for GitHub on purpose: ask the owner. If `package.json` records
@@ -135,7 +136,8 @@ lock file (`node_modules` is ignored, so a clean checkout can still hold what a 
 branch, into the default branch, no conflict; it waits while the merge is being computed, while
 the PR still names an older head than its branch, or while its merge was computed against
 another commit than the tip); checks the head is based on the default branch's tip; runs
-`sdd-archive.sh verify` against that tip, and goes on only on `archive-mechanical: success`;
+`sdd-archive.sh verify` against that tip, and goes on only on `archive-mechanical: success`
+right after its comparison of exactly that tip and head (a verify that can't run ends `failed`);
 reads the policies, waiting while a build is queued or running; reads the PR, its policies, the
 branch's policy configurations and the tip again right before completing, and goes on only if
 the tip is still the verified one and Azure DevOps computed the PR's merge against it
@@ -158,8 +160,9 @@ Act on its last line, `archive-pr: <state>`:
   keeps ending `behind` (or `timeout`, waiting for the merge to be computed against the tip)
   while the branch isn't behind, `origin` may be a mirror that lags Azure DevOps: report it
   rather than pushing anything.
-- `review`: only "Minimum number of reviewers" is unmet. Leave the PR open and report that it
-  needs one approval; after it, running `/sdd:archive-pr` again checks everything again, and
+- `review`: only "Minimum number of reviewers" is unmet, still waiting for approvals (one a
+  vote rejected is `refused`). Leave the PR open and report that it needs one approval; after
+  it, running `/sdd:archive-pr` again checks everything again, and
   completes the PR if it still may. **Never approve or vote on the PR yourself.** If
   `archiveBypassReviewers` is `true`, you may run it again with `--bypass-reviewers`: it then
   bypasses only when the reviewer count is still the only unmet blocking policy and no reviewer
@@ -175,6 +178,11 @@ Act on its last line, `archive-pr: <state>`:
 - `unverified`: it completed with a source or target commit other than the ones verified. Say
   so first in the report, so the owner reviews what landed.
 - `failed`: report the lines above it. Don't retry a refused completion with other options.
+  When verify couldn't run, or `node` or `az` is missing, say the problem is in running the
+  check, not a verdict on the PR, with the remedy the output gives.
+
+Whenever a run that sent the completion ends other than `completed`, the output names a ref that
+keeps the verified commit (completing deletes the source branch): include it in the report.
 
 The pin rests on Azure DevOps refusing a completion whose `lastMergeSourceCommit` isn't the
 PR's current head; no test here can exercise that, which is why the final confirmation exists.

@@ -134,7 +134,7 @@ if [ "$host_from" = "the origin remote" ] && [ -f .claude/sdd-version ]; then
             if (Array.isArray(sdd.archiveVerdicts) && sdd.archiveVerdicts.length > 0) {
                 set.push("archiveVerdicts")
             }
-            if ("specDiffComment" in sdd) {
+            if (sdd.specDiffComment === false) {
                 set.push("specDiffComment")
             }
             process.stdout.write(set.join(", "))
