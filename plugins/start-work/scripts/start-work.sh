@@ -13,8 +13,10 @@
 #   BRANCH=<branch>
 #   WORKTREE_PATH=<path>     (only in worktree mode)
 #
-# Refuses to run if the working tree is dirty, the target branch already exists
-# locally, or the target worktree path already exists.
+# Exit codes: 2 for an argument problem (a missing or invalid value, an unknown
+# argument, a --base that is not a plain branch name); any other non-zero code when
+# it refuses or fails later (dirty working tree, branch already exists locally or on
+# origin, worktree path already exists, fetch failure, or a git error).
 
 set -euo pipefail
 
@@ -33,11 +35,25 @@ creates the branch in the current checkout instead.
 USAGE
 }
 
+# Print a user-supplied value safely inside an error message: shell-quoted, so
+# control characters and quotes in it cannot garble the terminal.
+quoted() { printf '%q' "$1"; }
+
+# An option needs a value that is present, non-empty and not itself an option, so
+# `--base --no-worktree` reports the missing value instead of swallowing the flag.
+require_value() {
+    if [ "$2" -lt 2 ] || [ -z "$3" ] || [ "${3#-}" != "$3" ]; then
+        echo "error: $1 needs a value" >&2
+        usage
+        exit 2
+    fi
+}
+
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --id) ID="${2:-}"; shift 2;;
-        --slug) SLUG="${2:-}"; shift 2;;
-        --base) BASE="${2:-}"; shift 2;;
+        --id) require_value "$1" "$#" "${2:-}"; ID="$2"; shift 2;;
+        --slug) require_value "$1" "$#" "${2:-}"; SLUG="$2"; shift 2;;
+        --base) require_value "$1" "$#" "${2:-}"; BASE="$2"; shift 2;;
         --no-worktree) USE_WORKTREE=0; shift;;
         -h|--help) usage; exit 0;;
         *) echo "unknown arg: $1" >&2; usage; exit 2;;
@@ -52,7 +68,22 @@ fi
 
 # Validate slug: kebab-case only — lowercase letters, digits, internal hyphens.
 if ! printf '%s' "$SLUG" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'; then
-    echo "error: --slug '$SLUG' is not kebab-case (expected lowercase letters/digits, hyphens between words, no leading or trailing hyphens)" >&2
+    echo "error: --slug $(quoted "$SLUG") is not kebab-case (expected lowercase letters/digits, hyphens between words, no leading or trailing hyphens)" >&2
+    exit 2
+fi
+
+# Validate --base before any git command sees it: it must be a plain branch name. A value
+# starting with "-" would be read as a git option, and one starting with "+" as a forced
+# refspec. `check-ref-format` on the full ref rejects "..", "@{", ":", spaces, control
+# characters and the other forms git refuses; the --branch form is avoided because it
+# expands "@{-1}" to the previously checked-out branch. (An empty value never reaches
+# here: require_value rejects it.)
+case "$BASE" in
+    -* | +*) base_ok=0 ;;
+    *) if git check-ref-format "refs/heads/$BASE"; then base_ok=1; else base_ok=0; fi ;;
+esac
+if [ "$base_ok" -ne 1 ]; then
+    echo "error: --base $(quoted "$BASE") is not a valid branch name (no spaces, '..', '@{', ':', '~', '^', '\\', and it must not start with '-' or '+')" >&2
     exit 2
 fi
 
@@ -60,7 +91,7 @@ fi
 if [ -n "$ID" ]; then
     # Validate id is alphanumeric + hyphen so it can't inject path components.
     if ! printf '%s' "$ID" | grep -Eq '^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$'; then
-        echo "error: --id '$ID' must be alphanumeric (with optional internal hyphens)" >&2
+        echo "error: --id $(quoted "$ID") must be alphanumeric (with optional internal hyphens)" >&2
         exit 2
     fi
     BRANCH="branches/$ID-$SLUG"
@@ -114,13 +145,17 @@ fi
 FETCH_ERR_FILE="$(mktemp)"
 trap 'rm -f "$FETCH_ERR_FILE"' EXIT
 
-if ! git fetch origin "$BASE" 2>"$FETCH_ERR_FILE"; then
-    echo "error: 'git fetch origin $BASE' failed:" >&2
+# Fetch with an explicit refspec, and use the full remote-tracking ref below, so git never
+# guesses: a bare name could also match a tag or HEAD on origin, and `origin/<base>` could
+# resolve to a local branch or tag that happens to have that name.
+BASE_REF="refs/remotes/origin/$BASE"
+if ! git fetch origin "refs/heads/$BASE:$BASE_REF" 2>"$FETCH_ERR_FILE"; then
+    echo "error: fetching branch '$BASE' from origin failed:" >&2
     cat "$FETCH_ERR_FILE" >&2
     exit 1
 fi
 
-if ! git rev-parse --verify --quiet "origin/$BASE" >/dev/null; then
+if ! git rev-parse --verify --quiet "$BASE_REF^{commit}" >/dev/null; then
     echo "error: origin/$BASE does not exist after fetch. Verify --base is correct." >&2
     exit 1
 fi
@@ -129,7 +164,7 @@ fi
 # a same-named branch). Creating a divergent local copy here would silently set up
 # a force-push trap. The user can rename the slug or coordinate with the original
 # author before retrying.
-git fetch origin "$BRANCH" 2>/dev/null || true
+git fetch origin "refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2>/dev/null || true
 if git show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
     echo "error: branch '$BRANCH' already exists on origin (someone else may have pushed it). Pick a different slug or coordinate with the original author." >&2
     exit 1
@@ -142,11 +177,11 @@ if [ "$USE_WORKTREE" -eq 1 ]; then
         exit 1
     fi
     mkdir -p "$(dirname "$WT_PATH")"
-    git worktree add -b "$BRANCH" "$WT_PATH" "origin/$BASE" >&2
+    git worktree add -b "$BRANCH" "$WT_PATH" "$BASE_REF" >&2
     echo "BRANCH=$BRANCH"
     echo "WORKTREE_PATH=$WT_PATH"
 else
     # In-place: branch directly off origin/<base> so we don't depend on local <base> being current.
-    git checkout -b "$BRANCH" "origin/$BASE" >&2
+    git checkout -b "$BRANCH" "$BASE_REF" >&2
     echo "BRANCH=$BRANCH"
 fi

@@ -1,0 +1,35 @@
+name: test-start-work-scripts
+
+# The start-work plugin's script creates branches and worktrees from arguments an agent passes in. The smoke test runs it against real git repos with a bare origin.
+# macOS covers bash 3.2; windows-latest covers Git Bash, which the team develops on.
+on:
+  pull_request:
+    paths:
+      - "plugins/start-work/**"
+      - ".github/workflows/test-start-work-scripts.yml"
+  push:
+    branches: [main]
+    paths:
+      - "plugins/start-work/**"
+      - ".github/workflows/test-start-work-scripts.yml"
+
+jobs:
+  start-work-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check
+        run: for f in plugins/start-work/scripts/*.sh; do bash -n "$f"; done
+      - name: Smoke test
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name CI
+          bash plugins/start-work/scripts/test_start-work.sh

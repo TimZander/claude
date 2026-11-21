@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Smoke test for start-work.sh — usage error, slug validation, clean-tree refusal,
-# happy-path branch creation, --no-worktree mode, --base override, idempotency refusal.
+# happy-path branch creation, --no-worktree mode, --base override, idempotency refusal,
+# --base validation (leading '-' or '+', invalid ref names, dotted names still accepted)
+# and options given without a value.
 #
 # Uses a real local git repo as the fixture so we exercise actual `git worktree add`
 # and `git checkout -b` behavior. Sets `origin` to a bare repo on the same host.
@@ -226,5 +228,97 @@ out="$( cd "$wt_host" && bash "$SUT" --slug "child-b" --id "301" --no-worktree 2
 [ ! -d "$repo/.claude/worktrees/301-child-b" ] \
     || fail "expected NO worktree directory in --no-worktree mode"
 pass "--no-worktree from inside a worktree switches the current worktree, not main (#155)"
+
+# 15. StartWork_BaseStartingWithDash_RefusedBeforeGitRunsIt
+#     Regression: --base used to reach git unchecked, so a value starting with "-" was read
+#     as a git option. The payload has no space, so only the leading-dash check stops it
+#     (it is a valid ref name otherwise); the helper it names records whether it ran.
+# Arrange
+repo="$(fresh_repo)"
+id="15"
+slug="dash-base"
+exit_usage=2
+printf '#!/bin/sh\ntouch "$(dirname "$0")/helper-ran"\nexit 1\n' > "$repo/helper.sh"
+chmod +x "$repo/helper.sh"
+# Act
+rc=0
+err="$( cd "$repo" && bash "$SUT" --slug "$slug" --id "$id" --base "--upload-pack=./helper.sh" 2>&1 >/dev/null )" || rc=$?
+# Assert
+[ "$rc" -eq "$exit_usage" ] || fail "expected exit $exit_usage for a --base starting with '-', got $rc"
+grep -qF -- "needs a value" <<<"$err" || fail "expected the dash value to be refused as a missing value, got: $err"
+[ ! -e "$repo/helper-ran" ] || fail "a --base starting with '-' reached git as an option"
+[ ! -d "$repo/.claude/worktrees/$id-$slug" ] || fail "expected no worktree for a rejected --base"
+pass "--base starting with '-' is refused before git sees it"
+
+# 16. StartWork_InvalidBaseNames_RefusedWithMessage
+# Arrange
+repo="$(fresh_repo)"
+id="16"
+slug="bad-base"
+exit_usage=2
+for bad_base in "+main" "a..b" "@{-1}" "has space" "   " "trailing/" "a~1" "a^1" "a:b" \
+                "x.lock" ".hidden" "a/.b" "a//b" "a." "*" 'a\b'; do
+    # Act
+    rc=0
+    err="$( cd "$repo" && bash "$SUT" --slug "$slug" --id "$id" --base "$bad_base" 2>&1 >/dev/null )" || rc=$?
+    # Assert
+    [ "$rc" -eq "$exit_usage" ] || fail "expected exit $exit_usage for --base '$bad_base', got $rc"
+    grep -qF -- "is not a valid branch name" <<<"$err" || fail "expected a --base message for '$bad_base', got: $err"
+    [ ! -d "$repo/.claude/worktrees/$id-$slug" ] || fail "expected no worktree for --base '$bad_base'"
+done
+pass "invalid --base names are refused with a message and no worktree"
+
+# 17. StartWork_OptionWithoutValue_RefusedWithMessage
+#     Covers the value missing at the end, empty, and replaced by the next flag.
+# Arrange
+repo="$(fresh_repo)"
+slug="no-value"
+exit_usage=2
+# Each case is "<option that lacks a value>|<arguments>".
+while IFS='|' read -r option args; do
+    # Act
+    rc=0
+    # shellcheck disable=SC2086 # word splitting of $args is intended
+    err="$( cd "$repo" && bash "$SUT" $args 2>&1 >/dev/null )" || rc=$?
+    # Assert
+    [ "$rc" -eq "$exit_usage" ] || fail "expected exit $exit_usage for '$args', got $rc"
+    grep -qF -- "$option needs a value" <<<"$err" || fail "expected '$option needs a value' for '$args', got: $err"
+done <<CASES
+--base|--slug $slug --base
+--id|--slug $slug --id
+--slug|--slug
+--base|--slug $slug --base --no-worktree
+--id|--slug $slug --id --no-worktree
+--slug|--slug --id 5
+CASES
+# An empty value is a missing value too.
+rc=0
+err="$( cd "$repo" && bash "$SUT" --slug "$slug" --id "" 2>&1 >/dev/null )" || rc=$?
+[ "$rc" -eq "$exit_usage" ] || fail "expected exit $exit_usage for an empty --id, got $rc"
+grep -qF -- "--id needs a value" <<<"$err" || fail "expected '--id needs a value' for an empty --id, got: $err"
+pass "an option without a value is refused with a clear message"
+
+# 18. StartWork_DottedBaseName_CreatesBranchFromIt
+#     Validation must not reject ordinary release-style names.
+# Arrange
+repo="$(fresh_repo)"
+id="18"
+slug="from-release"
+base="release/1.2"
+( cd "$repo" \
+    && git checkout -q -b "$base" \
+    && echo "release" > release.txt \
+    && git add release.txt \
+    && git commit -q -m "release seed" \
+    && git push -q -u origin "$base" \
+    && git checkout -q main )
+# Act
+out="$( cd "$repo" && bash "$SUT" --slug "$slug" --id "$id" --base "$base" 2>/dev/null )"
+# Assert
+[ "$(printf '%s\n' "$out" | tail -1)" = "WORKTREE_PATH=.claude/worktrees/$id-$slug" ] \
+    || fail "expected a worktree for --base '$base', got: $out"
+( cd "$repo/.claude/worktrees/$id-$slug" && git merge-base --is-ancestor "origin/$base" HEAD ) \
+    || fail "expected the new branch to be rooted at origin/$base"
+pass "a dotted --base like '$base' is accepted"
 
 echo "all smoke tests passed"
