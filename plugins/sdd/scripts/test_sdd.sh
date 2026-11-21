@@ -967,7 +967,7 @@ for bad in '{"host":"gitlab"}|sdd.host must be "github" or "azure-devops"' \
            '{"host":"azure-devops","archiveVerdicts":[{"workflow":".github/workflows/x.yml","line":"x"}]}|sdd.archiveVerdicts is GitHub only' \
            '{"archiveBypassReviewers":true}|sdd.archiveBypassReviewers is Azure DevOps only' \
            '{"host":"azure-devops","archiveBypassReviewers":"yes"}|archiveBypassReviewers must be true or false' \
-           '{"host":"azure-devops","specDiffComment":false}|sdd.specDiffComment is GitHub only'; do
+           '{"host":"azure-devops","specDiffComment":false}|sdd.specDiffComment false is GitHub only'; do
     echo "{\"sdd\":${bad%%|*}}" > "$rc/package.json"
     expect_exit 3 node "$rc/scripts/sdd/sdd-config.mjs" --json
     grep -qF -- "${bad#*|}" "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "not reported: ${bad#*|}"; }
@@ -1071,7 +1071,8 @@ expect_exit 2 node "$AZ" pr --default main --project p --repository r --default 
 # Untrusted text never forms a pipeline logging command: ##vso[, ##[ and :: are broken, as the
 # other scripts break them.
 refused 'not active' status '"##vso[task.setvariable variable=x]1 ##VSO[x] ##[group]y ::error::z"'
-! grep -qi '##vso\[\|##\[\|::' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a logging command reached the output"; }
+! grep -qiE '##vso\[|##\[|::' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a logging command reached the output"; }
+grep -qF 'the PR is #\u0023vso[task.setvariable variable=x]1 #\u0023VSO[x] #\u0023[group]y :\u003aerror:\u003az, not active' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "the status not shown, escaped"; }
 # The default branch is held to the source branch's rule: no .., //, trailing / or .lock.
 for name in 'a..b' 'a//b' 'main/' 'main.lock'; do
     expect_exit 2 node "$AZ" pr --default "$name" --project p --repository r
@@ -1586,33 +1587,43 @@ expect_exit 1 apr merge --default main --pr 7
 ends failed "az failing right before completing"
 no_patch "an az failure right before completing"
 # The completion: refused, abandoned, failed, still pending, or landing something else.
+# Once the PATCH is sent, the PR may complete whatever this run sees: every end but completed
+# keeps the verified commit, by a ref the output names.
+clear_refs() { git -C "$awc" for-each-ref --format='%(refname)' refs/sdd/ | while read -r x; do git -C "$awc" update-ref -d "$x"; done; }
+kept_ref() { # what: exactly one ref kept, at the verified head, and named
+    local kept
+    kept="$(git -C "$awc" for-each-ref --format='%(refname) %(objectname)' refs/sdd/)"
+    [ "$(printf '%s\n' "$kept" | grep -c .)" = 1 ] && [ "${kept#* }" = "$ahead" ] || { echo "$kept"; fail "$1: no ref kept to the verified commit"; }
+    grep -qF "kept as ${kept% *}" "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "$1: the kept ref not named"; }
+    clear_refs
+}
+clear_refs
 ado_scenario "$ahead" && touch "$AZ_FIX/refuse"
 expect_exit 1 apr merge --default main --pr 7
 grep -q '^  | ERROR: TF401181' "$TMP_ROOT/out" || fail "az's refusal not shown"
 ends failed "a refused completion"
+kept_ref "a refused completion"
 ado_scenario "$ahead"
 sha_a="$ahead" pr_json status '"abandoned"' > "$AZ_FIX/done.json"
 expect_exit 1 apr merge --default main --pr 7
 ends refused "an abandoned PR"
+clear_refs
 ado_scenario "$ahead"
 sha_a="$ahead" pr_json mergeStatus '"failure"' > "$AZ_FIX/done.json"
 expect_exit 1 apr merge --default main --pr 7
 ends failed "a failed merge"
+clear_refs
 grep -q 'merge status failure' "$TMP_ROOT/out" || fail "the failed merge status not named"
 ado_scenario "$ahead"
 sha_a="$ahead" pr_json mergeStatus '"queued"' > "$AZ_FIX/done.json"
 expect_exit 1 apr merge --default main --pr 7
 ends timeout "a completion that never finishes"
+kept_ref "a completion that never finishes"
 ado_scenario "$ahead"
 sha_a="$ahead" pr_json status '"completed"' lastMergeTargetCommit "{\"commitId\":\"$sha_b\"}" > "$AZ_FIX/done.json"
 expect_exit 1 apr merge --default main --pr 7
 ends unverified "a completion against another target"
-# The completion deleted the source branch: the verified commit stays reachable here, by a ref
-# the output names.
-kept="$(git -C "$awc" for-each-ref --format='%(refname) %(objectname)' refs/sdd/)"
-[ "$(printf '%s\n' "$kept" | grep -c .)" = 1 ] && [ "${kept#* }" = "$ahead" ] || { echo "$kept"; fail "an unverified completion kept no ref to the verified commit"; }
-grep -qF "kept as ${kept% *}" "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "the kept ref not named"; }
-git -C "$awc" update-ref -d "${kept% *}"
+kept_ref "an unverified completion"
 # A run's ref is its own: a ref already there, by the name earlier versions used, is never
 # touched, and a completed run leaves nothing behind.
 git -C "$awc" update-ref refs/sdd/archive-head "$plain"
@@ -1649,6 +1660,7 @@ fake_verify() { # the lines the fake sdd-archive.sh prints
     no_patch "verify printing: $1"
 }
 fake_verify "'archive-mechanical: success'"
+fake_verify "'- compared base $atip with result $ahead' 'archive-mechanical: success' 'extra'"
 fake_verify "'- compared base $sha_b with result $ahead' 'archive-mechanical: success'"
 fake_verify "'- compared base $atip with result $sha_b' 'archive-mechanical: success'"
 # The target: Azure DevOps computed the PR's merge against another commit than the verified tip
@@ -1772,13 +1784,19 @@ for name in 'a..b' 'a//b' 'main/' 'main.lock'; do
     expect_exit 2 apr merge --default "$name" --pr 7
     expect_exit 2 apr open --default main --source "$name" --title t --description-file "$APR"
 done
-# Before anything else, az's azure-devops extension: without it, the remedy.
+# Before anything else, az's azure-devops extension: without it, a warning with the remedy, and
+# the run goes on (az may install it on first use).
 ado_scenario "$ahead" && touch "$AZ_FIX/no-extension"
-expect_exit 1 apr merge --default main --pr 7
-ends failed "no azure-devops extension"
-grep -q 'az extension add --name azure-devops' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "the missing extension's remedy"; }
-expect_exit 1 apr find --default main
+apr merge --default main --pr 7 > "$TMP_ROOT/out" 2>&1 || true
+grep -q '^repos pr show' "$AZ_LOG" || { cat "$TMP_ROOT/out"; fail "a missing extension stopped the run"; }
+grep -q "^- warning: az's azure-devops extension is not installed.*az extension add --name azure-devops" "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "the missing extension's remedy"; }
+[ "$(sed -n 1p "$AZ_LOG")" = 'extension show --name azure-devops -o json' ] || { cat "$AZ_LOG"; fail "the extension not checked first"; }
+echo '[]' > "$AZ_FIX/list.json"
+expect_exit 0 apr find --default main
 grep -q 'az extension add --name azure-devops' "$TMP_ROOT/out" || fail "find without the extension"
+# An empty first page needs no second read: pr=none.
+[ "$(tail -n 1 "$TMP_ROOT/out")" = pr=none ] || { cat "$TMP_ROOT/out"; fail "an empty list is not pr=none"; }
+[ "$(grep -c '^repos pr list' "$AZ_LOG")" = 1 ] || { cat "$AZ_LOG"; fail "an empty first page read again"; }
 # origin's organization, project and repository must each be read, or nothing is called.
 REAL_NODE="$(command -v node)" && export REAL_NODE
 nodeshim="$TMP_ROOT/nodeshim" && mkdir -p "$nodeshim"
@@ -1807,6 +1825,13 @@ printf '[%s]' "$(pol $MR rejected)" > "$AZ_FIX/policies.json"
 expect_exit 1 apr merge --default main --pr 7 --bypass-reviewers
 ends refused "a bypass past a vote"
 no_patch "a bypass past a vote"
+# A reviewer policy Azure DevOps reports rejected is never bypassed, even with no vote seen.
+ado_scenario "$ahead"
+printf '[%s,%s]' "$(pol $MR rejected)" "$(pol $BUILD approved)" > "$AZ_FIX/policies.json"
+expect_exit 1 apr merge --default main --pr 7 --bypass-reviewers
+ends refused "a bypass past a rejected reviewer policy"
+grep -q "waiting won't meet it" "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a rejected reviewer policy not refused at once"; }
+no_patch "a bypass past a rejected reviewer policy"
 # A repository that merges by hand: verified, never completed.
 ado_setup '{"host":"azure-devops","autoMerge":false}'
 ado_scenario "$ahead"

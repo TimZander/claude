@@ -13,9 +13,8 @@
 //       Reads `az repos pr list -o json` and prints `pr=<id>` for each open archive PR from
 //       this repository's own branches (an `archive/` branch or a title starting "Archive", no
 //       fork), or `pr=none`. With --page-size, a list that long may be cut short: exit 3. With
-//       --after, the list past this one (`--skip <its length>`) must be empty: Azure DevOps
-//       can return a shorter page than asked for, so a list shorter than the page isn't proof
-//       on its own (exit 3).
+//       --after, a file holding the list past this one (`--skip <its length>`), which must be
+//       empty (exit 3 otherwise): in case Azure DevOps returns a shorter page than asked for.
 //
 //   node sdd-azure.mjs pr --default <branch> --project <name> --repository <name> [<file>|-]
 //       Checks a PR as `az repos pr show -o json` prints it: in this project and repository
@@ -71,8 +70,8 @@
 //       `unverified`. The merge strategy is named: the first of squash, noFastForward,
 //       rebaseMerge, rebase that every "Require a merge strategy" policy in --merge-policies
 //       (the branch's configurations, `az repos policy list --branch`) or --policies (the PR's
-//       evaluations) allows. The body also deletes the source branch (`deleteSourceBranch`):
-//       an archive branch has no further use, and it never transitions work items. Refuses (exit 1,
+//       evaluations) allows. The body deletes the source branch (`deleteSourceBranch`; an
+//       archive branch has no further use) and transitions no work items. Refuses (exit 1,
 //       a `- not completing:` line) unless the repository is on Azure DevOps, `autoMerge` is
 //       on, the PR's head is still <sha>, its merge was computed against --target, no reviewer
 //       voted Reject or Waiting for author, every required reviewer approved, and the policies
@@ -88,6 +87,7 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { readConfig } from './sdd-config.mjs'
+import { clean } from './sdd-specs.mjs'
 
 /** Policy type ids, stable across organizations and languages (display names are localized). */
 export const MINIMUM_REVIEWERS = 'fa4e907d-c16b-4a4c-9dfa-4906e5d171dd'
@@ -183,7 +183,7 @@ export function isSafeRef(ref) {
 
 /**
  * Whether a branch name (without refs/heads/) is safe, by isSafeRef's rule. sdd-azure-pr.sh's
- * safe_branch is the same rule in bash; the tests hold both to one list of names.
+ * safe_branch is the same rule in bash; the tests try the same names on both.
  * @param {unknown} name
  * @returns {boolean}
  */
@@ -192,14 +192,10 @@ export function isSafeBranch(name) {
 }
 
 /**
- * One line of untrusted text for a `- ` line, with logging-command syntax broken as the other
- * sdd scripts break it: GitHub's `##[` and `::`, and Azure Pipelines' `##vso[` (in any case).
- * @param {unknown} text
+ * One line of untrusted text for a `- ` line, with logging-command syntax broken (`##[`, `::`,
+ * `##vso[`): sdd-specs.mjs's clean, so every sdd script breaks it the same way.
  */
-function oneLine(text) {
-  return String(text).replace(/[\r\n\t]+/g, ' ').replace(/##\[/g, '#\\u0023[').replace(/##(vso)\[/gi, '#\\u0023$1[')
-    .replace(/::/g, ':\\u003a')
-}
+const oneLine = clean
 
 /**
  * The ids of open archive PRs from this repository's own branches: an `archive/` branch or a
@@ -484,11 +480,12 @@ function configurationsOf(input) {
 
 /**
  * The merge strategy to complete with: the first sdd prefers that every enabled "Require a
- * merge strategy" policy on the branch allows, or squash when there is none. Named explicitly,
- * so neither the API default nor a bypass completes with a strategy the repository forbids.
+ * merge strategy" policy given allows, or squash when there is none. Named explicitly, so
+ * neither the API default nor a bypass completes with a strategy the repository forbids.
  * A policy lists only the strategies it allows (`allowSquash: true`, ...); one with none of
- * them is the older form, `useSquashMerge`, or no-fast-forward only.
- * @param {unknown} input the branch's policy configurations
+ * them is the older form, `useSquashMerge`, or no-fast-forward only. Settings that aren't an
+ * object are bad input.
+ * @param {unknown} input policy configurations, or evaluations carrying them
  * @returns {{ strategy: string } | { refused: string }}
  */
 export function mergeStrategy(input) {
@@ -497,7 +494,7 @@ export function mergeStrategy(input) {
     if (String(config.type.id ?? '').toLowerCase() !== MERGE_STRATEGY || !isLive(config)) {
       continue
     }
-    // Read strictly: settings that can't be read never mean "any strategy".
+    // Read strictly: settings that can't be read are never taken as some default.
     if (config.settings === null || typeof config.settings !== 'object' || Array.isArray(config.settings)) {
       throw new InputError('a merge-strategy policy has no settings object')
     }
@@ -533,7 +530,7 @@ export function reviewerObjections(pr) {
   const out = []
   for (const x of pr.reviewers) {
     const who = oneLine(x?.displayName ?? x?.uniqueName ?? 'a reviewer')
-    if (typeof x?.vote !== 'number' || !Number.isFinite(x.vote)) {
+    if (typeof x?.vote !== 'number') {
       throw new InputError(`a reviewer's vote must be a number (${who})`)
     }
     const vote = x.vote
@@ -585,9 +582,9 @@ export function completeBody({ commit, target, pr, policies, mergePolicies, bypa
     return { refused: `a reviewer stands against the PR, which sdd never completes past: ${objections.join('; ')}` }
   }
   const { state } = judgePolicies(policies)
-  // The branch's configurations and the PR's own evaluations, which name every policy that
+  // The branch's configurations and the PR's own evaluations, which carry every policy that
   // applies to the PR: one inherited, or scoped by prefix, that the branch's list misses counts.
-  const merge = mergeStrategy([...configurationsOf(mergePolicies), ...evaluationsOf(policies)])
+  const merge = mergeStrategy([...configurationsOf(mergePolicies), ...configurationsOf(evaluationsOf(policies))])
   if ('refused' in merge) {
     return merge
   }
@@ -714,26 +711,24 @@ function main(args) {
     return 0
   }
   if (cmd === 'find-archive') {
-    let after = null
-    let args = rest
+    // --after <file> once, from a file (standard input is the list's).
     const at = rest.indexOf('--after')
-    if (at >= 0) {
-      after = rest[at + 1]
-      if (after === undefined || after.startsWith('--')) {
-        return usage()
-      }
-      args = [...rest.slice(0, at), ...rest.slice(at + 2)]
-    }
+    const after = at < 0 ? null : rest[at + 1]
+    const args = at < 0 ? rest : [...rest.slice(0, at), ...rest.slice(at + 2)]
     const { pageSize, file, ok } = pageArgs(args)
-    if (!ok || args.includes('--after')) {
+    if (!ok || args.includes('--after') || (after !== null && (after === undefined || after === '-' || after.startsWith('--')))) {
       return usage()
     }
     const list = readJson(file)
     fullPage(list, pageSize, 'open PRs')
     if (after !== null) {
       const more = readJson(after)
-      if (!Array.isArray(more) || more.length > 0) {
-        throw new InputError(`the list past the first ${Array.isArray(list) ? list.length : 0} open PRs isn't empty: Azure DevOps returned a shorter page than asked for, so the list is cut short`)
+      const past = Array.isArray(more) ? more : /** @type {any} */ (more)?.value
+      if (!Array.isArray(past)) {
+        throw new InputError('the list past the first page must be a JSON array')
+      }
+      if (past.length > 0) {
+        throw new InputError('the list past the first page isn\'t empty: Azure DevOps returned a shorter page than asked for, so the list is cut short')
       }
     }
     const ids = findArchivePrs(list)

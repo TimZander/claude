@@ -156,7 +156,7 @@ reason its verdicts are advisory. `/sdd:archive-pr` reads them from the default 
 
 Setting `specDiffComment`, `statuses` or `archiveVerdicts` on Azure DevOps, or
 `archiveBypassReviewers` on GitHub, to anything but its default is an error, not a silent
-no-op. Written at its default, each is accepted on either host.
+no-op.
 
 ## Base pins
 
@@ -280,12 +280,15 @@ What changes in behavior:
   `refused`. A build queued again right before completing ends `timeout`, to run again.
 - `"specDiffComment": true` is accepted on Azure DevOps (the default, so it asks for nothing
   Azure DevOps can't do); `false` is still an error there.
-- `sdd-azure-pr.sh` first checks for `node`, `az` and az's `azure-devops` extension, rejects an
-  option its mode doesn't take or one given twice, holds `--default` and `--source` to the same
-  rule as a PR's source branch, and bounds each `SDD_AZ_*` wait at 86400 seconds. It fetches a
-  PR's head into a ref of its own run (`refs/sdd/archive-pr-<id>-<pid>`), kept and named when a
-  completion is `unverified`, since completing deletes the source branch. `find` reads past the
-  first page of open PRs, so a page Azure DevOps cut short is never read as the whole list.
+- `sdd-azure-pr.sh` first checks for `node` and `az` (and warns without az's `azure-devops`
+  extension). It rejects an option its mode doesn't take, or one given twice, and holds
+  `--default` and `--source` to the same rule as a PR's source branch. Each `SDD_AZ_*` setting
+  is at most 86400 seconds.
+- `merge` fetches the PR's head into a ref of its own run (`refs/sdd/archive-pr-<id>-<pid>`).
+  Once it has sent the completion, the ref is kept, and named, unless the run ends `completed`:
+  completing deletes the source branch.
+- `find` also reads the page past the first, which must be empty, in case Azure DevOps returns
+  fewer open PRs than asked for.
 
 ## Upgrading to 0.4.1 on Azure DevOps
 
