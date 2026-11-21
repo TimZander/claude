@@ -227,4 +227,47 @@ out="$( cd "$wt_host" && bash "$SUT" --slug "child-b" --id "301" --no-worktree 2
     || fail "expected NO worktree directory in --no-worktree mode"
 pass "--no-worktree from inside a worktree switches the current worktree, not main (#155)"
 
+# 15. StartWork_BaseStartingWithDash_RefusedBeforeGitRunsIt
+#     Regression: --base used to reach `git fetch origin <base>` unchecked, so
+#     --upload-pack=<cmd> ran <cmd> when origin is a local repository.
+# Arrange
+repo="$(fresh_repo)"
+marker="$TMP_ROOT/upload-pack-ran.$$"
+exit_usage=2
+# Act
+rc=0
+( cd "$repo" && bash "$SUT" --slug "x" --id "1" --base "--upload-pack=touch $marker" >/dev/null 2>&1 ) || rc=$?
+# Assert
+[ "$rc" -eq "$exit_usage" ] || fail "expected exit $exit_usage for a --base starting with '-', got $rc"
+[ ! -e "$marker" ] || fail "--base '--upload-pack=...' ran a command"
+[ ! -d "$repo/.claude/worktrees/1-x" ] || fail "expected no worktree for a rejected --base"
+pass "--base starting with '-' is refused before git sees it"
+
+# 16. StartWork_InvalidBaseNames_Refused
+# Arrange
+repo="$(fresh_repo)"
+exit_usage=2
+for bad_base in "" "-x" "a..b" "@{-1}" "has space" "trailing/" "a~1" "a:b"; do
+    # Act
+    rc=0
+    ( cd "$repo" && bash "$SUT" --slug "x" --id "1" --base "$bad_base" >/dev/null 2>&1 ) || rc=$?
+    # Assert
+    [ "$rc" -eq "$exit_usage" ] || fail "expected exit $exit_usage for --base '$bad_base', got $rc"
+done
+pass "invalid --base names are refused"
+
+# 17. StartWork_OptionWithoutValue_RefusedWithMessage
+# Arrange
+repo="$(fresh_repo)"
+exit_usage=2
+for option in --base --id --slug; do
+    # Act
+    rc=0
+    err="$( cd "$repo" && bash "$SUT" --slug "x" "$option" 2>&1 >/dev/null )" || rc=$?
+    # Assert
+    [ "$rc" -eq "$exit_usage" ] || fail "expected exit $exit_usage for $option without a value, got $rc"
+    echo "$err" | grep -qF -- "$option needs a value" || fail "expected '$option needs a value', got: $err"
+done
+pass "an option without a value is refused with a clear message"
+
 echo "all smoke tests passed"

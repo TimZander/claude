@@ -13,8 +13,9 @@
 #   BRANCH=<branch>
 #   WORKTREE_PATH=<path>     (only in worktree mode)
 #
-# Refuses to run if the working tree is dirty, the target branch already exists
-# locally, or the target worktree path already exists.
+# Refuses to run if an argument is missing its value or --base is not a valid branch
+# name (exit 2), or if the working tree is dirty, the target branch already exists
+# locally, or the target worktree path already exists (exit 1).
 
 set -euo pipefail
 
@@ -33,11 +34,19 @@ creates the branch in the current checkout instead.
 USAGE
 }
 
+require_value() {
+    if [ "$2" -lt 2 ]; then
+        echo "error: $1 needs a value" >&2
+        usage
+        exit 2
+    fi
+}
+
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --id) ID="${2:-}"; shift 2;;
-        --slug) SLUG="${2:-}"; shift 2;;
-        --base) BASE="${2:-}"; shift 2;;
+        --id) require_value "$1" "$#"; ID="$2"; shift 2;;
+        --slug) require_value "$1" "$#"; SLUG="$2"; shift 2;;
+        --base) require_value "$1" "$#"; BASE="$2"; shift 2;;
         --no-worktree) USE_WORKTREE=0; shift;;
         -h|--help) usage; exit 0;;
         *) echo "unknown arg: $1" >&2; usage; exit 2;;
@@ -53,6 +62,16 @@ fi
 # Validate slug: kebab-case only — lowercase letters, digits, internal hyphens.
 if ! printf '%s' "$SLUG" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'; then
     echo "error: --slug '$SLUG' is not kebab-case (expected lowercase letters/digits, hyphens between words, no leading or trailing hyphens)" >&2
+    exit 2
+fi
+
+# Validate --base before it reaches git. It is passed to `git fetch origin <base>`, where a
+# value starting with "-" would be read as an option (--upload-pack=<cmd> runs a command),
+# so it must be a plain branch name. `check-ref-format` on the full ref rejects "..",
+# "@{", spaces, control characters and the other forms git refuses; the --branch form is
+# avoided because it expands "@{-1}" to the previously checked-out branch.
+if [ -z "$BASE" ] || [ "${BASE#-}" != "$BASE" ] || ! git check-ref-format "refs/heads/$BASE"; then
+    echo "error: --base '$BASE' is not a valid branch name" >&2
     exit 2
 fi
 

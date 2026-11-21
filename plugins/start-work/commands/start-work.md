@@ -72,7 +72,7 @@ Capture the last lines of stdout:
 - `BRANCH=branches/<id>-<slug>` (always present)
 - `WORKTREE_PATH=.claude/worktrees/<id>-<slug>` (present only in worktree mode)
 
-If the script exits non-zero, surface its stderr verbatim and stop. The script's failure modes are: dirty working tree (user must commit, stash, or discard), branch already exists locally (user must rename or delete the existing branch), worktree path already exists (likely a paused-and-resumed card — surface that), unreachable origin (network/auth issue), or `--base` doesn't exist on origin.
+If the script exits non-zero, surface its stderr verbatim and stop. The script's failure modes are: dirty working tree (user must commit, stash, or discard), branch already exists locally (user must rename or delete the existing branch), worktree path already exists (likely a paused-and-resumed card — surface that), unreachable origin (network/auth issue), `--base` is not a valid branch name (it must not start with `-`), or `--base` doesn't exist on origin.
 
 Omit `--id` if the card has no numeric identifier (rare — typically a developer-initiated branch with no tracked work item). The script handles this: branch becomes `branches/<slug>` with no numeric prefix.
 
