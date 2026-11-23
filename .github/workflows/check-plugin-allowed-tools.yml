@@ -1,0 +1,30 @@
+name: check-plugin-allowed-tools
+
+# A plugin command or skill's allowed-tools (an agent's tools) pre-approves those tools while it runs. This check keeps new ones from granting a broad Bash or WebFetch rule; older ones that still do are listed in the script to be narrowed.
+on:
+  pull_request:
+    paths:
+      - "plugins/**"
+      - "external_plugins/**"
+      - "scripts/check-allowed-tools.py"
+      - "scripts/test_check_allowed_tools.py"
+      - ".github/workflows/check-plugin-allowed-tools.yml"
+  push:
+    branches: [main]
+    paths:
+      - "plugins/**"
+      - "external_plugins/**"
+      - "scripts/check-allowed-tools.py"
+      - "scripts/test_check_allowed_tools.py"
+      - ".github/workflows/check-plugin-allowed-tools.yml"
+
+jobs:
+  allowed-tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests
+        run: python3 scripts/test_check_allowed_tools.py
+      - name: Check plugin allowed-tools
+        run: python3 scripts/check-allowed-tools.py

@@ -11,6 +11,12 @@ set -euo pipefail
 #
 # Usage:
 #   bash resolve-pr.sh --args "<raw /deep-review arguments>"
+#   bash resolve-pr.sh --check-branch <name>
+#
+# --check-branch exits 0 when <name> is a plain branch name the caller may pass
+# to git (see is_plain_branch below) and 1 with a message on stderr otherwise.
+# The caller uses it for `branch:` and `base:` values, which do not come from
+# the resolver's own lookups.
 #
 # Output (KEY=value lines on stdout; parse the ones you need):
 #   HOST=github|azdo|unknown    Hosting platform, detected from the origin remote.
@@ -193,8 +199,32 @@ set -euo pipefail
 ARGS=""
 ARGS_SEEN=false
 
+# A branch name the caller may hand to `git fetch`/`git checkout`, even inside
+# single quotes: letters, digits, ".", "_", "-" and "/" only — no shell or quote
+# characters — not starting with "-" (a git option) or "+" (a forced refspec),
+# and valid to git as refs/heads/<name>. Stricter than git itself on purpose.
+is_plain_branch() {
+    # The C locale keeps [A-Za-z] to ASCII; in some locales a range also
+    # matches accented letters.
+    local LC_ALL=C
+    [[ "$1" =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+    [[ "$1" != -* && "$1" != +* ]] || return 1
+    git check-ref-format "refs/heads/$1" >/dev/null 2>&1
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --check-branch)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --check-branch requires a value." >&2
+                exit 1
+            fi
+            if is_plain_branch "$2"; then
+                exit 0
+            fi
+            echo "Error: '$(printf '%q' "$2")' is not a plain branch name (letters, digits, '.', '_', '-' and '/' only, not starting with '-' or '+')." >&2
+            exit 1
+            ;;
         --args)
             if [[ $# -lt 2 ]]; then
                 echo "Error: --args requires a value." >&2
@@ -731,6 +761,15 @@ if [[ "$KIND" == "pr" || "$KIND" == "ambiguous" ]]; then
             echo "Error: Resolved PR #$REF_ID but the lookup returned no branch names." >&2
             exit 1
         fi
+        # The PR's author chooses these names, and the caller passes them to
+        # `git fetch` and `git checkout`. Publish only plain branch names and
+        # refuse the review otherwise (see is_plain_branch).
+        for branch_name in "$SOURCE_BRANCH" "$TARGET_BRANCH"; do
+            if ! is_plain_branch "$branch_name"; then
+                echo "Error: PR #$REF_ID has a branch name that is not a plain git branch name ($(printf '%q' "$branch_name")); refusing to review it. Review it with branch:<name> after fetching it under a plain name." >&2
+                exit 1
+            fi
+        done
     fi
 fi
 

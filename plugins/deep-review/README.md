@@ -137,6 +137,14 @@ Running `/deep-review` **is** the request for those subagents — you never have
 
 Outputs a structured verdict with critical issues, simplification opportunities, and actionable feedback.
 
+## Permissions and untrusted input
+
+A review reads text other people wrote — the diff, the PR description, issue and work-item text, branch names — and the command tells the agent (and its review subagents) to treat it as data, never as instructions. See "Untrusted input" in `commands/deep-review.md`.
+
+The command pre-approves no shell command and no URL fetch. An allow rule cannot limit a command's flags, so even a "read" grant such as `az boards work-item show *` would also allow `--org <any host>`, which sends your Azure DevOps credential to that host. Shell commands therefore follow your own permission settings: commands Claude Code treats as read-only (plain `git log`, `git diff`, `git status`) run without asking, and the rest — running the resolver, fetching the base and PR branches, checking out and restoring, fetching story text — ask unless your settings already allow them.
+
+The resolver refuses a PR whose branch names are not plain branch names (letters, digits, `.`, `_`, `-` and `/`, not starting with `-` or `+`), and its `--check-branch <name>` mode applies the same rule to `branch:` and `base:` values.
+
 ## Agent Invocation
 
 Agents can invoke `/deep-review` via the Skill tool:
