@@ -135,6 +135,7 @@ TEST_TMPDIR=$(mktemp -d) || { echo "mktemp -d failed; cannot run tests" >&2; exi
 #   STUB_MODE=otherrepo ADO PR belonging to a different repository
 #   STUB_STATE=<raw>    override the raw upstream state
 #   STUB_ARGS_FILE=<f>  record argv
+#   STUB_SOURCE=<name>  override the PR's source branch (gh: bare name, az: full ref)
 
 STUB_DIR="$TEST_TMPDIR/bin"
 mkdir -p "$STUB_DIR"
@@ -171,7 +172,7 @@ case "$*" in
         fi
         printf '%b\n' "${STUB_PR_BODY:-A description with no linked issue.}"; exit 0 ;;
 esac
-printf 'branches/142-anchor-pr-review-comments-on-changed-lines\tmain\t%s\tfalse\n' "${STUB_STATE:-MERGED}"
+printf '%s\tmain\t%s\tfalse\n' "${STUB_SOURCE:-branches/142-anchor-pr-review-comments-on-changed-lines}" "${STUB_STATE:-MERGED}"
 STUB
 
 # NOTE the \r\n: real az on Windows emits CRLF, and modelling that is the whole
@@ -230,7 +231,7 @@ case "$*" in
         fi
         printf '%b\r\n' "${STUB_PR_BODY:-A description with no linked work item.}"; exit 0 ;;
 esac
-printf 'refs/heads/branches/7493-apm-errors-noticeerror-poc\r\nrefs/heads/main\r\n%s\r\nBgvCore\r\n' "${STUB_STATE:-completed}"
+printf '%s\r\nrefs/heads/main\r\n%s\r\nBgvCore\r\n' "${STUB_SOURCE:-refs/heads/branches/7493-apm-errors-noticeerror-poc}" "${STUB_STATE:-completed}"
 STUB
 
 chmod +x "$STUB_DIR/gh" "$STUB_DIR/az"
@@ -1185,6 +1186,26 @@ out=$(STUB_PR_BODY="Tracked upstream as AB#9912" run_in "$GH_REPO" --args "pr 17
 assert_line "WORKITEM_ID=142" "$out" "GitHub: AB#<id> does not displace the branch story"
 assert_line "WORKITEM_SOURCE=branch-prefix" "$out" "GitHub: route 4 still runs"
 assert_no_line "WORKITEM_KIND=workitem" "$out" "GitHub: no unfetchable workitem kind is published"
+
+# ── Unsafe branch names ──────────────────────────────────────────────
+# The PR's author picks its branch names, and the caller passes SOURCE_BRANCH
+# and TARGET_BRANCH to `git fetch`/`git checkout`. A name that would be read as
+# a git option ("-...") or a forced refspec ("+...") must never be published.
+
+for unsafe in "--upload-pack=./x" "-x" "+main" "a..b" "a:b" "x.lock"; do
+    out=$(STUB_SOURCE="$unsafe" run_in "$GH_REPO" --args "pr 170"); rc=$?
+    assert_exit 1 "$rc" "GitHub: unsafe source branch '$unsafe' exits 1"
+    assert_contains "not a plain git branch name" "$out" "GitHub: unsafe source branch '$unsafe' is named as the reason"
+    assert_no_line "SOURCE_BRANCH=$unsafe" "$out" "GitHub: unsafe source branch '$unsafe' is not published"
+    out=$(STUB_SOURCE="refs/heads/$unsafe" run_in "$ADO_REPO" --args "pr 4506"); rc=$?
+    assert_exit 1 "$rc" "ADO: unsafe source branch '$unsafe' exits 1"
+    assert_no_line "SOURCE_BRANCH=$unsafe" "$out" "ADO: unsafe source branch '$unsafe' is not published"
+done
+
+# Ordinary names, including dotted and nested ones, still resolve.
+out=$(STUB_SOURCE="release/1.2" run_in "$GH_REPO" --args "pr 170"); rc=$?
+assert_exit 0 "$rc" "GitHub: a dotted, nested source branch resolves"
+assert_line "SOURCE_BRANCH=release/1.2" "$out" "GitHub: a dotted, nested source branch is published unchanged"
 
 echo
 echo "  $pass passed, $fail failed"

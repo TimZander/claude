@@ -731,6 +731,17 @@ if [[ "$KIND" == "pr" || "$KIND" == "ambiguous" ]]; then
             echo "Error: Resolved PR #$REF_ID but the lookup returned no branch names." >&2
             exit 1
         fi
+        # The PR's author chooses these names, and the caller passes them to
+        # `git fetch` and `git checkout`. A name starting with "-" would be read
+        # as a git option and one starting with "+" as a forced refspec, so
+        # publish only plain branch names and refuse the review otherwise.
+        for branch_name in "$SOURCE_BRANCH" "$TARGET_BRANCH"; do
+            if [[ "$branch_name" == -* || "$branch_name" == +* ]] \
+                    || ! git check-ref-format "refs/heads/$branch_name"; then
+                echo "Error: PR #$REF_ID has a branch name that is not a plain git branch name ($(printf '%q' "$branch_name")); refusing to review it." >&2
+                exit 1
+            fi
+        done
     fi
 fi
 

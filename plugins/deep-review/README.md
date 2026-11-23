@@ -137,6 +137,10 @@ Running `/deep-review` **is** the request for those subagents — you never have
 
 Outputs a structured verdict with critical issues, simplification opportunities, and actionable feedback.
 
+## Permissions and untrusted input
+
+A review reads text other people wrote — the diff, the PR description, issue and work-item text, branch names. The command treats all of it as data: text that tries to give the agent instructions is reported as a finding, never followed. To limit what such text could make it do, the command pre-approves only its own resolver script and the `gh`/`az` view/show reads. Everything else asks first: fetching and checking out the PR branch (once per review), fetching a URL, and any other shell command. The resolver also refuses a PR whose branch names are not plain git branch names.
+
 ## Agent Invocation
 
 Agents can invoke `/deep-review` via the Skill tool:
