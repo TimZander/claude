@@ -222,6 +222,20 @@ POLICY_ASK = {
                                  "print the token (also prompts for other argument forms)"),
     "mcp__azure-devops__wit_get_work_item_attachment": "revokes the removed grant; savePath writes local files",
     "mcp__azure-devops__wit_work_item_attachment": "same tool under the consolidated ADO MCP name",
+    # Keep the allowed az/gh reads on the team's own hosts. An allow rule cannot
+    # limit flags, and an ask rule cannot exempt one value (ask beats allow), so
+    # these prompt for every form that names a host: az sends the signed-in
+    # credential to whatever --org says, and gh connects to any host in -R or a
+    # URL. Routine reads without those forms still run unprompted (az takes the
+    # org from `az devops configure --defaults` or the repo's own remote).
+    "Bash(az *--org*)": ("--org/--organization (and every abbreviation az accepts, --orga...) can "
+                         "point az at any host, which receives the credential; even the team's "
+                         "own org prompts because one value cannot be exempted"),
+    "Bash(gh *://*)": "a URL argument or -R URL can name any host (scheme matched in any case)",
+    "Bash(gh *git@*)": "-R git@HOST:OWNER/REPO names any host",
+    "Bash(gh *-R*/*/*)": "-R HOST/OWNER/REPO names any host (also -RHOST/...; github.com/... prompts too)",
+    "Bash(gh *--repo*/*/*)": "--repo HOST/OWNER/REPO and --repo=HOST/OWNER/REPO name any host",
+    "Bash(gh repo view */*/*)": "gh repo view HOST/OWNER/REPO names any host",
     # Team policy: never force push, never amend (standards/CLAUDE.md). `git *push`
     # also matches global options before the subcommand (git -C dir push --force).
     # Not covered: `git push origin :branch` deletes a ref, but a rule ending in `:*`
