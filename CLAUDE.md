@@ -59,6 +59,7 @@ The `pre-push` hook blocks pushes to `main`/`master` globally. To opt out for a 
    }
    ```
 3. The `source` path must be relative to the repository root.
+4. Keep `allowed-tools` narrow: CI (`scripts/check-allowed-tools.py`) rejects a new command, skill or agent that pre-approves bare `Bash`, a Bash rule that launches an interpreter or starts with `*`, or an unrestricted `WebFetch`.
 
 ## Plugin Logic: Prefer Scripts Over Inline Markdown
 

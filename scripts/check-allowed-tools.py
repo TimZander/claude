@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Fail when a plugin command or skill pre-approves a broad tool.
+"""Fail when a plugin command, skill or agent pre-approves a broad tool.
 
-`allowed-tools` in a command or skill's frontmatter pre-approves those tools
-while it runs: Claude Code does not ask first. A bare `Bash` grant lets every
-shell command run unasked, and `WebFetch` lets any URL be fetched unasked -
-dangerous in commands that read text other people wrote (PR descriptions, work
-items, logs, web pages), where that text can try to steer the agent.
+`allowed-tools` in a command or skill's frontmatter (and `tools` in an agent's)
+pre-approves those tools while it runs: Claude Code does not ask first. A broad
+grant - bare `Bash`, a Bash rule that matches anything or launches an
+interpreter, or an unrestricted `WebFetch` - lets the agent run any command or
+reach any URL unasked. That is dangerous in commands that read text other
+people wrote (PR descriptions, work items, logs, web pages), where that text
+can try to steer the agent.
 
 Rules:
-  - a NEW command or skill may not grant bare `Bash` or `WebFetch`; grant
-    specific commands instead, e.g. `Bash(gh pr view *)`;
+  - a NEW command, skill or agent may not grant a broad tool; grant specific
+    commands instead, e.g. `Bash(gh pr view *)`, or none;
   - the files in BASELINE predate this check and still do. They are a
-    burn-down list: when a file is narrowed, remove it from BASELINE (the
-    check fails until you do, so the list can only shrink).
+    burn-down list: when a file is narrowed, delete its entry (the check fails
+    until you do). Adding an entry is a review decision, not a fix - reviewers
+    should reject it unless the PR says why the grant cannot be narrowed.
 
 Usage: python3 scripts/check-allowed-tools.py [repo-root]
 """
@@ -22,10 +25,12 @@ import re
 import sys
 from pathlib import Path
 
-BROAD = ("Bash", "WebFetch")
+# A Bash rule whose command is one of these can run anything, whatever follows.
+INTERPRETERS = {"bash", "sh", "zsh", "dash", "pwsh", "powershell", "cmd", "python", "python3", "py",
+                "node", "perl", "ruby", "eval", "env", "xargs", "sudo", "exec", "command", "source"}
 
 # Files that granted a broad tool when this check was added. Narrow them one PR
-# at a time and delete each entry as you go.
+# at a time and delete each entry as you go. Kept sorted.
 BASELINE = {
     "plugins/cc-census/commands/cc-census-report.md",
     "plugins/cc-census/commands/cc-census.md",
@@ -48,56 +53,148 @@ BASELINE = {
     "plugins/investigate-appinsights-logs/commands/investigate-appinsights-logs.md",
     "plugins/sdd/commands/init.md",
     "plugins/sdd/commands/opt-out.md",
+    "plugins/sdd/skills/conformance-review/SKILL.md",
+    "plugins/sdd/skills/spec-review/SKILL.md",
     "plugins/self-review/commands/self-review.md",
     "plugins/start-work/commands/start-work.md",
     "plugins/tfvc-search/commands/tfvc-search.md",
     "plugins/typ-glyph/commands/typ-glyph.md",
-    "plugins/sdd/skills/conformance-review/SKILL.md",
 }
 
+# Where tool grants live, and the frontmatter key each kind of file uses.
+SCAN = (
+    ("commands/**/*.md", "allowed-tools"),
+    ("skills/**/SKILL.md", "allowed-tools"),
+    ("agents/**/*.md", "tools"),
+)
+PLUGIN_ROOTS = ("plugins", "external_plugins")
 
-def allowed_tools(text: str) -> list[str] | None:
-    """Return the allowed-tools entries from a file's YAML frontmatter, or None."""
-    match = re.match(r"---\r?\n(.*?)\r?\n---", text, re.DOTALL)
-    if not match:
-        return None
-    line = re.search(r"^allowed-tools:[ \t]*(.*)$", match.group(1), re.MULTILINE)
-    if not line:
-        return None
-    # Split on commas that are not inside a Bash(...) specifier.
+FRONTMATTER = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
+
+
+class FrontmatterError(ValueError):
+    """The frontmatter cannot be read reliably, so the file fails the check."""
+
+
+def _strip_comment(value: str) -> str:
+    """Drop a YAML comment (` #...`) that is not inside parentheses or quotes."""
+    depth, quote = 0, ""
+    for index, char in enumerate(value):
+        if quote:
+            if char == quote:
+                quote = ""
+        elif char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(depth - 1, 0)
+        elif char == "#" and depth == 0 and (index == 0 or value[index - 1].isspace()):
+            return value[:index]
+    return value
+
+
+def _split(value: str) -> list[str]:
+    """Split a comma-separated list on commas outside parentheses."""
     entries, depth, current = [], 0, ""
-    for char in line.group(1):
+    for char in value:
         if char == "(":
             depth += 1
         elif char == ")":
-            depth -= 1
+            depth = max(depth - 1, 0)
         if char == "," and depth == 0:
-            entries.append(current.strip())
+            entries.append(current)
             current = ""
         else:
             current += char
-    entries.append(current.strip())
-    return [entry for entry in entries if entry]
+    entries.append(current)
+    return entries
+
+
+def _unquote(entry: str) -> str:
+    entry = entry.strip()
+    if len(entry) >= 2 and entry[0] == entry[-1] and entry[0] in "'\"":
+        entry = entry[1:-1].strip()
+    return entry
+
+
+def tool_grants(text: str, key: str = "allowed-tools") -> list[str] | None:
+    """Return the tool entries under `key` in a file's frontmatter, or None if
+    there is no frontmatter or no such key. Accepts the inline comma form, a
+    flow list `[a, b]`, a block list (`- a` lines), quoted entries and trailing
+    comments. Raises FrontmatterError for a duplicated key."""
+    text = text.lstrip("﻿")
+    match = FRONTMATTER.match(text)
+    if not match:
+        return None
+    lines = match.group(1).splitlines()
+    key_lines = [i for i, line in enumerate(lines) if re.match(rf"{re.escape(key)}[ \t]*:", line)]
+    if not key_lines:
+        return None
+    if len(key_lines) > 1:
+        raise FrontmatterError(f"'{key}' appears {len(key_lines)} times in the frontmatter")
+    index = key_lines[0]
+    value = _strip_comment(lines[index].split(":", 1)[1]).strip()
+    if not value:
+        block = []
+        for line in lines[index + 1:]:
+            item = re.match(r"[ \t]+-[ \t]*(.*)$", line)
+            if not item:
+                if line.strip() == "" or line.lstrip().startswith("#"):
+                    continue
+                break
+            block.append(_strip_comment(item.group(1)))
+        entries = block
+    else:
+        value = _unquote(value)
+        if value.startswith("[") and value.endswith("]"):
+            value = value[1:-1]
+        entries = _split(value)
+    return [entry for entry in (_unquote(e) for e in entries) if entry]
+
+
+def is_broad(entry: str) -> bool:
+    """True if a tool entry pre-approves any command or any URL."""
+    name, _, rest = entry.partition("(")
+    name = name.strip().lower()
+    if name not in ("bash", "webfetch"):
+        return False
+    if not rest:
+        return True
+    spec = rest.rsplit(")", 1)[0].strip()
+    if spec in ("", "*", ":*"):
+        return True
+    if name == "webfetch":
+        return spec.endswith("*")
+    if spec.startswith("*"):
+        return True
+    command = spec.split()[0].replace("\\", "/").rsplit("/", 1)[-1].lower().removesuffix(".exe")
+    return command in INTERPRETERS
 
 
 def broad_grants(entries: list[str]) -> list[str]:
-    return [entry for entry in entries if entry in BROAD]
+    return [entry for entry in entries if is_broad(entry)]
 
 
 def check(root: Path) -> list[str]:
     problems = []
-    files = sorted(root.glob("plugins/*/commands/*.md")) + sorted(root.glob("plugins/*/skills/*/SKILL.md"))
     seen = set()
-    for path in files:
-        rel = path.relative_to(root).as_posix()
-        seen.add(rel)
-        entries = allowed_tools(path.read_text(encoding="utf-8"))
-        broad = broad_grants(entries or [])
-        if broad and rel not in BASELINE:
-            problems.append(f"{rel}: grants {', '.join(broad)} without a specifier; grant specific "
-                            f"commands instead, e.g. Bash(gh pr view *)")
-        if not broad and rel in BASELINE:
-            problems.append(f"{rel}: no longer grants a broad tool - remove it from BASELINE")
+    for plugin_root in PLUGIN_ROOTS:
+        for pattern, key in SCAN:
+            for path in sorted(root.glob(f"{plugin_root}/*/{pattern}")):
+                rel = path.relative_to(root).as_posix()
+                seen.add(rel)
+                try:
+                    entries = tool_grants(path.read_text(encoding="utf-8"), key)
+                except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+                    problems.append(f"{rel}: cannot read its tool grants ({exc})")
+                    continue
+                broad = broad_grants(entries or [])
+                if broad and rel not in BASELINE:
+                    problems.append(f"{rel}: grants {', '.join(broad)}, which pre-approves any command or URL; "
+                                    f"grant specific commands instead, e.g. Bash(gh pr view *)")
+                if not broad and rel in BASELINE:
+                    problems.append(f"{rel}: no longer grants a broad tool - remove it from BASELINE")
     for rel in sorted(BASELINE - seen):
         problems.append(f"{rel}: listed in BASELINE but does not exist - remove it")
     return problems
@@ -105,9 +202,12 @@ def check(root: Path) -> list[str]:
 
 def main() -> int:
     root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent
+    if not (root / "plugins").is_dir():
+        print(f"FAIL: {root} has no plugins/ directory; pass the repository root.")
+        return 2
     problems = check(root)
     if problems:
-        print(f"FAIL: {len(problems)} allowed-tools problem(s):")
+        print(f"FAIL: {len(problems)} tool-grant problem(s):")
         for problem in problems:
             print(f"  - {problem}")
         return 1

@@ -135,7 +135,8 @@ TEST_TMPDIR=$(mktemp -d) || { echo "mktemp -d failed; cannot run tests" >&2; exi
 #   STUB_MODE=otherrepo ADO PR belonging to a different repository
 #   STUB_STATE=<raw>    override the raw upstream state
 #   STUB_ARGS_FILE=<f>  record argv
-#   STUB_SOURCE=<name>  override the PR's source branch (gh: bare name, az: full ref)
+#   STUB_SOURCE=<name>  override the PR's source branch, default mode only (gh: bare name, az: full ref)
+#   STUB_TARGET=<name>  override the PR's target branch, default mode only (same forms)
 
 STUB_DIR="$TEST_TMPDIR/bin"
 mkdir -p "$STUB_DIR"
@@ -172,7 +173,7 @@ case "$*" in
         fi
         printf '%b\n' "${STUB_PR_BODY:-A description with no linked issue.}"; exit 0 ;;
 esac
-printf '%s\tmain\t%s\tfalse\n' "${STUB_SOURCE:-branches/142-anchor-pr-review-comments-on-changed-lines}" "${STUB_STATE:-MERGED}"
+printf '%s\t%s\t%s\tfalse\n' "${STUB_SOURCE:-branches/142-anchor-pr-review-comments-on-changed-lines}" "${STUB_TARGET:-main}" "${STUB_STATE:-MERGED}"
 STUB
 
 # NOTE the \r\n: real az on Windows emits CRLF, and modelling that is the whole
@@ -231,7 +232,7 @@ case "$*" in
         fi
         printf '%b\r\n' "${STUB_PR_BODY:-A description with no linked work item.}"; exit 0 ;;
 esac
-printf '%s\r\nrefs/heads/main\r\n%s\r\nBgvCore\r\n' "${STUB_SOURCE:-refs/heads/branches/7493-apm-errors-noticeerror-poc}" "${STUB_STATE:-completed}"
+printf '%s\r\n%s\r\n%s\r\nBgvCore\r\n' "${STUB_SOURCE:-refs/heads/branches/7493-apm-errors-noticeerror-poc}" "${STUB_TARGET:-refs/heads/main}" "${STUB_STATE:-completed}"
 STUB
 
 chmod +x "$STUB_DIR/gh" "$STUB_DIR/az"
@@ -1189,23 +1190,72 @@ assert_no_line "WORKITEM_KIND=workitem" "$out" "GitHub: no unfetchable workitem 
 
 # ── Unsafe branch names ──────────────────────────────────────────────
 # The PR's author picks its branch names, and the caller passes SOURCE_BRANCH
-# and TARGET_BRANCH to `git fetch`/`git checkout`. A name that would be read as
-# a git option ("-...") or a forced refspec ("+...") must never be published.
+# and TARGET_BRANCH to `git fetch`/`git checkout`, single-quoted. Only plain
+# names (letters, digits, ".", "_", "-", "/"; not starting with "-" or "+";
+# valid to git) may be published: an option, a forced refspec, a quote or any
+# shell character is refused, on both hosts, for both branches.
 
-for unsafe in "--upload-pack=./x" "-x" "+main" "a..b" "a:b" "x.lock"; do
-    out=$(STUB_SOURCE="$unsafe" run_in "$GH_REPO" --args "pr 170"); rc=$?
-    assert_exit 1 "$rc" "GitHub: unsafe source branch '$unsafe' exits 1"
-    assert_contains "not a plain git branch name" "$out" "GitHub: unsafe source branch '$unsafe' is named as the reason"
-    assert_no_line "SOURCE_BRANCH=$unsafe" "$out" "GitHub: unsafe source branch '$unsafe' is not published"
-    out=$(STUB_SOURCE="refs/heads/$unsafe" run_in "$ADO_REPO" --args "pr 4506"); rc=$?
-    assert_exit 1 "$rc" "ADO: unsafe source branch '$unsafe' exits 1"
-    assert_no_line "SOURCE_BRANCH=$unsafe" "$out" "ADO: unsafe source branch '$unsafe' is not published"
+# ResolvePr_UnsafeBranchName_RefusesTheReview
+unsafe_names=(
+    "--upload-pack=./x" "-x" "+main" "a..b" "a:b" "x.lock"
+    "a'b" '$(id)' '`id`' "a;b" "a|b" "a&b" 'a"b' "é"
+)
+exit_refused=1
+refusal_reason="not a plain git branch name"
+gh_pr="pr 170"
+ado_pr="pr 4506"
+for unsafe in "${unsafe_names[@]}"; do
+    # Act: the unsafe name as the source branch, then as the target branch.
+    gh_source_out=$(STUB_SOURCE="$unsafe" run_in "$GH_REPO" --args "$gh_pr"); gh_source_rc=$?
+    gh_target_out=$(STUB_TARGET="$unsafe" run_in "$GH_REPO" --args "$gh_pr"); gh_target_rc=$?
+    ado_source_out=$(STUB_SOURCE="refs/heads/$unsafe" run_in "$ADO_REPO" --args "$ado_pr"); ado_source_rc=$?
+    ado_target_out=$(STUB_TARGET="refs/heads/$unsafe" run_in "$ADO_REPO" --args "$ado_pr"); ado_target_rc=$?
+    # Assert: refused, for the stated reason.
+    assert_exit "$exit_refused" "$gh_source_rc" "GitHub: source branch '$unsafe' is refused"
+    assert_contains "$refusal_reason" "$gh_source_out" "GitHub: source branch '$unsafe' is refused as not plain"
+    assert_exit "$exit_refused" "$gh_target_rc" "GitHub: target branch '$unsafe' is refused"
+    assert_contains "$refusal_reason" "$gh_target_out" "GitHub: target branch '$unsafe' is refused as not plain"
+    assert_exit "$exit_refused" "$ado_source_rc" "ADO: source branch '$unsafe' is refused"
+    assert_contains "$refusal_reason" "$ado_source_out" "ADO: source branch '$unsafe' is refused as not plain"
+    assert_exit "$exit_refused" "$ado_target_rc" "ADO: target branch '$unsafe' is refused"
+    assert_contains "$refusal_reason" "$ado_target_out" "ADO: target branch '$unsafe' is refused as not plain"
 done
 
-# Ordinary names, including dotted and nested ones, still resolve.
-out=$(STUB_SOURCE="release/1.2" run_in "$GH_REPO" --args "pr 170"); rc=$?
-assert_exit 0 "$rc" "GitHub: a dotted, nested source branch resolves"
-assert_line "SOURCE_BRANCH=release/1.2" "$out" "GitHub: a dotted, nested source branch is published unchanged"
+# ResolvePr_DottedNestedBranchNames_ArePublishedUnchanged
+# Arrange
+source_name="release/1.2"
+target_name="develop_2.x"
+exit_ok=0
+# Act
+gh_out=$(STUB_SOURCE="$source_name" STUB_TARGET="$target_name" run_in "$GH_REPO" --args "$gh_pr"); gh_rc=$?
+ado_out=$(STUB_SOURCE="refs/heads/$source_name" STUB_TARGET="refs/heads/$target_name" run_in "$ADO_REPO" --args "$ado_pr"); ado_rc=$?
+# Assert
+assert_exit "$exit_ok" "$gh_rc" "GitHub: dotted, nested branch names resolve"
+assert_line "SOURCE_BRANCH=$source_name" "$gh_out" "GitHub: a dotted, nested source branch is published unchanged"
+assert_line "TARGET_BRANCH=$target_name" "$gh_out" "GitHub: a dotted target branch is published unchanged"
+assert_exit "$exit_ok" "$ado_rc" "ADO: dotted, nested branch names resolve (CRLF stripped first)"
+assert_line "SOURCE_BRANCH=$source_name" "$ado_out" "ADO: a dotted, nested source branch is published unchanged"
+assert_line "TARGET_BRANCH=$target_name" "$ado_out" "ADO: a dotted target branch is published unchanged"
+
+# ResolvePr_CheckBranch_AcceptsOnlyPlainNames
+# Arrange
+exit_ok=0
+exit_refused=1
+# Act / Assert: plain names pass.
+for plain in "main" "release/1.2" "branches/275-start-work_base"; do
+    (cd "$GH_REPO" && bash "$SCRIPT" --check-branch "$plain" >/dev/null 2>&1); rc=$?
+    assert_exit "$exit_ok" "$rc" "--check-branch accepts '$plain'"
+done
+# Act / Assert: unsafe names are refused with a reason.
+for unsafe in "${unsafe_names[@]}"; do
+    out=$(run_in "$GH_REPO" --check-branch "$unsafe"); rc=$?
+    assert_exit "$exit_refused" "$rc" "--check-branch refuses '$unsafe'"
+    assert_contains "is not a plain branch name" "$out" "--check-branch names the reason for '$unsafe'"
+done
+# Act / Assert: a missing value is an error, not a pass.
+out=$(run_in "$GH_REPO" --check-branch); rc=$?
+assert_exit "$exit_refused" "$rc" "--check-branch without a value fails"
+assert_contains "requires a value" "$out" "--check-branch without a value says so"
 
 echo
 echo "  $pass passed, $fail failed"
