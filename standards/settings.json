@@ -114,6 +114,13 @@
       "mcp__azure-devops__wit_get_work_item_attachment",
       "mcp__azure-devops__wit_work_item_attachment",
 
+      "Bash(az *--org*)",
+      "Bash(gh *://*)",
+      "Bash(gh *git@*)",
+      "Bash(gh *-R*/*/*)",
+      "Bash(gh *--repo*/*/*)",
+      "Bash(gh repo view */*/*)",
+
       "Bash(git *push *--force*)",
       "Bash(git *push -f*)",
       "Bash(git *push * -f*)",

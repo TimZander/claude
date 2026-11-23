@@ -629,6 +629,66 @@ class CommittedAskRuleTests(unittest.TestCase):
                 # Assert
                 self.assertFalse(prompted)
 
+    def test_askRules_azOrgOrGhOtherHost_prompt(self):
+        # Arrange
+        commands = [
+            "az boards work-item show --id 5 --org https://example.invalid",
+            "az boards work-item show --id 5 --org=http://127.0.0.1:9",
+            "az boards query --wiql x --organization https://example.invalid",
+            "az repos pr show --id 1 --orga https://example.invalid",
+            "az repos pr list --org https://dev.azure.com.example.invalid/x",
+            "az pipelines runs list --org https://bgvone.visualstudio.com@example.invalid",
+            "az pipelines show --id 1 --org 'https://example.invalid'",
+            "gh pr view 12 -R example.invalid/o/r", "gh pr view -Rexample.invalid/o/r 12",
+            "gh pr view 12 --repo example.invalid/o/r", "gh pr view 12 --repo=example.invalid/o/r",
+            "gh pr view 12 -R git@example.invalid:o/r", "gh run view 5 -R https://example.invalid/o/r",
+            "gh issue view https://example.invalid/o/r/issues/1",
+            "gh pr view HTTPS://example.invalid/o/r/pull/1", "gh pr diff http://example.invalid/o/r/pull/1",
+            "gh repo view example.invalid/o/r", "gh repo view https://example.invalid/o/r",
+            "gh release view v1 --repo example.invalid/o/r", "gh label list -R example.invalid/o/r",
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                # Act
+                prompted = self.prompts(command)
+                # Assert
+                self.assertTrue(prompted)
+
+    def test_askRules_azWithTeamOrg_stillPromptsBecauseOneValueCannotBeExempted(self):
+        # Arrange: ask is checked before allow and a glob cannot say "anything but X",
+        # so the team's own org prompts too; omit --org to run without a prompt.
+        commands = [
+            "az boards work-item show --id 5 --org https://dev.azure.com/bgvone",
+            "az repos pr show --id 1 --organization https://bgvone.visualstudio.com",
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                # Act
+                prompted = self.prompts(command)
+                # Assert
+                self.assertTrue(prompted)
+
+    def test_askRules_routineAzAndGhReads_doNotPrompt(self):
+        # Arrange
+        commands = [
+            "az boards work-item show --id 5", "az boards work-item show --id 5 -o json",
+            "az boards query --wiql \"SELECT [System.Id] FROM WorkItems\"",
+            "az repos pr show --id 1", "az repos pr list --status active",
+            "az pipelines runs list --top 5", "az account show",
+            "gh pr view 12", "gh pr view 12 -R TimZander/claude",
+            "gh pr view 12 --repo TimZander/claude --json body --jq .body",
+            "gh pr view 12 --repo=TimZander/claude", "gh pr list --author @me",
+            "gh issue list --assignee @me", "gh issue view 7 --comments",
+            "gh repo view TimZander/claude", "gh repo view", "gh run list -R TimZander/claude",
+            "gh pr checks 12", "gh search issues \"settings lockdown\" --repo TimZander/claude",
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                # Act
+                prompted = self.prompts(command)
+                # Assert
+                self.assertFalse(prompted)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
