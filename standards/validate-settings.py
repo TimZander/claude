@@ -274,6 +274,12 @@ MUTATING_MCP = (
 # or otherwise lets it write, run, or send anything. CI fails if settings.json
 # allows an mcp__ tool absent from this set.
 KNOWN_SAFE_MCP = {
+    # Consolidated azure-devops server: every action (get, get_batch,
+    # list_comments, my, list_revisions, list_for_iteration, get_type) reads,
+    # and no parameter names a path. wit_backlog is NOT here - its reorder
+    # action writes - and neither is any *_write tool.
+    "mcp__azure-devops__wit_work_item",
+    # Legacy per-operation names, kept for developers on older servers.
     "mcp__azure-devops__wit_get_work_item",
     "mcp__azure-devops__wit_get_work_items_batch_by_ids",
     "mcp__azure-devops__wit_query_by_wiql",

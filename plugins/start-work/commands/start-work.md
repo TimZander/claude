@@ -2,7 +2,11 @@
 name: start-work
 description: Start a new unit of work from a GitHub issue or ADO work item — runs Git Hygiene, creates branches/<id>-<slug> in a worktree by default, self-assigns/transitions state, runs codebase research, and hands off a draft plan
 argument-hint: "[<id> | #<number>] [--base <branch>] [--no-worktree]"
-allowed-tools: Bash, Read, Grep, Glob, Agent, AskUserQuestion, EnterWorktree, mcp__azure-devops__core_list_project_teams, mcp__azure-devops__wit_my_work_items, mcp__azure-devops__wit_get_work_item, mcp__azure-devops__wit_update_work_item, mcp__azure-devops__wit_add_work_item_comment
+allowed-tools: Bash, Read, Grep, Glob, Agent, AskUserQuestion, EnterWorktree, mcp__azure-devops__core_list_project_teams, mcp__azure-devops__wit_work_item
+# The two ADO tools above only read: on the consolidated azure-devops MCP server,
+# wit_work_item's actions are get, get_batch, list_comments, my, list_revisions,
+# list_for_iteration and get_type. The write in Step 6 (wit_work_item_write) is not
+# pre-approved, so the user sees the state and assignee change before it is made.
 user-input: optional
 model: opus
 ---
@@ -35,8 +39,10 @@ Detection logic (same as `improve-stories` Step 0):
 
 ### ADO path
 
-- **Specific work item:** `mcp__azure-devops__wit_get_work_item` for the ID; capture `System.Id`, `System.Title`, `System.State`, `System.WorkItemType`, `System.AreaPath`, `System.Tags`, `System.AssignedTo`, `System.Description`, `Microsoft.VSTS.Common.AcceptanceCriteria`.
-- **Auto-detect:** `mcp__azure-devops__wit_my_work_items` for items assigned to the user. Same multi-result handling as GitHub — present and ask.
+These steps use the consolidated azure-devops MCP server (`wit_work_item` to read, `wit_work_item_write` to write). Always pass `project`; without it the tools open a project picker. If those tools are missing, tell the user the server needs updating instead of improvising with other tools.
+
+- **Specific work item:** `mcp__azure-devops__wit_work_item` with `action: "get"`, `project` and `id`; capture `System.Id`, `System.Title`, `System.State`, `System.WorkItemType`, `System.AreaPath`, `System.Tags`, `System.AssignedTo`, `System.Description`, `Microsoft.VSTS.Common.AcceptanceCriteria`.
+- **Auto-detect:** `mcp__azure-devops__wit_work_item` with `action: "my"` and `project` for items assigned to the user. Same multi-result handling as GitHub — present and ask.
 
 **State guard:** If the card is in `Active`, `In Progress`, `Resolved`, `Closed`, or `Done`, surface that to the user and ask for confirmation before proceeding. Picking up an in-progress card may step on someone else's work; resuming your own paused card is fine but should be intentional.
 
@@ -93,7 +99,7 @@ gh issue edit <number> --add-assignee @me
 GitHub has no formal state to transition — assignment is the active signal.
 
 ### ADO
-Use `mcp__azure-devops__wit_update_work_item` to:
+Use `mcp__azure-devops__wit_work_item_write` with `action: "update"`, `project`, `id`, and JSON Patch `updates` (one `{ op: "add", path: "/fields/<field>", value: ... }` per field) to:
 1. Set `System.State` to `Active`. Some teams use `In Progress` or another non-default state name — if the project's process template uses a non-`Active` next state, surface the choices and ask the user before guessing.
 2. Set `System.AssignedTo` to the current user. Source the user's email by reading `git config --get user.email` — note the flag goes **before** the key; the reversed order silently *sets* the key instead of reading it. Or use the email recorded in `~/.claude/CLAUDE.md`. Note: `mcp__azure-devops__core_list_project_teams` returns *teams*, not user identity — don't use it for this lookup.
 

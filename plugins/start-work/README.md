@@ -17,7 +17,7 @@ Optional flags:
 
 ## What it does
 
-1. **Detect source** — GitHub issue (`#NN`) or ADO work item (bare ID), same logic as `improve-stories`.
+1. **Detect source** — GitHub issue (`#NN`) or ADO work item (bare ID), the same detection `improve-stories` uses.
 2. **Fetch the card** — title, description, area path, current state, dependencies.
 3. **Run Git Hygiene** — verify clean tree, fetch `origin/<base>`. The new branch is rooted directly at the latest `origin/<base>` tip, so no fast-forward of local `<base>` is needed.
 4. **Create the branch** — `branches/<id>-<slug>` from clean base, slug derived from the title (kebab-case, ≤ 50 chars).
@@ -34,4 +34,4 @@ Worktrees keep new work isolated from the main checkout: uncommitted changes and
 
 - `git` 2.31+ (worktree support and `rev-parse --path-format`)
 - **GitHub:** `gh` CLI authenticated for the target repo
-- **ADO:** `az` CLI with the `azure-devops` extension and the Azure DevOps MCP server, both already required by `improve-stories`
+- **ADO:** `az` CLI with the `azure-devops` extension, and the consolidated Azure DevOps MCP server (the generation with `wit_work_item` and `wit_work_item_write`, which `improve-stories` also uses). Reads are pre-approved; the state and assignee update asks first.
