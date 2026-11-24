@@ -274,14 +274,19 @@ Re-run `/sdd:init` to install 0.4.3's `sdd-archive.sh`. Its `verify` is stricter
   (`.gitignore`, `.git/info/exclude`, `core.excludesFile`). A rule like `[Pp]ackages/` or
   `[Bb]in/` could drop files from the reproduction, so an archive that left out a change's new
   main spec or archived delta could pass, while the complete one failed. `/sdd:archive-pr` now
-  checks that nothing ignored is already under `openspec/` (`git status --porcelain --ignored
-  -- openspec`), then commits with `git add -A -f -- openspec`. An archive PR committed without
+  checks, before the archive and again before staging, that nothing else is under `openspec/`
+  (`git status --porcelain --ignored -uall -- openspec`), then commits with
+  `git add -A -f -- openspec`. It stops until `/sdd:init` has installed 0.4.3's script: the
+  0.4.3 skill with an older verify would fail every archive that touches an ignored path. An
+  archive PR committed without
   `-f` that is still open fails if it dropped an ignored file: commit the missing files with
   `-f` and verify again.
 - A reproduction that fails part way, even without a message, ends
   `archive-mechanical: failure` with a reason, never `success`. One this checkout can't run
-  (git can't stage the reproduction, say) exits 3, so `sdd-azure-pr.sh merge` ends `failed`, not
-  `refused`.
+  (git can't stage the reproduction, the base-pin gate crashes, say) exits 3, so
+  `sdd-azure-pr.sh merge` ends `failed`, not `refused`; its output then ends with a `- reason: `
+  line in place of `- compared base`. A problem with the PR found before that still exits 1.
+  The reproduction's checkout runs no git hooks.
 
 ## Upgrading to 0.4.2 on Azure DevOps
 

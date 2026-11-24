@@ -112,6 +112,12 @@ neutralise() {
     sed -e 's/##\[/#\\u0023[/g' -e 's/##\([vV][sS][oO]\)\[/#\\u0023\1[/g' -e 's/::/:\\u003a/g'
 }
 
+# Does $1 hold a `- ` line? grep reads all of it (no -q), so with pipefail an early
+# exit can't SIGPIPE printf into a false "no".
+has_problem_line() {
+    printf '%s\n' "$1" | grep '^- ' >/dev/null
+}
+
 # Folders directly under $2 at revision $1, one per line.
 folders_at() {
     git ls-tree -d --name-only "$1" "$2/" 2>/dev/null | sed "s#^$2/##" | LC_ALL=C sort
@@ -244,7 +250,7 @@ EOF
             printf '%s\n' "$problems" | sed '/^$/d' | neutralise
             internal "cannot re-run the archives in this checkout"
         fi
-        if [ $rstatus -ne 0 ] && ! printf '%s\n' "$problems" | grep -q '^- '; then
+        if [ $rstatus -ne 0 ] && ! has_problem_line "$problems"; then
             problems="$problems"$'\n'"- re-running the archives on the base failed"
         fi
     fi
@@ -261,29 +267,42 @@ EOF
 # Re-runs the archives on a checkout of $2 and compares its openspec/ tree with
 # $3's. Prints a problem line for each difference; prints nothing on a match.
 # Returns 0 on a match, 1 when the result isn't a faithful archive, 3 when this
-# checkout can't do the reproduction (each failure prints its reason first).
+# checkout can't do the reproduction (each failure prints its reason first). A
+# problem with the PR found before this checkout failed keeps the 1, so it is never
+# mistaken for a local failure to retry.
 reproduce() {
     local root="$1" base="$2" result="$3" names="$4" notes="$5"
     local scratch checkout status=0 err
-    scratch="$(mktemp -d)"
+    scratch="$(mktemp -d)" || { echo "- cannot make a scratch directory"; return 3; }
     checkout="$scratch/base"
     # shellcheck disable=SC2064
     trap "git -C '$root' worktree remove --force '$checkout' >/dev/null 2>&1 || true; rm -rf '$scratch'" RETURN
-    git -C "$root" worktree add -q --detach "$checkout" "$base" >/dev/null 2>&1 \
-        || { echo "- cannot check out the base"; return 3; }
+    # No hooks: a post-checkout hook could write files (ignored ones too) into the reproduction.
+    if ! err="$(git -C "$root" -c core.hooksPath=/dev/null worktree add -q --detach "$checkout" "$base" 2>&1)"; then
+        echo "- cannot check out the base:"
+        printf '%s\n' "$err" | sed '/^$/d' | head -n 3 | sed 's/^/  | /'
+        return $((status ? 1 : 3))
+    fi
 
-    local change folder made before out
+    local change folder made before out gstatus
     while IFS=' ' read -r change folder; do
         [ -n "$change" ] || continue
         # Pins, against the main specs as the archives before it left them. A passing
         # gate prints only notes (unfinished tasks): those go to the notes file.
-        if out="$(node "$SCRIPT_DIR/sdd-specs.mjs" gate --cli-root "$root" --dir "$checkout" --change "$change" 2>&1)"; then
+        gstatus=0
+        out="$(node "$SCRIPT_DIR/sdd-specs.mjs" gate --cli-root "$root" --dir "$checkout" --change "$change" 2>&1)" || gstatus=$?
+        if [ $gstatus -eq 0 ]; then
             printf '%s\n' "$out" | sed '/^$/d' >> "$notes"
+        elif [ $gstatus -ge 2 ]; then
+            # 2 (usage) or 3 (internal, node missing...): the gate couldn't run here.
+            echo "- the base-pin gate could not run for $change:"
+            printf '%s\n' "$out" | sed '/^[[:space:]]*$/d' | head -n 3 | sed 's/^/  | /'
+            return $((status ? 1 : 3))
         else
             # Its problems become `- ` lines; anything else it printed (a stack trace, say) is
             # quoted. A gate that fails without a problem line still gets a reason.
             out="$(printf '%s\n' "$out" | sed -e '/^[[:space:]]*$/d' -e 's/^sdd-specs: /- /' -e '/^- /!s/^/  | /')"
-            printf '%s\n' "$out" | grep -q '^- ' || echo "- the base-pin gate failed for $change"
+            has_problem_line "$out" || echo "- the base-pin gate failed for $change"
             [ -z "$out" ] || printf '%s\n' "$out"
             status=1
         fi
@@ -304,8 +323,8 @@ reproduce() {
         if [ "$made" != "$folder" ]; then
             if ! err="$(mv "$checkout/$ARCHIVE/$made" "$checkout/$ARCHIVE/$folder" 2>&1)"; then
                 echo "- cannot rename the archive folder of $change to $folder:"
-                printf '%s\n' "$err" | sed '/^$/d' | tail -n 3 | sed 's/^/  | /'
-                return 3
+                printf '%s\n' "$err" | sed '/^$/d' | head -n 3 | sed 's/^/  | /'
+                return $((status ? 1 : 3))
             fi
         fi
     done <<EOF
@@ -317,11 +336,14 @@ EOF
     local want got
     if ! err="$(git -C "$checkout" add -A -f -- openspec 2>&1)"; then
         echo "- cannot stage the reproduced openspec/:"
-        printf '%s\n' "$err" | sed '/^$/d' | tail -n 3 | sed 's/^/  | /'
-        return 3
+        printf '%s\n' "$err" | sed '/^$/d' | head -n 3 | sed 's/^/  | /'
+        return $((status ? 1 : 3))
     fi
-    got="$(git -C "$checkout" write-tree --prefix=openspec/ 2>/dev/null)" \
-        || { echo "- cannot read the reproduced openspec/"; return 3; }
+    if ! got="$(git -C "$checkout" write-tree --prefix=openspec/ 2>&1)"; then
+        echo "- cannot read the reproduced openspec/:"
+        printf '%s\n' "$got" | sed '/^$/d' | head -n 3 | sed 's/^/  | /'
+        return $((status ? 1 : 3))
+    fi
     want="$(git -C "$root" rev-parse "$result:openspec")"
     if [ "$got" != "$want" ]; then
         echo "- re-running the archives on the base does not reproduce the result's openspec/:"

@@ -379,6 +379,11 @@ out="$(STUB_DATE=2026-09-09 bash "$r5/scripts/sdd/sdd-archive.sh" verify -C "$r5
     || { echo "$out"; fail "verify with overlapping names"; }
 pass "verify renames the folder each archive added, not a look-alike"
 
+# /sdd:archive-pr checks for this exact text to tell a 0.4.3+ sdd-archive.sh from an older one.
+grep -qF -- 'add -A -f -- openspec' "$T/sdd-archive.sh" || fail "sdd-archive.sh lost the text /sdd:archive-pr checks for"
+grep -qF -- "grep -qF -- 'add -A -f -- openspec' scripts/sdd/sdd-archive.sh" "$SCRIPT_DIR/../skills/archive-pr/SKILL.md" \
+    || fail "/sdd:archive-pr no longer checks the installed sdd-archive.sh"
+
 # 0.4.3: verify compares what the PR holds, whatever .gitignore says. Here a .NET-style rule
 # ignores the files of a change named `packages`, which was force-added on the base.
 rg="$(fresh_repo)"
@@ -412,6 +417,16 @@ pass "verify compares the archive exactly, ignoring .gitignore"
 # 0.4.3: a reproduction that fails, even silently, is a failure with a reason, never a success.
 # Uses the faithful archive above, which passes with the real gate.
 git -C "$rg" checkout -q faithful
+# The repository's hooks don't run in the reproduction: an ignored file a post-checkout hook
+# writes under openspec/ would otherwise land in the compared tree and fail a faithful archive.
+rghooks="$TMP_ROOT/hooks.rg"
+mkdir -p "$rghooks"
+printf '#!/bin/sh\nmkdir -p openspec/packages && echo hook > openspec/packages/hook.txt\n' > "$rghooks/post-checkout"
+chmod +x "$rghooks/post-checkout"
+git -C "$rg" config core.hooksPath "$rghooks"
+expect_exit 0 env STUB_DATE=2026-09-09 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+git -C "$rg" config --unset core.hooksPath
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: success' ] || { cat "$TMP_ROOT/out"; fail "a hook's file reached the reproduction"; }
 gate_fails() { # what the stub gate prints before it exits 1
     printf 'if (process.argv[2] === "gate") { process.stdout.write(%s); process.exit(1) }\n' "$1" > "$rg/scripts/sdd/sdd-specs.mjs"
     expect_exit 1 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
@@ -425,12 +440,45 @@ gate_fails "''"
 gate_fails "'  \\n'"
 gate_fails "'TypeError: boom\\n    at x (y.js:1)\\n'"
 grep -qxF -- '  | TypeError: boom' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "the gate's own output not quoted"; }
-# A checkout that can't stage the reproduction is this checkout's failure (exit 3), not the PR's.
-expect_exit 3 env STUB_LOCK_INDEX=1 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
-grep -q '^- cannot stage the reproduced openspec/' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a failed staging without a reason"; }
-grep -q '^- reason: cannot re-run the archives in this checkout' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a failed staging not called internal"; }
-[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || { cat "$TMP_ROOT/out"; fail "a failed staging passed"; }
-git -C "$rg" worktree prune
+# A gate that crashes (exit 2 or 3) is this checkout failing (exit 3), not a verdict on the PR.
+printf 'if (process.argv[2] === "gate") { console.error("sdd-specs: cannot load the OpenSpec parsers"); process.exit(3) }\n' > "$rg/scripts/sdd/sdd-specs.mjs"
+expect_exit 3 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+git -C "$rg" checkout -q -- scripts/sdd/sdd-specs.mjs
+grep -qxF -- '- the base-pin gate could not run for packages:' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a crashed gate without a reason"; }
+grep -qxF -- '  | sdd-specs: cannot load the OpenSpec parsers' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a crashed gate's error not quoted"; }
+grep -q '^- reason: cannot re-run the archives in this checkout' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a crashed gate not called internal"; }
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || { cat "$TMP_ROOT/out"; fail "a crashed gate passed"; }
+
+# A checkout that can't do the reproduction (git or mv failing) exits 3 with the tool's own
+# words, and leaves no worktree or index.lock behind. Fakes on PATH fail one step each.
+fakegit="$TMP_ROOT/fakegit"; fakemv="$TMP_ROOT/fakemv"
+mkdir -p "$fakegit" "$fakemv"
+printf '#!/bin/sh\ncase " $* " in *" $SDD_FAKE_FAIL "*) echo "fatal: $SDD_FAKE_FAIL refused by the test" >&2; exit 128 ;; esac\nexec "%s" "$@"\n' "$(command -v git)" > "$fakegit/git"
+printf '#!/bin/sh\necho "mv: refused by the test" >&2\nexit 1\n' > "$fakemv/mv"
+chmod +x "$fakegit/git" "$fakemv/mv"
+checkout_fails() { # reason line, quoted text, env assignments
+    local reason="$1" quoted="$2"
+    shift 2
+    expect_exit 3 env "$@" bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+    grep -qxF -- "$reason" "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "no reason: $reason"; }
+    grep -q "^  | .*$quoted" "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "the tool's error not quoted: $reason"; }
+    grep -q '^- reason: cannot re-run the archives in this checkout' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "not called internal: $reason"; }
+    [ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || { cat "$TMP_ROOT/out"; fail "passed: $reason"; }
+    [ "$(git -C "$rg" worktree list | wc -l | tr -d ' ')" = 1 ] || { git -C "$rg" worktree list; fail "a worktree left behind: $reason"; }
+    ! find "$rg/.git" -name index.lock | grep -q . || fail "an index.lock left behind: $reason"
+}
+checkout_fails '- cannot check out the base:' 'worktree refused by the test' PATH="$fakegit:$PATH" SDD_FAKE_FAIL=worktree
+checkout_fails '- cannot rename the archive folder of packages to 2026-03-04-packages:' 'mv: refused by the test' PATH="$fakemv:$PATH" STUB_DATE=2026-09-09
+checkout_fails '- cannot stage the reproduced openspec/:' 'index.lock' STUB_LOCK_INDEX=1 STUB_DATE=2026-03-04
+checkout_fails '- cannot read the reproduced openspec/:' 'write-tree refused by the test' PATH="$fakegit:$PATH" SDD_FAKE_FAIL=write-tree STUB_DATE=2026-03-04
+# A PR problem found before the checkout failed stays the verdict (exit 1), with both reasons.
+printf 'if (process.argv[2] === "gate") { process.stdout.write("- packages: a stale pin\\n"); process.exit(1) }\n' > "$rg/scripts/sdd/sdd-specs.mjs"
+expect_exit 1 env PATH="$fakegit:$PATH" SDD_FAKE_FAIL=write-tree STUB_DATE=2026-03-04 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+git -C "$rg" checkout -q -- scripts/sdd/sdd-specs.mjs
+grep -qxF -- '- packages: a stale pin' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "the PR problem lost to a checkout failure"; }
+grep -qxF -- '- cannot read the reproduced openspec/:' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "the checkout failure not reported with the PR problem"; }
+grep -q '^- compared base ' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a PR problem without the comparison line"; }
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || { cat "$TMP_ROOT/out"; fail "a PR problem with a checkout failure passed"; }
 pass "verify fails when the reproduction fails, and says why"
 
 # --- session-start.sh: npm ci only when stale, status lines, never fails ---------------
