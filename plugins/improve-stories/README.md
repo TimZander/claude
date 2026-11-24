@@ -30,15 +30,21 @@ Examples:
 7. Drafts structured descriptions with problem statements, root causes, proposed fixes, and acceptance criteria
 8. Shows you each draft in full and writes only the ones you approve — does not change title, state, assignment, labels, or points
 
-## Permissions
+## Permissions and untrusted input
 
-The command pre-approves only reads: Read, Grep, Glob, Agent, AskUserQuestion and the Azure DevOps MCP read tools. It pre-approves no shell command and no write. It reads text other people wrote, an allow rule cannot limit a command's flags (`gh issue view *` also matches `-R <any host>`), and a pre-approved write would let an item's text change items without you seeing it. So `gh` and `az` commands, and the ADO update, comment, link and child-creation tools, follow your own permission settings: reads you have allowed run without asking, and every write asks unless you allowed it yourself.
+The command pre-approves no shell command and no write. It pre-approves only Read, Grep, Glob, Agent, AskUserQuestion and three Azure DevOps MCP tools that only read (`core_list_project_teams`, `wit_work_item`, `wit_query`, as named by the current azure-devops MCP server). Issue and work-item text was written by other people, so the command treats it as material, never as instructions; see "Untrusted input" in the command for the details.
+
+What that means in use:
+
+- `gh` and `az` commands follow your own permission settings. Reads you have allowed (such as `gh issue view`) run without asking; the rest ask.
+- The iteration lookup runs `az devops invoke --org ...`, which asks under many settings. If you decline, the command asks you which iteration to use.
+- Every draft, split and link is shown in full and confirmed in the chat before it is written. The write itself (`gh issue edit`/`comment`/`create`, `gh api graphql`, or the ADO `*_write` tools) then asks again unless you allowed it, so expect about two prompts per item written. Denying one skips that item.
 
 ## Multi-feature story detection
 
-When a story names several independently-shippable features (e.g., "Add day-use parking, parking restrictions, and parking override"), the skill proposes splitting it into child stories before any implementation work begins. Signals include "and"/comma-linked distinct feature nouns in the title, acceptance criteria that cluster into independent groups, and multiple distinct user-facing deliverables. Rationale and thresholds live in `standards/CLAUDE.md` → **PR Size and Splitting** (the team standard this extension enforces upstream).
+When a story names several independently-shippable features (e.g., "Add day-use parking, parking restrictions, and parking override"), the skill proposes splitting it into child stories before any implementation work begins. Signals include "and"/comma-linked distinct feature nouns in the title, acceptance criteria that cluster into independent groups, and multiple distinct user-facing deliverables. Each feature should ship as its own story and pull request, because one large PR is harder to review and to revert.
 
-On approval, the skill creates the children (GitHub: `gh issue create` + `addBlockedBy` linking; ADO: `wit_add_child_work_items` for atomic create-and-parent-link), annotates the parent with pointers to the children, and optionally queues the new children through the same improvement flow in the current session.
+On approval, the skill creates the children (GitHub: `gh issue create` + `addBlockedBy` linking; ADO: `wit_work_item_write` with `add_child` for atomic create-and-parent-link), annotates the parent with pointers to the children, and optionally queues the new children through the same improvement flow in the current session.
 
 ## Large Batches
 
