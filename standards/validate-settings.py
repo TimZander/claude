@@ -265,6 +265,11 @@ MUTATING_MCP = (
     "_update", "_create", "_add_", "_delete", "_remove", "_reply",
     "_vote", "_link", "_unlink", "run_pipeline", "create_pipeline",
     "update_build", "_set_", "authenticate", "attachment",
+    # Consolidated azure-devops server: every writing tool ends in _write
+    # (wit_work_item_write, repo_pull_request_write, pipelines_write, ...), and
+    # wit_backlog's reorder action writes. "wit_backlog" does not match the
+    # legacy read tools wit_list_backlogs / wit_list_backlog_work_items.
+    "_write", "wit_backlog",
 )
 
 # MCP tools reviewed and verified read-only. An mcp__ allow entry MUST be in
@@ -274,12 +279,17 @@ MUTATING_MCP = (
 # or otherwise lets it write, run, or send anything. CI fails if settings.json
 # allows an mcp__ tool absent from this set.
 KNOWN_SAFE_MCP = {
-    # Consolidated azure-devops server: every action (get, get_batch,
-    # list_comments, my, list_revisions, list_for_iteration, get_type) reads,
-    # and no parameter names a path. wit_backlog is NOT here - its reorder
-    # action writes - and neither is any *_write tool.
+    # Consolidated azure-devops MCP server (reviewed 2026-11-24 against its live
+    # schema): wit_work_item's actions are get, get_batch, list_comments, my,
+    # list_revisions, list_for_iteration and get_type - all reads - and no
+    # parameter names a path. Re-review the action list whenever the server is
+    # upgraded: a new write action here would be pre-approved for everyone.
+    # wit_backlog is NOT here (its reorder action writes), nor is any *_write tool.
+    # To revoke an entry, add a matching `ask` rule and list it in POLICY_ASK;
+    # deleting the line does not remove it from developers who already synced it.
     "mcp__azure-devops__wit_work_item",
-    # Legacy per-operation names, kept for developers on older servers.
+    # --- Legacy per-operation azure-devops names (pre-consolidation server),
+    # kept for developers on older servers. ---
     "mcp__azure-devops__wit_get_work_item",
     "mcp__azure-devops__wit_get_work_items_batch_by_ids",
     "mcp__azure-devops__wit_query_by_wiql",
@@ -305,10 +315,6 @@ KNOWN_SAFE_MCP = {
     "mcp__azure-devops__repo_list_branches_by_repo",
     "mcp__azure-devops__repo_list_my_branches_by_repo",
     "mcp__azure-devops__repo_get_branch_by_name",
-    "mcp__azure-devops__repo_search_commits",
-    "mcp__azure-devops__core_list_projects",
-    "mcp__azure-devops__core_list_project_teams",
-    "mcp__azure-devops__core_get_identity_ids",
     "mcp__azure-devops__pipelines_get_builds",
     "mcp__azure-devops__pipelines_get_build_log",
     "mcp__azure-devops__pipelines_get_build_log_by_id",
@@ -319,6 +325,12 @@ KNOWN_SAFE_MCP = {
     "mcp__azure-devops__pipelines_get_run",
     "mcp__azure-devops__pipelines_list_runs",
     "mcp__azure-devops__pipelines_list_artifacts",
+    # --- End of legacy names. The azure-devops tools below have the same name
+    # on both server generations. ---
+    "mcp__azure-devops__repo_search_commits",
+    "mcp__azure-devops__core_list_projects",
+    "mcp__azure-devops__core_list_project_teams",
+    "mcp__azure-devops__core_get_identity_ids",
     "mcp__newrelic__execute_nrql_query",
     "mcp__newrelic__natural_language_to_nrql_query",
     "mcp__newrelic__get_entity",

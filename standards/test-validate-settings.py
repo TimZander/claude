@@ -533,7 +533,13 @@ class McpTests(unittest.TestCase):
         # Arrange
         for entry in ("mcp__azure-devops__wit_get_something_new",
                       "mcp__azure-devops__wit_get_work_item_attachment",
-                      "mcp__azure-devops__wit_update_work_item"):
+                      "mcp__azure-devops__wit_update_work_item",
+                      "mcp__azure-devops__wit_work_item_write",
+                      "mcp__azure-devops__wit_work_item_comment_write",
+                      "mcp__azure-devops__wit_work_item_link_write",
+                      "mcp__azure-devops__repo_pull_request_write",
+                      "mcp__azure-devops__pipelines_write",
+                      "mcp__azure-devops__wit_backlog"):
             with self.subTest(entry=entry):
                 # Act
                 reason = vs.check_mcp(entry)
@@ -542,12 +548,39 @@ class McpTests(unittest.TestCase):
 
     def test_checkMcp_mutatingNameAddedToReviewedSet_isFlagged(self):
         # Arrange
-        entry = "mcp__azure-devops__wit_update_work_item"
-        with mock.patch.object(vs, "KNOWN_SAFE_MCP", vs.KNOWN_SAFE_MCP | {entry}):
-            # Act
-            reason = vs.check_mcp(entry)
+        for entry in ("mcp__azure-devops__wit_update_work_item",
+                      "mcp__azure-devops__wit_work_item_write",
+                      "mcp__azure-devops__wit_work_item_comment_write",
+                      "mcp__azure-devops__wit_work_item_link_write",
+                      "mcp__azure-devops__repo_pull_request_write",
+                      "mcp__azure-devops__repo_pull_request_thread_write",
+                      "mcp__azure-devops__repo_file_write",
+                      "mcp__azure-devops__pipelines_write",
+                      "mcp__azure-devops__wit_backlog"):
+            with self.subTest(entry=entry):
+                with mock.patch.object(vs, "KNOWN_SAFE_MCP", vs.KNOWN_SAFE_MCP | {entry}):
+                    # Act
+                    reason = vs.check_mcp(entry)
+                # Assert
+                self.assertIn("looks mutating", reason)
+
+    def test_checkMcp_consolidatedWorkItemReadTool_passes(self):
+        # Arrange
+        entry = "mcp__azure-devops__wit_work_item"
+        # Act
+        reason = vs.check_mcp(entry)
         # Assert
-        self.assertIn("looks mutating", reason)
+        self.assertIsNone(reason)
+
+    def test_checkMcp_everyReviewedTool_isNotFlaggedMutating(self):
+        # Arrange
+        reviewed = sorted(vs.KNOWN_SAFE_MCP)
+        for entry in reviewed:
+            with self.subTest(entry=entry):
+                # Act
+                reason = vs.check_mcp(entry)
+                # Assert
+                self.assertIsNone(reason)
 
     def test_checkMcp_reviewedTool_passes(self):
         # Arrange

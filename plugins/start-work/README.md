@@ -1,6 +1,6 @@
 # start-work
 
-Bookend to `craft-pr`. Encodes the **Git Hygiene Before New Work**, **Branch Naming and PR Linking**, and **Mark Work Items Active** procedures from `standards/CLAUDE.md` so every developer lands on the same starting line when picking up a card.
+Bookend to `craft-pr`. Encodes the **Git Hygiene Before New Work**, **Branch Naming and PR Linking**, and **Mark Work Items Active** team procedures so every developer lands on the same starting line when picking up a card.
 
 ## Usage
 
@@ -17,7 +17,7 @@ Optional flags:
 
 ## What it does
 
-1. **Detect source** — GitHub issue (`#NN`) or ADO work item (bare ID), the same detection `improve-stories` uses.
+1. **Detect source** — GitHub issue (`#NN`) or ADO work item (bare ID); a bare ID in a repository with a GitHub remote asks which you meant.
 2. **Fetch the card** — title, description, area path, current state, dependencies.
 3. **Run Git Hygiene** — verify clean tree, fetch `origin/<base>`. The new branch is rooted directly at the latest `origin/<base>` tip, so no fast-forward of local `<base>` is needed.
 4. **Create the branch** — `branches/<id>-<slug>` from clean base, slug derived from the title (kebab-case, ≤ 50 chars).
@@ -34,4 +34,5 @@ Worktrees keep new work isolated from the main checkout: uncommitted changes and
 
 - `git` 2.31+ (worktree support and `rev-parse --path-format`)
 - **GitHub:** `gh` CLI authenticated for the target repo
-- **ADO:** `az` CLI with the `azure-devops` extension, and the consolidated Azure DevOps MCP server (the generation with `wit_work_item` and `wit_work_item_write`, which `improve-stories` also uses). Reads are pre-approved; the state and assignee update asks first.
+- **ADO:** `az` CLI with the `azure-devops` extension, and the consolidated Azure DevOps MCP server — the generation with `wit_work_item` and `wit_work_item_write`. Reading the card is pre-approved; the MCP state and assignee update and the identity lookup go through your permission settings. Shell commands (including `gh issue edit` on the GitHub path) are still pre-approved.
+  - **On an older server** (per-operation tools such as `wit_get_work_item`), the ADO path stops and says the server needs updating. The GitHub path is unaffected.
