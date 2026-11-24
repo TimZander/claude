@@ -58,11 +58,14 @@ If the command fails, the settings are invalid: report its message and don't mer
 ## Step 2: Archive and open the PR
 
 1. Create a branch `archive/<first-change>[-and-more]` from the default branch.
-2. Run `bash scripts/sdd/sdd-archive.sh run`. It archives every active change in name order and
+2. `git status --porcelain --ignored -- openspec` must print nothing: step 3 stages ignored files
+   too, so one already there (an editor's swap file, `.DS_Store`, local notes) would be committed
+   and fail verify. If it prints anything, report it and stop; never delete it yourself.
+   Then run `bash scripts/sdd/sdd-archive.sh run`. It archives every active change in name order and
    stops at the first failure. On failure, report its output and stop: an archive that fails is
    a spec problem for its change, not something to fix in the archive PR.
 3. Confirm only `openspec/` changed (`git status --porcelain`), stage it with
-   `git add -A -f -- openspec` (`-f`, so a `.gitignore` rule can't leave out a file the archive
+   `git add -A -f -- openspec` (`-f`, so an ignore rule can't leave out a file the archive
    wrote; verify compares every one), and commit: `Archive <change>[, <change>…]`.
 4. Verify locally before pushing:
    `bash scripts/sdd/sdd-archive.sh verify --base <default> --result HEAD`. It must end with

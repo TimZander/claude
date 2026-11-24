@@ -127,6 +127,8 @@ async function main() {
       for (const x of plan.added) blocks.set(x.name, x.raw)
       fs.writeFileSync(dest, head + '\n\n' + [...blocks.values()].join('\n\n') + '\n')
     }
+    // A checkout that can't stage: its index is locked.
+    if (process.env.STUB_LOCK_INDEX) fs.writeFileSync(require('child_process').execSync('git rev-parse --git-path index.lock').toString().trim(), '')
     const date = process.env.STUB_DATE || new Date().toISOString().slice(0, 10)
     fs.mkdirSync('openspec/changes/archive', { recursive: true })
     fs.renameSync(src, path.join('openspec/changes/archive', date + '-' + name))
@@ -388,28 +390,48 @@ git -C "$rg" add -A && git -C "$rg" add -f openspec && git -C "$rg" commit -q -m
 gbase="$(git -C "$rg" rev-parse HEAD)"
 git -C "$rg" checkout -q -b faithful
 STUB_DATE=2026-03-04 bash "$rg/scripts/sdd/sdd-archive.sh" run -C "$rg" >/dev/null
-git -C "$rg" add -A -f openspec && git -C "$rg" commit -q -m archive
-expect_exit 0 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+# Staged the way /sdd:archive-pr stages it; verified on another day, so the folder is renamed.
+git -C "$rg" add -A -f -- openspec && git -C "$rg" commit -q -m archive
+expect_exit 0 env STUB_DATE=2026-09-09 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
 [ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: success' ] || { cat "$TMP_ROOT/out"; fail "faithful archive under .gitignore"; }
 # The same archive committed without -f leaves out the new main spec and the archived delta.
 git -C "$rg" checkout -q -b lossy "$gbase"
 STUB_DATE=2026-03-04 bash "$rg/scripts/sdd/sdd-archive.sh" run -C "$rg" >/dev/null
 git -C "$rg" add -A openspec && git -C "$rg" commit -q -m archive
 [ -z "$(git -C "$rg" ls-tree -r --name-only HEAD openspec/specs/packages)" ] || fail "test setup: main spec committed"
+[ -z "$(git -C "$rg" ls-tree -r --name-only HEAD openspec/changes/archive/2026-03-04-packages/specs)" ] || fail "test setup: delta committed"
+[ -n "$(git -C "$rg" ls-tree -r --name-only HEAD openspec/changes/archive/2026-03-04-packages)" ] || fail "test setup: no archive folder"
+# Only so the checkouts below don't trip over the ignored files the run left behind.
 git -C "$rg" clean -qfdX openspec
 expect_exit 1 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
 grep -q 'does not reproduce' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "an archive missing ignored files not reported"; }
+grep -q '^  | .*specs/packages/spec.md' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "the dropped files not named"; }
 [ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || fail "lossy archive verdict"
 pass "verify compares the archive exactly, ignoring .gitignore"
 
 # 0.4.3: a reproduction that fails, even silently, is a failure with a reason, never a success.
+# Uses the faithful archive above, which passes with the real gate.
 git -C "$rg" checkout -q faithful
-printf 'if (process.argv[2] === "gate") process.exit(1)\n' > "$rg/scripts/sdd/sdd-specs.mjs"
-expect_exit 1 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
-[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || { cat "$TMP_ROOT/out"; fail "a failed reproduction passed"; }
-grep -q '^- .*packages' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a failed reproduction without a reason"; }
-git -C "$rg" checkout -q -- scripts/sdd/sdd-specs.mjs
-pass "verify fails when the reproduction fails"
+gate_fails() { # what the stub gate prints before it exits 1
+    printf 'if (process.argv[2] === "gate") { process.stdout.write(%s); process.exit(1) }\n' "$1" > "$rg/scripts/sdd/sdd-specs.mjs"
+    expect_exit 1 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+    git -C "$rg" checkout -q -- scripts/sdd/sdd-specs.mjs
+    [ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || { cat "$TMP_ROOT/out"; fail "a failed gate passed: $1"; }
+    grep -qxF -- '- the base-pin gate failed for packages' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a failed gate without a reason: $1"; }
+    ! grep -q 'does not reproduce' "$TMP_ROOT/out" || fail "a failed gate reported as a mismatch: $1"
+    ! grep -v -e '^- ' -e '^  | ' -e '^archive-mechanical: ' "$TMP_ROOT/out" | grep -q . || { cat "$TMP_ROOT/out"; fail "a line outside the format: $1"; }
+}
+gate_fails "''"
+gate_fails "'  \\n'"
+gate_fails "'TypeError: boom\\n    at x (y.js:1)\\n'"
+grep -qxF -- '  | TypeError: boom' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "the gate's own output not quoted"; }
+# A checkout that can't stage the reproduction is this checkout's failure (exit 3), not the PR's.
+expect_exit 3 env STUB_LOCK_INDEX=1 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+grep -q '^- cannot stage the reproduced openspec/' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a failed staging without a reason"; }
+grep -q '^- reason: cannot re-run the archives in this checkout' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a failed staging not called internal"; }
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || { cat "$TMP_ROOT/out"; fail "a failed staging passed"; }
+git -C "$rg" worktree prune
+pass "verify fails when the reproduction fails, and says why"
 
 # --- session-start.sh: npm ci only when stale, status lines, never fails ---------------
 r6="$(fresh_repo)"
