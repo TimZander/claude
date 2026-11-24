@@ -232,7 +232,11 @@ EOF
         # The gate's notes (unfinished tasks) come back through their own file, never
         # through the problems, so no line in them can hide or stand in for a problem.
         NOTES="$(mktemp)"
-        problems="$(reproduce "$root" "$base" "$result" "$names" "$NOTES")" || true
+        # Its exit status counts as much as its output: a reproduction that failed part way
+        # must never leave a partial tree to pass for a match.
+        if ! problems="$(reproduce "$root" "$base" "$result" "$names" "$NOTES")"; then
+            [ -n "$problems" ] || problems="- re-running the archives on the base failed"
+        fi
         sed -n 's/^- note: /- note: /p' "$NOTES" | neutralise
     fi
 
@@ -265,6 +269,8 @@ reproduce() {
         if out="$(node "$SCRIPT_DIR/sdd-specs.mjs" gate --cli-root "$root" --dir "$checkout" --change "$change" 2>&1)"; then
             printf '%s\n' "$out" | sed '/^$/d' >> "$notes"
         else
+            # A gate that fails without a word still fails, with a reason.
+            [ -n "$(printf '%s' "$out" | sed '/^$/d')" ] || out="sdd-specs: the base-pin gate failed for $change"
             printf '%s\n' "$out" | sed '/^$/d' | sed 's/^sdd-specs: /- /'
             status=1
         fi
@@ -283,16 +289,22 @@ reproduce() {
             return 1
         fi
         if [ "$made" != "$folder" ]; then
-            mv "$checkout/$ARCHIVE/$made" "$checkout/$ARCHIVE/$folder"
+            mv "$checkout/$ARCHIVE/$made" "$checkout/$ARCHIVE/$folder" 2>/dev/null \
+                || { echo "- cannot rename the archive folder of $change to $folder"; return 1; }
         fi
     done <<EOF
 $(printf '%s' "$names" | LC_ALL=C sort)
 EOF
 
+    # -f: a .gitignore rule (bin/, packages/, *.log...) must not drop a file the archives
+    # wrote, so the comparison is with exactly what a faithful archive holds.
     local want got
-    git -C "$checkout" add -A openspec
-    got="$(git -C "$checkout" write-tree --prefix=openspec/)"
-    want="$(git -C "$root" rev-parse "$result:openspec")"
+    git -C "$checkout" add -A -f -- openspec >/dev/null 2>&1 \
+        || { echo "- cannot stage the reproduced openspec/"; return 1; }
+    got="$(git -C "$checkout" write-tree --prefix=openspec/)" \
+        || { echo "- cannot read the reproduced openspec/"; return 1; }
+    want="$(git -C "$root" rev-parse --verify --quiet "$result:openspec")" \
+        || { echo "- the result has no openspec/"; return 1; }
     if [ "$got" != "$want" ]; then
         echo "- re-running the archives on the base does not reproduce the result's openspec/:"
         git -C "$root" diff --stat "$got" "$want" | sed 's/^/  | /'

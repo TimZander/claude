@@ -377,6 +377,40 @@ out="$(STUB_DATE=2026-09-09 bash "$r5/scripts/sdd/sdd-archive.sh" verify -C "$r5
     || { echo "$out"; fail "verify with overlapping names"; }
 pass "verify renames the folder each archive added, not a look-alike"
 
+# 0.4.3: verify compares what the PR holds, whatever .gitignore says. Here a .NET-style rule
+# ignores the files of a change named `packages`, which was force-added on the base.
+rg="$(fresh_repo)"
+mkdir -p "$rg/scripts" && cp -R "$T" "$rg/scripts/sdd" && install_stub "$rg"
+printf 'node_modules\n**/[Pp]ackages/*\n' > "$rg/.gitignore"
+add_change "$rg" packages
+git -C "$rg" add -A && git -C "$rg" add -f openspec && git -C "$rg" commit -q -m base
+[ -n "$(git -C "$rg" ls-files openspec/changes/packages/specs/packages/spec.md)" ] || fail "test setup: delta not tracked"
+gbase="$(git -C "$rg" rev-parse HEAD)"
+git -C "$rg" checkout -q -b faithful
+STUB_DATE=2026-03-04 bash "$rg/scripts/sdd/sdd-archive.sh" run -C "$rg" >/dev/null
+git -C "$rg" add -A -f openspec && git -C "$rg" commit -q -m archive
+expect_exit 0 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: success' ] || { cat "$TMP_ROOT/out"; fail "faithful archive under .gitignore"; }
+# The same archive committed without -f leaves out the new main spec and the archived delta.
+git -C "$rg" checkout -q -b lossy "$gbase"
+STUB_DATE=2026-03-04 bash "$rg/scripts/sdd/sdd-archive.sh" run -C "$rg" >/dev/null
+git -C "$rg" add -A openspec && git -C "$rg" commit -q -m archive
+[ -z "$(git -C "$rg" ls-tree -r --name-only HEAD openspec/specs/packages)" ] || fail "test setup: main spec committed"
+git -C "$rg" clean -qfdX openspec
+expect_exit 1 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+grep -q 'does not reproduce' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "an archive missing ignored files not reported"; }
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || fail "lossy archive verdict"
+pass "verify compares the archive exactly, ignoring .gitignore"
+
+# 0.4.3: a reproduction that fails, even silently, is a failure with a reason, never a success.
+git -C "$rg" checkout -q faithful
+printf 'if (process.argv[2] === "gate") process.exit(1)\n' > "$rg/scripts/sdd/sdd-specs.mjs"
+expect_exit 1 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || { cat "$TMP_ROOT/out"; fail "a failed reproduction passed"; }
+grep -q '^- .*packages' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a failed reproduction without a reason"; }
+git -C "$rg" checkout -q -- scripts/sdd/sdd-specs.mjs
+pass "verify fails when the reproduction fails"
+
 # --- session-start.sh: npm ci only when stale, status lines, never fails ---------------
 r6="$(fresh_repo)"
 bash "$INIT" --repo "$r6" --no-install >/dev/null

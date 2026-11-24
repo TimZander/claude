@@ -267,6 +267,17 @@ pipeline definition outside this repository's control, and a way for `/sdd:archi
 that pipeline's runs from any other. The local re-run already gives the archive gate without
 it, so sdd doesn't ship one.
 
+## Upgrading to 0.4.3
+
+Re-run `/sdd:init` to install 0.4.3's `sdd-archive.sh`. Its `verify` is stricter in two ways:
+- It compares the archive PR's `openspec/` with the reproduction whatever `.gitignore` says. A
+  rule like `[Pp]ackages/`, `[Bb]in/` or `*.log` could drop files from the reproduction, so an
+  archive that left out a change's new main spec or archived delta could pass, while the
+  complete one failed. Commit an archive with `git add -A -f -- openspec`, as
+  `/sdd:archive-pr` now does, so no ignored file it wrote is left out.
+- A reproduction that fails part way, even without a message, ends
+  `archive-mechanical: failure` with a reason, never `success`.
+
 ## Upgrading to 0.4.2 on Azure DevOps
 
 Re-run `/sdd:init` to install 0.4.2's `sdd-azure-pr.sh`, `sdd-azure.mjs` and `sdd-config.mjs`.

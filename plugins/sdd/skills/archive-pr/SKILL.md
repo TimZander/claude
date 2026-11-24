@@ -61,8 +61,9 @@ If the command fails, the settings are invalid: report its message and don't mer
 2. Run `bash scripts/sdd/sdd-archive.sh run`. It archives every active change in name order and
    stops at the first failure. On failure, report its output and stop: an archive that fails is
    a spec problem for its change, not something to fix in the archive PR.
-3. Confirm only `openspec/` changed (`git status --porcelain`), and commit:
-   `Archive <change>[, <change>…]`.
+3. Confirm only `openspec/` changed (`git status --porcelain`), stage it with
+   `git add -A -f -- openspec` (`-f`, so a `.gitignore` rule can't leave out a file the archive
+   wrote; verify compares every one), and commit: `Archive <change>[, <change>…]`.
 4. Verify locally before pushing:
    `bash scripts/sdd/sdd-archive.sh verify --base <default> --result HEAD`. It must end with
    `archive-mechanical: success`. A failure naming a stale pin means two changes edited the same
