@@ -227,7 +227,8 @@ POLICY_ASK = {
     # these prompt for every form that names a host: az sends the signed-in
     # credential to whatever --org says, and gh connects to any host in -R or a
     # URL. Routine reads without those forms still run unprompted (az takes the
-    # org from `az devops configure --defaults` or the repo's own remote).
+    # org from the repo's own remote or `az devops configure --defaults`, which
+    # setup-env sets to the team's org).
     "Bash(az *--org*)": ("--org/--organization (and every abbreviation az accepts, --orga...) can "
                          "point az at any host, which receives the credential; even the team's "
                          "own org prompts because one value cannot be exempted"),

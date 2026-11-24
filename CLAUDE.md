@@ -32,6 +32,7 @@ Run `./setup-env.sh` (bash) or `./setup-env.ps1` (PowerShell) to bootstrap the l
 1. **Git hooks** — Installs global hooks from `hooks/` to `~/.git-hooks/` (controlled by `hooks/hooks.json`). Sets `core.hooksPath` globally.
 2. **Team standards** — Syncs `standards/CLAUDE.md` into `~/.claude/CLAUDE.md` between the TEAM-STANDARDS markers, via `scripts/sync-standards.sh` / `scripts/Sync-TeamStandards.ps1` (tests: `scripts/test_sync-standards.sh`, `scripts/test-sync-teamstandards.ps1`). Content outside the markers is kept byte for byte; the previous file is copied to `~/.claude/CLAUDE.md.team-sync.bak` before an update. Damaged markers make this step change nothing and setup exit non-zero after the remaining steps. `standards/CLAUDE.md` must never contain the marker lines.
 3. **Team settings** — Deep-merges `standards/settings.json` into `~/.claude/settings.json`.
+4. **Azure DevOps CLI** — Sets `az devops configure --defaults organization=https://dev.azure.com/bgvone` when no default organization is set, via `scripts/set-az-default-org.sh` / `scripts/Set-AzDevOpsDefaultOrg.ps1` (tests: `scripts/test_set-az-default-org.sh`, `scripts/test-set-azdevopsdefaultorg.ps1`). The team settings make every `az ... --org` ask, so team commands leave `--org` out and rely on this default. A default the developer already set is kept; a missing Azure CLI or extension is reported and skipped. `SETUP_ENV_AZ` swaps in a stub `az` for tests.
 
 The script is idempotent — safe to re-run at any time.
 
@@ -133,3 +134,8 @@ These rules apply to all plugin commands and manual operations:
 2. Verify the marketplace appears in `/plugin` > Discover.
 3. Install a plugin: `/plugin install plugin-name@tzander-skills`
 4. Confirm the plugin's commands/skills are available.
+
+### Running script tests locally
+
+- **The full `plugins/deep-review/scripts/test_resolve-pr.sh` takes about an hour on Windows** (CI runs it in under a minute). To run one section, take the setup lines up to `# ── Usage / pre-flight errors` (with `SCRIPT_DIR` set to an absolute path) plus that section.
+- **The global pre-push hook also blocks force pushes in throwaway test repos.** Pass `-c core.hooksPath=/nonexistent` to git there.
