@@ -27,8 +27,12 @@ Examples:
 4. Triages each item: **well-documented** (skip), **needs improvement** (rewrite), or **multi-feature** (propose a split into child stories)
 5. For multi-feature items, drafts a split plan and asks you to confirm before creating any child items. Never auto-splits.
 6. Researches the codebase for each item that needs improvement
-7. Writes structured descriptions with problem statements, root causes, proposed fixes, and acceptance criteria
-8. Updates the items — does not change title, state, assignment, labels, or points
+7. Drafts structured descriptions with problem statements, root causes, proposed fixes, and acceptance criteria
+8. Shows you each draft in full and writes only the ones you approve — does not change title, state, assignment, labels, or points
+
+## Permissions
+
+The command pre-approves only reads: Read, Grep, Glob, Agent, AskUserQuestion and the Azure DevOps MCP read tools. It pre-approves no shell command and no write. It reads text other people wrote, an allow rule cannot limit a command's flags (`gh issue view *` also matches `-R <any host>`), and a pre-approved write would let an item's text change items without you seeing it. So `gh` and `az` commands, and the ADO update, comment, link and child-creation tools, follow your own permission settings: reads you have allowed run without asking, and every write asks unless you allowed it yourself.
 
 ## Multi-feature story detection
 
