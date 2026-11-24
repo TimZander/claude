@@ -73,6 +73,9 @@ jobs:
       - name: Azure DevOps default-org test (Windows PowerShell 5.1)
         shell: powershell
         run: ./scripts/test-set-azdevopsdefaultorg.ps1
+      - name: Azure DevOps default-org test (PowerShell 7 on Windows)
+        shell: pwsh
+        run: ./scripts/test-set-azdevopsdefaultorg.ps1
       - name: Azure DevOps default-org test (Git Bash)
         shell: bash
         run: bash scripts/test_set-az-default-org.sh

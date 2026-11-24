@@ -12,6 +12,14 @@ set -euo pipefail
 # Usage:
 #   bash resolve-pr.sh --args "<raw /deep-review arguments>"
 #   bash resolve-pr.sh --check-branch <name>
+#   bash resolve-pr.sh --same-org <org-url> <work-item-url>
+#
+# --same-org exits 0 when <work-item-url> (the top-level `url` of
+# `az boards work-item show` JSON) belongs to the same Azure DevOps
+# organization as <org-url> (the ORG key below), and 1 with a message on stderr
+# otherwise. Both must be exactly https://dev.azure.com/<org>[/...] or
+# https://<org>.visualstudio.com[/...]; the organization names are compared
+# case-insensitively, so either dialect matches the other.
 #
 # --check-branch exits 0 when <name> is a plain branch name the caller may pass
 # to git (see is_plain_branch below) and 1 with a message on stderr otherwise.
@@ -101,8 +109,9 @@ set -euo pipefail
 #                               HOST=azdo AND an organization was derivable
 #                               from the remote — an ADO remote with no parsable
 #                               org yields HOST=azdo and NO ORG. Emitted at all
-#                               because a work item cannot be fetched without it:
-#                               `az boards work-item show --id <N> --org <ORG>`.
+#                               because a fetched work item is checked against
+#                               it (--same-org), and `--org <ORG>` is the
+#                               fallback when az's default organization differs.
 #   CURRENT_BRANCH=<name>       Checked-out branch (empty when detached)
 #   BRANCH_MATCH=true|false     SOURCE_BRANCH == CURRENT_BRANCH (KIND=pr only).
 #                               Never true on an empty branch name.
@@ -212,6 +221,23 @@ is_plain_branch() {
     git check-ref-format "refs/heads/$1" >/dev/null 2>&1
 }
 
+# The organization an Azure DevOps URL names, lowercased. Stricter than
+# ado_org_name below, which reads git remotes: here the URL comes from a server
+# response, so the scheme and host must be exactly dev.azure.com or
+# <org>.visualstudio.com. A lookalike host, an org that only starts with the
+# expected name, or a query string mentioning dev.azure.com does not count.
+ado_url_org() {
+    local LC_ALL=C url
+    url=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+    if [[ "$url" =~ ^https://dev\.azure\.com/([a-z0-9_-]+)(/|$) ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    elif [[ "$url" =~ ^https://([a-z0-9_-]+)\.visualstudio\.com(/|$) ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+    else
+        return 1
+    fi
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --check-branch)
@@ -223,6 +249,25 @@ while [[ $# -gt 0 ]]; do
                 exit 0
             fi
             echo "Error: '$(printf '%q' "$2")' is not a plain branch name (letters, digits, '.', '_', '-' and '/' only, not starting with '-' or '+')." >&2
+            exit 1
+            ;;
+        --same-org)
+            if [[ $# -lt 3 ]]; then
+                echo "Error: --same-org requires an organization URL and a work item url." >&2
+                exit 1
+            fi
+            if ! expected_org=$(ado_url_org "$2"); then
+                echo "Error: '$(printf '%q' "$2")' is not an Azure DevOps organization URL." >&2
+                exit 1
+            fi
+            if ! actual_org=$(ado_url_org "$3"); then
+                echo "Error: the work item url is not an Azure DevOps URL, so its organization is unknown." >&2
+                exit 1
+            fi
+            if [[ "$actual_org" == "$expected_org" ]]; then
+                exit 0
+            fi
+            echo "Error: the work item belongs to organization '$actual_org', not '$expected_org'." >&2
             exit 1
             ;;
         --args)

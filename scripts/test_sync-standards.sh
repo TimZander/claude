@@ -518,6 +518,8 @@ SetupEnv_DamagedMarkers_SyncsSettingsAndExitsNonZero() {
     check "CLAUDE.md untouched" cmp -s "$home/.claude/CLAUDE.md" "$TEST_TMPDIR/setup-before"
     check "settings step still ran" [ -f "$home/.claude/settings.json" ]
     check "reports the failure at the end" contains "$out" "finished with errors"
+    check "az step still runs" contains "$out" "=== Azure DevOps CLI ==="
+    check "az step skipped instead of running the real CLI" contains "$out" "Azure CLI not found"
 }
 
 # --- run ----------------------------------------------------------------------

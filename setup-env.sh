@@ -7,6 +7,9 @@
 #   4. Sets the Azure DevOps CLI default organization, when none is set
 #
 # Safe to re-run — updates in place without duplication.
+#
+# SETUP_ENV_AZ, when set, names the az executable step 4 runs instead of `az`.
+# It is for the tests (scripts/test_set-az-default-org.sh); leave it unset.
 
 set -euo pipefail
 
@@ -167,8 +170,11 @@ echo ""
 
 echo "=== Azure DevOps CLI ==="
 
-# Never fails setup: missing tools and az errors are reported and skipped.
-bash "$REPO_ROOT/scripts/set-az-default-org.sh" "$TEAM_ADO_ORG" || true
+# Missing tools and az errors are reported and skipped inside the script; a
+# non-zero exit here is a bug in this call (a usage error), so say so.
+if ! bash "$REPO_ROOT/scripts/set-az-default-org.sh" "$TEAM_ADO_ORG"; then
+    echo "Warning: the Azure DevOps CLI step failed; the default organization was not set." >&2
+fi
 
 echo ""
 if [ "$STANDARDS_FAILED" -ne 0 ]; then

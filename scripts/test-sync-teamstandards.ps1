@@ -507,6 +507,8 @@ function SetupEnv_DamagedMarkers_SyncsSettingsAndExitsNonZero {
     Chk (Test-SameBytes (Get-Bytes $target) $before) 'CLAUDE.md untouched'
     Chk (Test-Path -LiteralPath (Join-Path $claude 'settings.json')) 'settings step still ran'
     Chk ($out -match 'finished with errors') 'reports the failure at the end'
+    Chk ($out -match '=== Azure DevOps CLI ===') 'az step still runs'
+    Chk ($out -match 'Azure CLI not found') 'az step skipped instead of running the real CLI'
 }
 
 # --- run ----------------------------------------------------------------------
