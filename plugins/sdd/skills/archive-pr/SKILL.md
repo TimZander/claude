@@ -58,12 +58,28 @@ If the command fails, the settings are invalid: report its message and don't mer
 ## Step 2: Archive and open the PR
 
 1. Create a branch `archive/<first-change>[-and-more]` from the default branch.
-2. Run `bash scripts/sdd/sdd-archive.sh run`. It archives every active change in name order and
+2. Check that the repository's `scripts/sdd/sdd-archive.sh` is from sdd 0.4.3 or later:
+   `grep -qF -- 'add -A -f -- openspec' scripts/sdd/sdd-archive.sh`. Those scripts change only
+   when `/sdd:init` runs, and an older verify compares without ignored files, so it would fail
+   the archive step 6 commits. If the grep finds nothing, tell the user to re-run `/sdd:init`
+   (and merge that) first, and stop.
+3. Check that nothing sits in `openspec/` yet: `git status --porcelain --ignored -uall --
+   openspec` must print nothing. It lists untracked, modified and ignored files alike (`-uall`
+   so a `status.showUntrackedFiles` setting can't hide one). Step 6 stages ignored files too, so
+   one already there (an editor's swap file, `.DS_Store`, local notes) would be committed and
+   fail verify. If it prints anything, report it and stop; never delete it yourself.
+4. Run `bash scripts/sdd/sdd-archive.sh run`. It archives every active change in name order and
    stops at the first failure. On failure, report its output and stop: an archive that fails is
    a spec problem for its change, not something to fix in the archive PR.
-3. Confirm only `openspec/` changed (`git status --porcelain`), and commit:
-   `Archive <change>[, <change>…]`.
-4. Verify locally before pushing:
+5. Check that the archive is all that changed, right before staging:
+   `git status --porcelain -uall` must list only paths under `openspec/`, and
+   `git status --porcelain --ignored -uall -- openspec` only what the archive wrote: the
+   changes' folders leaving `openspec/changes/`, their dated folders under
+   `openspec/changes/archive/`, and the main specs under `openspec/specs/` their deltas touch.
+   If either lists anything else, report it and stop; never delete it yourself.
+6. Stage with `git add -A -f -- openspec` (`-f`, so an ignore rule can't leave out a file the
+   archive wrote; verify compares every one), and commit: `Archive <change>[, <change>…]`.
+7. Verify locally before pushing:
    `bash scripts/sdd/sdd-archive.sh verify --base <default> --result HEAD`. It must end with
    `archive-mechanical: success`. A failure naming a stale pin means two changes edited the same
    requirement: the second one's delta was written against older text. Don't hand-merge it in
@@ -71,7 +87,7 @@ If the command fails, the settings are invalid: report its message and don't mer
    Unfinished tasks don't fail it: each change with any gets a `- note: ` line. Never tick them
    in the archive PR, which must hold only `openspec archive` output; the change is archived as
    it merged.
-5. Push and open the PR against the default branch, titled `Archive <changes>`, its body listing
+8. Push and open the PR against the default branch, titled `Archive <changes>`, its body listing
    the changes and saying it holds only `openspec archive` output. If verify printed any
    `- note: ` lines, add them under **Unfinished tasks**, verbatim, so the record shows what was
    left undone. On Azure DevOps, write the body to a file and run `bash

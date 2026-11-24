@@ -127,6 +127,8 @@ async function main() {
       for (const x of plan.added) blocks.set(x.name, x.raw)
       fs.writeFileSync(dest, head + '\n\n' + [...blocks.values()].join('\n\n') + '\n')
     }
+    // A checkout that can't stage: its index is locked.
+    if (process.env.STUB_LOCK_INDEX) fs.writeFileSync(require('child_process').execSync('git rev-parse --git-path index.lock').toString().trim(), '')
     const date = process.env.STUB_DATE || new Date().toISOString().slice(0, 10)
     fs.mkdirSync('openspec/changes/archive', { recursive: true })
     fs.renameSync(src, path.join('openspec/changes/archive', date + '-' + name))
@@ -376,6 +378,108 @@ git -C "$r5" add -A && git -C "$r5" commit -q -m archive
 out="$(STUB_DATE=2026-09-09 bash "$r5/scripts/sdd/sdd-archive.sh" verify -C "$r5" --base "$base5" --result HEAD)" \
     || { echo "$out"; fail "verify with overlapping names"; }
 pass "verify renames the folder each archive added, not a look-alike"
+
+# /sdd:archive-pr checks for this exact text to tell a 0.4.3+ sdd-archive.sh from an older one.
+grep -qF -- 'add -A -f -- openspec' "$T/sdd-archive.sh" || fail "sdd-archive.sh lost the text /sdd:archive-pr checks for"
+grep -qF -- "grep -qF -- 'add -A -f -- openspec' scripts/sdd/sdd-archive.sh" "$SCRIPT_DIR/../skills/archive-pr/SKILL.md" \
+    || fail "/sdd:archive-pr no longer checks the installed sdd-archive.sh"
+
+# 0.4.3: verify compares what the PR holds, whatever .gitignore says. Here a .NET-style rule
+# ignores the files of a change named `packages`, which was force-added on the base.
+rg="$(fresh_repo)"
+mkdir -p "$rg/scripts" && cp -R "$T" "$rg/scripts/sdd" && install_stub "$rg"
+printf 'node_modules\n**/[Pp]ackages/*\n' > "$rg/.gitignore"
+add_change "$rg" packages
+git -C "$rg" add -A && git -C "$rg" add -f openspec && git -C "$rg" commit -q -m base
+[ -n "$(git -C "$rg" ls-files openspec/changes/packages/specs/packages/spec.md)" ] || fail "test setup: delta not tracked"
+gbase="$(git -C "$rg" rev-parse HEAD)"
+git -C "$rg" checkout -q -b faithful
+STUB_DATE=2026-03-04 bash "$rg/scripts/sdd/sdd-archive.sh" run -C "$rg" >/dev/null
+# Staged the way /sdd:archive-pr stages it; verified on another day, so the folder is renamed.
+git -C "$rg" add -A -f -- openspec && git -C "$rg" commit -q -m archive
+expect_exit 0 env STUB_DATE=2026-09-09 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: success' ] || { cat "$TMP_ROOT/out"; fail "faithful archive under .gitignore"; }
+# The same archive committed without -f leaves out the new main spec and the archived delta.
+git -C "$rg" checkout -q -b lossy "$gbase"
+STUB_DATE=2026-03-04 bash "$rg/scripts/sdd/sdd-archive.sh" run -C "$rg" >/dev/null
+git -C "$rg" add -A openspec && git -C "$rg" commit -q -m archive
+[ -z "$(git -C "$rg" ls-tree -r --name-only HEAD openspec/specs/packages)" ] || fail "test setup: main spec committed"
+[ -z "$(git -C "$rg" ls-tree -r --name-only HEAD openspec/changes/archive/2026-03-04-packages/specs)" ] || fail "test setup: delta committed"
+[ -n "$(git -C "$rg" ls-tree -r --name-only HEAD openspec/changes/archive/2026-03-04-packages)" ] || fail "test setup: no archive folder"
+# Only so the checkouts below don't trip over the ignored files the run left behind.
+git -C "$rg" clean -qfdX openspec
+expect_exit 1 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+grep -q 'does not reproduce' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "an archive missing ignored files not reported"; }
+grep -q '^  | .*specs/packages/spec.md' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "the dropped files not named"; }
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || fail "lossy archive verdict"
+pass "verify compares the archive exactly, ignoring .gitignore"
+
+# 0.4.3: a reproduction that fails, even silently, is a failure with a reason, never a success.
+# Uses the faithful archive above, which passes with the real gate.
+git -C "$rg" checkout -q faithful
+# The repository's hooks don't run in the reproduction: an ignored file a post-checkout hook
+# writes under openspec/ would otherwise land in the compared tree and fail a faithful archive.
+rghooks="$TMP_ROOT/hooks.rg"
+mkdir -p "$rghooks"
+printf '#!/bin/sh\nmkdir -p openspec/packages && echo hook > openspec/packages/hook.txt\n' > "$rghooks/post-checkout"
+chmod +x "$rghooks/post-checkout"
+git -C "$rg" config core.hooksPath "$rghooks"
+expect_exit 0 env STUB_DATE=2026-09-09 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+git -C "$rg" config --unset core.hooksPath
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: success' ] || { cat "$TMP_ROOT/out"; fail "a hook's file reached the reproduction"; }
+gate_fails() { # what the stub gate prints before it exits 1
+    printf 'if (process.argv[2] === "gate") { process.stdout.write(%s); process.exit(1) }\n' "$1" > "$rg/scripts/sdd/sdd-specs.mjs"
+    expect_exit 1 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+    git -C "$rg" checkout -q -- scripts/sdd/sdd-specs.mjs
+    [ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || { cat "$TMP_ROOT/out"; fail "a failed gate passed: $1"; }
+    grep -qxF -- '- the base-pin gate failed for packages' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a failed gate without a reason: $1"; }
+    ! grep -q 'does not reproduce' "$TMP_ROOT/out" || fail "a failed gate reported as a mismatch: $1"
+    ! grep -v -e '^- ' -e '^  | ' -e '^archive-mechanical: ' "$TMP_ROOT/out" | grep -q . || { cat "$TMP_ROOT/out"; fail "a line outside the format: $1"; }
+}
+gate_fails "''"
+gate_fails "'  \\n'"
+gate_fails "'TypeError: boom\\n    at x (y.js:1)\\n'"
+grep -qxF -- '  | TypeError: boom' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "the gate's own output not quoted"; }
+# A gate that crashes (exit 2 or 3) is this checkout failing (exit 3), not a verdict on the PR.
+printf 'if (process.argv[2] === "gate") { console.error("sdd-specs: cannot load the OpenSpec parsers"); process.exit(3) }\n' > "$rg/scripts/sdd/sdd-specs.mjs"
+expect_exit 3 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+git -C "$rg" checkout -q -- scripts/sdd/sdd-specs.mjs
+grep -qxF -- '- the base-pin gate could not run for packages:' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a crashed gate without a reason"; }
+grep -qxF -- '  | sdd-specs: cannot load the OpenSpec parsers' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a crashed gate's error not quoted"; }
+grep -q '^- reason: cannot re-run the archives in this checkout' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a crashed gate not called internal"; }
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || { cat "$TMP_ROOT/out"; fail "a crashed gate passed"; }
+
+# A checkout that can't do the reproduction (git or mv failing) exits 3 with the tool's own
+# words, and leaves no worktree or index.lock behind. Fakes on PATH fail one step each.
+fakegit="$TMP_ROOT/fakegit"; fakemv="$TMP_ROOT/fakemv"
+mkdir -p "$fakegit" "$fakemv"
+printf '#!/bin/sh\ncase " $* " in *" $SDD_FAKE_FAIL "*) echo "fatal: $SDD_FAKE_FAIL refused by the test" >&2; exit 128 ;; esac\nexec "%s" "$@"\n' "$(command -v git)" > "$fakegit/git"
+printf '#!/bin/sh\necho "mv: refused by the test" >&2\nexit 1\n' > "$fakemv/mv"
+chmod +x "$fakegit/git" "$fakemv/mv"
+checkout_fails() { # reason line, quoted text, env assignments
+    local reason="$1" quoted="$2"
+    shift 2
+    expect_exit 3 env "$@" bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+    grep -qxF -- "$reason" "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "no reason: $reason"; }
+    grep -q "^  | .*$quoted" "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "the tool's error not quoted: $reason"; }
+    grep -q '^- reason: cannot re-run the archives in this checkout' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "not called internal: $reason"; }
+    [ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || { cat "$TMP_ROOT/out"; fail "passed: $reason"; }
+    [ "$(git -C "$rg" worktree list | wc -l | tr -d ' ')" = 1 ] || { git -C "$rg" worktree list; fail "a worktree left behind: $reason"; }
+    ! find "$rg/.git" -name index.lock | grep -q . || fail "an index.lock left behind: $reason"
+}
+checkout_fails '- cannot check out the base:' 'worktree refused by the test' PATH="$fakegit:$PATH" SDD_FAKE_FAIL=worktree
+checkout_fails '- cannot rename the archive folder of packages to 2026-03-04-packages:' 'mv: refused by the test' PATH="$fakemv:$PATH" STUB_DATE=2026-09-09
+checkout_fails '- cannot stage the reproduced openspec/:' 'index.lock' STUB_LOCK_INDEX=1 STUB_DATE=2026-03-04
+checkout_fails '- cannot read the reproduced openspec/:' 'write-tree refused by the test' PATH="$fakegit:$PATH" SDD_FAKE_FAIL=write-tree STUB_DATE=2026-03-04
+# A PR problem found before the checkout failed stays the verdict (exit 1), with both reasons.
+printf 'if (process.argv[2] === "gate") { process.stdout.write("- packages: a stale pin\\n"); process.exit(1) }\n' > "$rg/scripts/sdd/sdd-specs.mjs"
+expect_exit 1 env PATH="$fakegit:$PATH" SDD_FAKE_FAIL=write-tree STUB_DATE=2026-03-04 bash "$rg/scripts/sdd/sdd-archive.sh" verify -C "$rg" --base "$gbase" --result HEAD
+git -C "$rg" checkout -q -- scripts/sdd/sdd-specs.mjs
+grep -qxF -- '- packages: a stale pin' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "the PR problem lost to a checkout failure"; }
+grep -qxF -- '- cannot read the reproduced openspec/:' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "the checkout failure not reported with the PR problem"; }
+grep -q '^- compared base ' "$TMP_ROOT/out" || { cat "$TMP_ROOT/out"; fail "a PR problem without the comparison line"; }
+[ "$(tail -n 1 "$TMP_ROOT/out")" = 'archive-mechanical: failure' ] || { cat "$TMP_ROOT/out"; fail "a PR problem with a checkout failure passed"; }
+pass "verify fails when the reproduction fails, and says why"
 
 # --- session-start.sh: npm ci only when stale, status lines, never fails ---------------
 r6="$(fresh_repo)"
