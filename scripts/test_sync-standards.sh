@@ -509,13 +509,17 @@ SetupEnv_DamagedMarkers_SyncsSettingsAndExitsNonZero() {
     cp "$home/.claude/CLAUDE.md" "$TEST_TMPDIR/setup-before"
     # Act
     local out rc
-    out="$(HOME="$home" GIT_CONFIG_GLOBAL="$home/.gitconfig" bash "$REPO_ROOT/setup-env.sh" 2>&1)"
+    # SETUP_ENV_AZ names no command, so the az step skips instead of running the real CLI.
+    out="$(HOME="$home" GIT_CONFIG_GLOBAL="$home/.gitconfig" SETUP_ENV_AZ="$TEST_TMPDIR/no-such-az" \
+        bash "$REPO_ROOT/setup-env.sh" 2>&1)"
     rc=$?
     # Assert
     check "setup exits $exit_failed" [ "$rc" -eq "$exit_failed" ]
     check "CLAUDE.md untouched" cmp -s "$home/.claude/CLAUDE.md" "$TEST_TMPDIR/setup-before"
     check "settings step still ran" [ -f "$home/.claude/settings.json" ]
     check "reports the failure at the end" contains "$out" "finished with errors"
+    check "az step still runs" contains "$out" "=== Azure DevOps CLI ==="
+    check "az step skipped instead of running the real CLI" contains "$out" "Azure CLI not found"
 }
 
 # --- run ----------------------------------------------------------------------

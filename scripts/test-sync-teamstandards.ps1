@@ -479,11 +479,13 @@ function SetupEnv_DamagedMarkers_SyncsSettingsAndExitsNonZero {
     Set-Text $target "mine`n$Start`nrule one`n"
     $before = Get-Bytes $target
     $exe = (Get-Process -Id $PID).Path
-    $saved = @{ HOME = $env:HOME; USERPROFILE = $env:USERPROFILE; GIT_CONFIG_GLOBAL = $env:GIT_CONFIG_GLOBAL }
+    $saved = @{ HOME = $env:HOME; USERPROFILE = $env:USERPROFILE; GIT_CONFIG_GLOBAL = $env:GIT_CONFIG_GLOBAL; SETUP_ENV_AZ = $env:SETUP_ENV_AZ }
     try {
         $env:HOME = $fakeHome
         $env:USERPROFILE = $fakeHome
         $env:GIT_CONFIG_GLOBAL = Join-Path $fakeHome '.gitconfig'
+        # Names no command, so the az step skips instead of running the real CLI.
+        $env:SETUP_ENV_AZ = Join-Path $fakeHome 'no-such-az'
         # Guard: never run setup unless the child really sees the temp home.
         $childHome = (& $exe -NoProfile -Command '$HOME' | Out-String).Trim()
         if ($childHome -ne $fakeHome) {
@@ -498,12 +500,15 @@ function SetupEnv_DamagedMarkers_SyncsSettingsAndExitsNonZero {
         $env:HOME = $saved.HOME
         $env:USERPROFILE = $saved.USERPROFILE
         $env:GIT_CONFIG_GLOBAL = $saved.GIT_CONFIG_GLOBAL
+        $env:SETUP_ENV_AZ = $saved.SETUP_ENV_AZ
     }
     # Assert
     Chk ($rc -eq $exitFailed) "setup exits $exitFailed"
     Chk (Test-SameBytes (Get-Bytes $target) $before) 'CLAUDE.md untouched'
     Chk (Test-Path -LiteralPath (Join-Path $claude 'settings.json')) 'settings step still ran'
     Chk ($out -match 'finished with errors') 'reports the failure at the end'
+    Chk ($out -match '=== Azure DevOps CLI ===') 'az step still runs'
+    Chk ($out -match 'Azure CLI not found') 'az step skipped instead of running the real CLI'
 }
 
 # --- run ----------------------------------------------------------------------

@@ -226,8 +226,12 @@ POLICY_ASK = {
     # limit flags, and an ask rule cannot exempt one value (ask beats allow), so
     # these prompt for every form that names a host: az sends the signed-in
     # credential to whatever --org says, and gh connects to any host in -R or a
-    # URL. Routine reads without those forms still run unprompted (az takes the
-    # org from `az devops configure --defaults` or the repo's own remote).
+    # URL. Routine reads without those forms still run unprompted. Known gap:
+    # without --org, az probes the repo's git remotes (any /_git/ or ssh://
+    # remote) and sends the credential to the one it picks, so an allowed
+    # `az ... show` can still reach another host unless it passes
+    # `--detect false`, which no rule can require. With `--detect false` az
+    # uses only `az devops configure --defaults` (setup-env sets the team's).
     "Bash(az *--org*)": ("--org/--organization (and every abbreviation az accepts, --orga...) can "
                          "point az at any host, which receives the credential; even the team's "
                          "own org prompts because one value cannot be exempted"),

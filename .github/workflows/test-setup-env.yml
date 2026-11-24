@@ -16,6 +16,10 @@ on:
       - "scripts/Sync-TeamStandards.ps1"
       - "scripts/test-sync-teamstandards.ps1"
       - "scripts/diff-preview.awk"
+      - "scripts/set-az-default-org.sh"
+      - "scripts/test_set-az-default-org.sh"
+      - "scripts/Set-AzDevOpsDefaultOrg.ps1"
+      - "scripts/test-set-azdevopsdefaultorg.ps1"
       - "standards/CLAUDE.md"
       - "standards/settings.json"
       - ".github/workflows/test-setup-env.yml"
@@ -48,6 +52,11 @@ jobs:
       - name: Team-standards splice test (pwsh)
         shell: pwsh
         run: ./scripts/test-sync-teamstandards.ps1
+      - name: Azure DevOps default-org test (bash)
+        run: bash scripts/test_set-az-default-org.sh
+      - name: Azure DevOps default-org test (pwsh)
+        shell: pwsh
+        run: ./scripts/test-set-azdevopsdefaultorg.ps1
 
   # Developers run setup-env.ps1 on native Windows, often under Windows
   # PowerShell 5.1, which the Linux/macOS pwsh runs above do not cover.
@@ -61,3 +70,12 @@ jobs:
       - name: Team-standards splice test (Git Bash)
         shell: bash
         run: bash scripts/test_sync-standards.sh
+      - name: Azure DevOps default-org test (Windows PowerShell 5.1)
+        shell: powershell
+        run: ./scripts/test-set-azdevopsdefaultorg.ps1
+      - name: Azure DevOps default-org test (PowerShell 7 on Windows)
+        shell: pwsh
+        run: ./scripts/test-set-azdevopsdefaultorg.ps1
+      - name: Azure DevOps default-org test (Git Bash)
+        shell: bash
+        run: bash scripts/test_set-az-default-org.sh

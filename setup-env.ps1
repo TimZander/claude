@@ -5,13 +5,21 @@
 .DESCRIPTION
     1. Installs global git hooks via core.hooksPath
     2. Syncs team standards into ~/.claude/CLAUDE.md
+    3. Merges team settings into ~/.claude/settings.json
+    4. Sets the Azure DevOps CLI default organization, when none is set
 
     Safe to re-run — updates in place without duplication.
+
+    SETUP_ENV_AZ, when set, names the az executable step 4 runs instead of
+    `az`. It is for the tests (scripts/test-set-azdevopsdefaultorg.ps1); leave
+    it unset.
 #>
 
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+# Keep in step with TEAM_ADO_ORG in setup-env.sh.
+$TeamAdoOrg = 'https://dev.azure.com/bgvone'
 
 ###############################################################################
 # 1. Global git hooks
@@ -153,6 +161,24 @@ else {
             Write-Host "Merged team settings into $SettingsTarget."
         }
     }
+}
+
+Write-Host ''
+
+###############################################################################
+# 4. Azure DevOps CLI default organization
+###############################################################################
+
+Write-Host '=== Azure DevOps CLI ==='
+
+# Never fails setup: missing tools and az errors are reported and skipped
+# inside the function; anything else (a missing script, say) is caught here.
+try {
+    . (Join-Path (Join-Path $RepoRoot 'scripts') 'Set-AzDevOpsDefaultOrg.ps1')
+    Set-AzDevOpsDefaultOrg -Organization $TeamAdoOrg
+}
+catch {
+    Write-Warning "Could not set the Azure DevOps default organization: $($_.Exception.Message)"
 }
 
 Write-Host ''

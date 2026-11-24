@@ -3,12 +3,19 @@
 # Bootstraps the developer's local environment:
 #   1. Installs global git hooks via core.hooksPath
 #   2. Syncs team standards into ~/.claude/CLAUDE.md
+#   3. Merges team settings into ~/.claude/settings.json
+#   4. Sets the Azure DevOps CLI default organization, when none is set
 #
 # Safe to re-run — updates in place without duplication.
+#
+# SETUP_ENV_AZ, when set, names the az executable step 4 runs instead of `az`.
+# It is for the tests (scripts/test_set-az-default-org.sh); leave it unset.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+# Keep in step with $TeamAdoOrg in setup-env.ps1.
+TEAM_ADO_ORG="https://dev.azure.com/bgvone"
 
 ###############################################################################
 # 1. Global git hooks
@@ -153,6 +160,20 @@ else
             echo "Merged team settings into $SETTINGS_TARGET."
         fi
     fi
+fi
+
+echo ""
+
+###############################################################################
+# 4. Azure DevOps CLI default organization
+###############################################################################
+
+echo "=== Azure DevOps CLI ==="
+
+# Missing tools and az errors are reported and skipped inside the script; a
+# non-zero exit here is a bug in this call (a usage error), so say so.
+if ! bash "$REPO_ROOT/scripts/set-az-default-org.sh" "$TEAM_ADO_ORG"; then
+    echo "Warning: the Azure DevOps CLI step failed; the default organization was not set." >&2
 fi
 
 echo ""

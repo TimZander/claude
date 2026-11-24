@@ -1257,6 +1257,56 @@ out=$(run_in "$GH_REPO" --check-branch); rc=$?
 assert_exit "$exit_refused" "$rc" "--check-branch without a value fails"
 assert_contains "requires a value" "$out" "--check-branch without a value says so"
 
+# ── Work item organization check ─────────────────────────────────────
+# Step 1c fetches a work item without --org and checks the `url` the server
+# returned against ORG. Only an exact dev.azure.com/<org> or <org>.visualstudio.com
+# URL may match, and the organization names must be equal, not prefixes.
+
+# ResolvePr_SameOrg_MatchesOnlyTheSameOrganization
+# Arrange
+exit_ok=0
+exit_refused=1
+org="https://dev.azure.com/bgvone"
+legacy_org="https://BGVONE.visualstudio.com"
+item="https://dev.azure.com/bgvone/0f1e2d3c/_apis/wit/workItems/7775"
+same_org_items=(
+    "$item"
+    "https://DEV.AZURE.COM/BgvOne/0f1e2d3c/_apis/wit/workItems/7775"
+    "https://bgvone.visualstudio.com/0f1e2d3c/_apis/wit/workItems/7775"
+)
+other_org_items=(
+    "https://dev.azure.com/someone-else/0f1e2d3c/_apis/wit/workItems/7775"
+    "https://dev.azure.com/bgvone-evil/0f1e2d3c/_apis/wit/workItems/7775"
+    "https://dev.azure.com.evil.example/bgvone/_apis/wit/workItems/7775"
+    "https://evil.example/?u=https://dev.azure.com/bgvone/_apis/wit/workItems/7775"
+    "http://dev.azure.com/bgvone/0f1e2d3c/_apis/wit/workItems/7775"
+    "https://bgvone.visualstudio.com.evil.example/_apis/wit/workItems/7775"
+    ""
+)
+# Act / Assert: the same organization matches, in either dialect and any case.
+for same in "${same_org_items[@]}"; do
+    (cd "$GH_REPO" && bash "$SCRIPT" --same-org "$org" "$same" >/dev/null 2>&1); rc=$?
+    assert_exit "$exit_ok" "$rc" "--same-org accepts '$same'"
+done
+(cd "$GH_REPO" && bash "$SCRIPT" --same-org "$legacy_org" "$item" >/dev/null 2>&1); rc=$?
+assert_exit "$exit_ok" "$rc" "--same-org matches a visualstudio.com ORG against a dev.azure.com url"
+# Act / Assert: anything else is refused with a reason.
+for other in "${other_org_items[@]}"; do
+    out=$(run_in "$GH_REPO" --same-org "$org" "$other"); rc=$?
+    assert_exit "$exit_refused" "$rc" "--same-org refuses '$other'"
+    assert_contains "Error:" "$out" "--same-org explains refusing '$other'"
+done
+# Act / Assert: a mismatch names both organizations.
+out=$(run_in "$GH_REPO" --same-org "$org" "${other_org_items[0]}"); rc=$?
+assert_contains "organization 'someone-else', not 'bgvone'" "$out" "--same-org names both organizations"
+# Act / Assert: an ORG that is not an Azure DevOps URL, or a missing value, is an error.
+out=$(run_in "$GH_REPO" --same-org "https://example.com/bgvone" "$item"); rc=$?
+assert_exit "$exit_refused" "$rc" "--same-org refuses a non-ADO organization URL"
+assert_contains "is not an Azure DevOps organization URL" "$out" "--same-org says the organization URL is wrong"
+out=$(run_in "$GH_REPO" --same-org "$org"); rc=$?
+assert_exit "$exit_refused" "$rc" "--same-org without a work item url fails"
+assert_contains "requires an organization URL and a work item url" "$out" "--same-org without a value says so"
+
 echo
 echo "  $pass passed, $fail failed"
 [ "$fail" -eq 0 ] || exit 1
