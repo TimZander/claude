@@ -49,7 +49,6 @@ BASELINE = {
     "plugins/handoff/commands/pickup.md",
     "plugins/handoff/commands/relay.md",
     "plugins/har-investigate/commands/har-investigate.md",
-    "plugins/improve-stories/commands/improve-stories.md",
     "plugins/investigate-appinsights-logs/commands/investigate-appinsights-logs.md",
     "plugins/sdd/commands/init.md",
     "plugins/sdd/commands/opt-out.md",

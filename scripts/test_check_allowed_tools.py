@@ -40,7 +40,9 @@ class ToolGrantsTests(unittest.TestCase):
             "quoted entries": frontmatter("'Bash', \"Read\""),
             "trailing comment": frontmatter("Bash, Read # pre-approved"),
             "block list": "---\nname: x\nallowed-tools:\n  - Bash\n  # a comment\n  - Read\n---\nBody\n",
-            "byte-order mark": "﻿" + frontmatter("Bash, Read"),
+            "comment lines after inline value": ("---\nname: x\nallowed-tools: Bash, Read\n# a note: with a colon\n"
+                                                 "# - WebFetch\nuser-input: optional\n---\nBody\n"),
+            "indented comment after inline value": "---\nname: x\nallowed-tools: Bash, Read\n  # - WebFetch\n---\nBody\n",            "byte-order mark": "﻿" + frontmatter("Bash, Read"),
             "crlf": "---\r\nname: x\r\nallowed-tools: Bash, Read\r\n---\r\nBody\r\n",
             "trailing space on fence": "--- \nname: x\nallowed-tools: Bash, Read\n---  \nBody\n",
         }
