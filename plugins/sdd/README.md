@@ -74,7 +74,7 @@ or ask for it on a single change.
 
 | Skill | When | What it does |
 |---|---|---|
-| `/sdd:spec-review <change>` | After proposing, before any code | Fresh-agent, read-only review of the change's meaning: contradictions, dangling references, untestable or ambiguous requirements, coverage, scope, undecided requirements |
+| `/sdd:spec-review <change>` | After proposing, before any code | Fresh-agent, read-only review of the change's meaning: contradictions, dangling references, untestable or ambiguous requirements, coverage, scope, undecided requirements, and three questions the code would otherwise answer by accident (existing requirements that see the new state, cost on the target device, waits that never answer) |
 | `/sdd:conformance-review <change>` | After `/opsx:apply`, before the PR | Fresh-agent review of the code against the spec: every scenario tested, code does what the spec says and nothing unspecified, plus a mutation spot check on the 3 riskiest scenarios. At most 15 findings, each routed to spec, test or code |
 | `/sdd:spec-fix <change>` | On any finding, UAT remark or bug | Triage, then spec delta → check → commit, then failing test, then code |
 | `/sdd:archive-pr` | Before new work, when a change is still active | Archive-only PR, merged once it is shown to be mechanical against the current tip: on GitHub, CI's `archive-mechanical: success` plus its own re-run; on Azure DevOps, its own re-run only (CI there is advisory), then a completion that names the verified commit, within the branch's policies, confirmed afterwards |
@@ -266,6 +266,16 @@ could give a trustworthy verdict. It is untested here, and it costs a second rep
 pipeline definition outside this repository's control, and a way for `/sdd:archive-pr` to tell
 that pipeline's runs from any other. The local re-run already gives the archive gate without
 it, so sdd doesn't ship one.
+
+## Upgrading to 0.4.4
+
+Nothing to re-run: 0.4.4 changes only the `/sdd:spec-review` skill, which updates with the plugin.
+Its new pass I asks three questions of every change: which requirements the change doesn't touch
+will see its new state, what it costs on the target device, and what happens when a wait never
+answers or the person does something else meanwhile. An unanswered one is a should-fix. The
+questions come from a trial in which a code review of five sdd PRs that had passed spec and
+conformance review found seven real problems; this pass is aimed at the kinds a question asked
+before any code could have caught.
 
 ## Upgrading to 0.4.3
 
