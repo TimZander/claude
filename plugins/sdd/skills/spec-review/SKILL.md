@@ -82,8 +82,10 @@ conformance review nor the tests will look.
 
 1. **New state in untouched requirements.** Which requirements the change does *not* modify will
    read, show or store the state it adds (a new kind of record reaching an old message; a new
-   field in a published format)? Pass B keeps references to what the change removes or redefines;
-   this asks about what it adds.
+   field in a published format)? Where the state goes is not the answer: list each untouched
+   requirement that reads the same store, screen or file, and say whether it still holds for the new
+   kind of record. Pass B keeps references to what the change removes or redefines; this asks about
+   what it adds.
 2. **Cost on the target.** What does it cost in memory, time and storage on the device or
    environment the project targets, at the largest input the spec allows (a second full read of
    the largest input; work that grows with every item)? Where the project names no constrained
