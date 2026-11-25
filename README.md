@@ -67,6 +67,14 @@ touch .allow-push-main
 
 Add it to `.gitignore` so it stays local. Team repos should **not** include this file.
 
+### Code owners
+
+Everything setup-env copies onto a developer's machine reaches every developer at their next sync, so [`.github/CODEOWNERS`](.github/CODEOWNERS) assigns an owner to those paths: `standards/`, `hooks/`, `setup-env.sh`, `setup-env.ps1`, the sync and merge scripts in `scripts/` with their tests, and `.github/`.
+
+On its own the file only requests a review from the owner. It blocks a merge only once branch protection on `main` has **Require review from Code Owners** turned on (Settings → Branches, or Rules → Rulesets), which a repository admin has to set.
+
+With a single owner and that setting on, a PR the owner writes to these paths can't get a code-owner approval, because GitHub doesn't count an author's own review. Merging such a PR needs an admin bypass, or a second owner added to the file.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how to submit a plugin.
