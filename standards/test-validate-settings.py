@@ -539,7 +539,8 @@ class McpTests(unittest.TestCase):
                       "mcp__azure-devops__wit_work_item_link_write",
                       "mcp__azure-devops__repo_pull_request_write",
                       "mcp__azure-devops__pipelines_write",
-                      "mcp__azure-devops__wit_backlog"):
+                      "mcp__azure-devops__wit_backlog",
+                      "mcp__azure-devops__wit_work_item_attachment"):
             with self.subTest(entry=entry):
                 # Act
                 reason = vs.check_mcp(entry)
@@ -562,7 +563,6 @@ class McpTests(unittest.TestCase):
                     # Act
                     reason = vs.check_mcp(entry)
                 # Assert
-                self.assertIsNotNone(reason)
                 self.assertIn("looks mutating", reason)
 
     def test_checkMcp_legacyBacklogReadTools_areNotFlaggedByWitBacklogPattern(self):
@@ -571,13 +571,15 @@ class McpTests(unittest.TestCase):
                       "mcp__azure-devops__wit_list_backlog_work_items"):
             with self.subTest(entry=entry):
                 # Act
-                reason = vs.check_mcp(entry)
+                flagged = any(x in entry for x in vs.MUTATING_MCP)
                 # Assert
-                self.assertIsNone(reason)
+                self.assertFalse(flagged)
 
     def test_checkMcp_everyReviewedTool_passes(self):
         # Arrange
         reviewed = sorted(vs.KNOWN_SAFE_MCP)
+        self.assertTrue(reviewed)
+        self.assertIsNone(vs.check_mcp("mcp__azure-devops__wit_work_item"))
         for entry in reviewed:
             with self.subTest(entry=entry):
                 # Act

@@ -58,17 +58,56 @@ if ( cd "$repo" && bash "$SUT" --slug "trailing-" >/dev/null 2>&1 ); then
 fi
 pass "non-kebab-case slug rejected"
 
-# 3. A non-numeric --id is rejected.
-if ( cd "$repo" && bash "$SUT" --slug "valid-slug" --id "bad/id" >/dev/null 2>&1 ); then
-    fail "expected rejection of --id with path separator"
-fi
-pass "id with path separator rejected"
-for bad_id in "abc" "12-34" "7a"; do
-    if ( cd "$repo" && bash "$SUT" --slug "valid-slug" --id "$bad_id" >/dev/null 2>&1 ); then
-        fail "expected rejection of non-numeric --id $bad_id"
-    fi
+# 3. StartWork_InvalidId_RefusedWithMessage
+#    Anything but 1-10 digits with no leading zero is refused before any git work,
+#    including a value with a newline in it (grep matched such values line by line).
+# Arrange
+repo="$(fresh_repo)"
+slug="valid-slug"
+exit_usage=2
+newline_id="12
+../x"
+for bad_id in "bad/id" "abc" "12-34" "7a" "#29" "+5" " 5" "5 " "0" "007" "12345678901" "$newline_id"; do
+    # Act
+    rc=0
+    err="$( cd "$repo" && bash "$SUT" --slug "$slug" --id "$bad_id" 2>&1 >/dev/null )" || rc=$?
+    # Assert
+    [ "$rc" -eq "$exit_usage" ] || fail "expected exit $exit_usage for --id $(printf '%q' "$bad_id"), got $rc"
+    grep -qF -- "must be a number" <<<"$err" || fail "expected a --id message for $(printf '%q' "$bad_id"), got: $err"
 done
-pass "non-numeric id rejected"
+[ ! -e "$repo/.claude" ] || fail "expected no .claude directory after rejected ids"
+[ ! -e "$repo/x" ] || fail "a multi-line --id created a path outside .claude/worktrees"
+[ -z "$( cd "$repo" && git branch --list 'branches/*' )" ] || fail "expected no branch after rejected ids"
+pass "invalid --id values are refused with a message, no directory and no branch"
+
+# 3b. StartWork_MultiLineSlug_RefusedWithMessage
+# Arrange
+repo="$(fresh_repo)"
+id="31"
+exit_usage=2
+newline_slug="ok
+../../escape"
+# Act
+rc=0
+err="$( cd "$repo" && bash "$SUT" --slug "$newline_slug" --id "$id" 2>&1 >/dev/null )" || rc=$?
+# Assert
+[ "$rc" -eq "$exit_usage" ] || fail "expected exit $exit_usage for a multi-line --slug, got $rc"
+grep -qF -- "is not kebab-case" <<<"$err" || fail "expected a --slug message for a multi-line slug, got: $err"
+[ ! -e "$repo/.claude" ] || fail "expected no .claude directory after a rejected slug"
+[ -z "$( cd "$repo" && git branch --list 'branches/*' )" ] || fail "expected no branch after a rejected slug"
+pass "a multi-line --slug is refused with a message, no directory and no branch"
+
+# 3c. StartWork_LargestAllowedId_CreatesBranch
+# Arrange
+repo="$(fresh_repo)"
+slug="max-id"
+max_id="9999999999"
+# Act
+out="$( cd "$repo" && bash "$SUT" --slug "$slug" --id "$max_id" 2>/dev/null )"
+# Assert
+[ "$(printf '%s
+' "$out" | tail -2 | head -1)" = "BRANCH=branches/$max_id-$slug" ]     || fail "expected a branch for a 10-digit --id, got: $out"
+pass "a 10-digit --id is accepted"
 
 # 4. Dirty working tree is refused.
 repo="$(fresh_repo)"

@@ -265,10 +265,14 @@ MUTATING_MCP = (
     "_update", "_create", "_add_", "_delete", "_remove", "_reply",
     "_vote", "_link", "_unlink", "run_pipeline", "create_pipeline",
     "update_build", "_set_", "authenticate", "attachment",
-    # Consolidated azure-devops server: every writing tool ends in _write
-    # (wit_work_item_write, repo_pull_request_write, pipelines_write, ...), and
-    # wit_backlog's reorder action writes. "wit_backlog" does not match the
-    # legacy read tools wit_list_backlogs / wit_list_backlog_work_items.
+    # Consolidated azure-devops server: most writing tools end in _write
+    # (wit_work_item_write, repo_pull_request_write, pipelines_write, ...);
+    # others such as repo_create_branch and wit_work_item_attachment_upload are
+    # caught by the patterns above. wit_backlog's reorder action writes.
+    # "wit_backlog" does not match the legacy read tools wit_list_backlogs /
+    # wit_list_backlog_work_items. This backstop checks names only: it cannot
+    # see a write hidden behind an `action` parameter of an otherwise read-only
+    # tool, which is why KNOWN_SAFE_MCP entries are reviewed action by action.
     "_write", "wit_backlog",
 )
 

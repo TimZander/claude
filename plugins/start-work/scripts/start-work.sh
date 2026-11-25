@@ -2,7 +2,7 @@
 # Run Git Hygiene Before New Work and create the working branch (in a worktree by default).
 #
 # Usage:
-#   start-work.sh --slug <kebab-case-slug> [--id <issue-or-work-item-id>] [--base <branch>] [--no-worktree]
+#   start-work.sh --slug <kebab-case-slug> [--id <number>] [--base <branch>] [--no-worktree]
 #
 # Default behavior creates a worktree at .claude/worktrees/<id>-<slug>/ on a new branch
 # named branches/<id>-<slug>. With --no-worktree the branch is created in the current
@@ -27,7 +27,7 @@ USE_WORKTREE=1
 
 usage() {
     cat >&2 <<USAGE
-usage: $0 --slug <kebab-case-slug> [--id <issue-or-work-item-id>] [--base <branch>] [--no-worktree]
+usage: $0 --slug <kebab-case-slug> [--id <number>] [--base <branch>] [--no-worktree]
 
 Creates branches/<id>-<slug> (or branches/<slug> if --id is omitted) from clean
 origin/<base>. Worktree at .claude/worktrees/<id>-<slug>/ by default; --no-worktree
@@ -67,7 +67,10 @@ if [ -z "$SLUG" ]; then
 fi
 
 # Validate slug: kebab-case only — lowercase letters, digits, internal hyphens.
-if ! printf '%s' "$SLUG" | grep -Eq '^[a-z0-9]+(-[a-z0-9]+)*$'; then
+# Matched with [[ =~ ]] on the whole value: grep would test each line separately,
+# so a value with a newline in it could pass.
+SLUG_PATTERN='^[a-z0-9]+(-[a-z0-9]+)*$'
+if ! [[ $SLUG =~ $SLUG_PATTERN ]]; then
     echo "error: --slug $(quoted "$SLUG") is not kebab-case (expected lowercase letters/digits, hyphens between words, no leading or trailing hyphens)" >&2
     exit 2
 fi
@@ -89,10 +92,13 @@ fi
 
 # Construct branch name and worktree dir name per the team's Branch Naming standard.
 if [ -n "$ID" ]; then
-    # Issue and work-item numbers are plain integers; this also keeps path
-    # components and options out of the branch and worktree names.
-    if ! printf '%s' "$ID" | grep -Eq '^[0-9]+$'; then
-        echo "error: --id $(quoted "$ID") must be a number (digits only)" >&2
+    # Issue and work-item numbers are positive integers with no leading zero, at most
+    # 10 digits (both GitHub and Azure DevOps IDs fit). Matched on the whole value, as
+    # for the slug, so path components, options and newlines never reach a branch or
+    # worktree name.
+    ID_PATTERN='^[1-9][0-9]{0,9}$'
+    if ! [[ $ID =~ $ID_PATTERN ]]; then
+        echo "error: --id $(quoted "$ID") must be a number (digits only, no leading zero, at most 10 digits)" >&2
         exit 2
     fi
     BRANCH="branches/$ID-$SLUG"
