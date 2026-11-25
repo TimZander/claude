@@ -74,7 +74,7 @@ or ask for it on a single change.
 
 | Skill | When | What it does |
 |---|---|---|
-| `/sdd:spec-review <change>` | After proposing, before any code | Fresh-agent, read-only review of the change's meaning: contradictions, dangling references, untestable or ambiguous requirements, coverage, scope, undecided requirements |
+| `/sdd:spec-review <change>` | After proposing, before any code | Fresh-agent, read-only review of the change's meaning: contradictions, dangling references, untestable or ambiguous requirements, coverage, scope, undecided requirements, and three questions the code would otherwise answer by accident (existing requirements that see the new state, cost on the target device, waits that never answer) |
 | `/sdd:conformance-review <change>` | After `/opsx:apply`, before the PR | Fresh-agent review of the code against the spec: every scenario tested, code does what the spec says and nothing unspecified, plus a mutation spot check on the 3 riskiest scenarios. At most 15 findings, each routed to spec, test or code |
 | `/sdd:spec-fix <change>` | On any finding, UAT remark or bug | Triage, then spec delta → check → commit, then failing test, then code |
 | `/sdd:archive-pr` | Before new work, when a change is still active | Archive-only PR, merged once it is shown to be mechanical against the current tip: on GitHub, CI's `archive-mechanical: success` plus its own re-run; on Azure DevOps, its own re-run only (CI there is advisory), then a completion that names the verified commit, within the branch's policies, confirmed afterwards |
@@ -266,6 +266,14 @@ could give a trustworthy verdict. It is untested here, and it costs a second rep
 pipeline definition outside this repository's control, and a way for `/sdd:archive-pr` to tell
 that pipeline's runs from any other. The local re-run already gives the archive gate without
 it, so sdd doesn't ship one.
+
+## Upgrading to 0.4.4
+
+Update the plugin (`/plugin update sdd`; cloud sessions' setup does it for you). Nothing in a
+repository needs re-running: 0.4.4 changes only the `/sdd:spec-review` skill. Its new pass I asks
+three questions of a change (see the table above), and one left unanswered is a should-fix. A
+fix that answers one with new behaviour can still call for another round under `/sdd:spec-fix`'s
+rule.
 
 ## Upgrading to 0.4.3
 
