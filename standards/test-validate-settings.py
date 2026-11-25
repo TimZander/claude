@@ -551,7 +551,6 @@ class McpTests(unittest.TestCase):
         for entry in ("mcp__azure-devops__wit_update_work_item",
                       "mcp__azure-devops__wit_work_item_write",
                       "mcp__azure-devops__wit_work_item_comment_write",
-                      "mcp__azure-devops__wit_work_item_link_write",
                       "mcp__azure-devops__repo_pull_request_write",
                       "mcp__azure-devops__repo_pull_request_thread_write",
                       "mcp__azure-devops__repo_file_write",
@@ -562,7 +561,18 @@ class McpTests(unittest.TestCase):
                     # Act
                     reason = vs.check_mcp(entry)
                 # Assert
+                self.assertIsNotNone(reason)
                 self.assertIn("looks mutating", reason)
+
+    def test_checkMcp_legacyBacklogReadTools_areNotFlaggedByWitBacklogPattern(self):
+        # Arrange
+        for entry in ("mcp__azure-devops__wit_list_backlogs",
+                      "mcp__azure-devops__wit_list_backlog_work_items"):
+            with self.subTest(entry=entry):
+                # Act
+                reason = vs.check_mcp(entry)
+                # Assert
+                self.assertIsNone(reason)
 
     def test_checkMcp_consolidatedWorkItemReadTool_passes(self):
         # Arrange

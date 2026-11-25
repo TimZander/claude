@@ -278,6 +278,9 @@ MUTATING_MCP = (
 # any parameter names a local path or file (savePath, outputPath, fileName, ...)
 # or otherwise lets it write, run, or send anything. CI fails if settings.json
 # allows an mcp__ tool absent from this set.
+# To revoke an entry, add a matching `ask` rule and list it in POLICY_ASK;
+# deleting the line does not remove it from developers who already synced it
+# (the settings merge only ever adds).
 KNOWN_SAFE_MCP = {
     # Consolidated azure-devops MCP server (reviewed 2026-11-24 against its live
     # schema): wit_work_item's actions are get, get_batch, list_comments, my,
@@ -285,8 +288,6 @@ KNOWN_SAFE_MCP = {
     # parameter names a path. Re-review the action list whenever the server is
     # upgraded: a new write action here would be pre-approved for everyone.
     # wit_backlog is NOT here (its reorder action writes), nor is any *_write tool.
-    # To revoke an entry, add a matching `ask` rule and list it in POLICY_ASK;
-    # deleting the line does not remove it from developers who already synced it.
     "mcp__azure-devops__wit_work_item",
     # --- Legacy per-operation azure-devops names (pre-consolidation server),
     # kept for developers on older servers. ---
