@@ -325,6 +325,26 @@ class BashTests(unittest.TestCase):
                 # Assert
                 self.assertIsNotNone(reason)
 
+    def test_checkBash_azDevopsExtensionRead_isRejectedForRemoteDetection(self):
+        # Arrange
+        for cmd in ("az boards work-item show", "az boards query", "az repos pr show",
+                    "az repos pr list", "az pipelines runs list", "az devops project list",
+                    "az artifacts universal download"):
+            with self.subTest(cmd=cmd):
+                # Act
+                reason = vs.check_bash(cmd)
+                # Assert
+                self.assertIn("--detect false", reason)
+
+    def test_checkBash_azCoreRead_isAllowed(self):
+        # Arrange
+        for cmd in ("az account show", "az account list", "az extension list", "az version"):
+            with self.subTest(cmd=cmd):
+                # Act
+                reason = vs.check_bash(cmd)
+                # Assert
+                self.assertIsNone(reason)
+
     def test_checkBash_familyRootOrGlobalOption_isRejected(self):
         # Arrange
         cases = {"git": "bare command-family root", "git -C": "global option", "git -c": "global option",
@@ -668,13 +688,45 @@ class CommittedAskRuleTests(unittest.TestCase):
                 # Assert
                 self.assertTrue(prompted)
 
+    def test_askRules_azDevopsExtensionCommands_promptWithOrWithoutDetectFalse(self):
+        # Arrange: without --detect false these contact a host taken from the git
+        # remotes; a glob cannot tell the two forms apart, so both prompt.
+        commands = [
+            "az boards work-item show --id 5", "az boards work-item show --id 5 -o json",
+            "az boards work-item show --id 5 --detect false -o json",
+            "az boards query --wiql \"SELECT [System.Id] FROM WorkItems\"",
+            "az repos pr show --id 1", "az repos pr list --status active",
+            "az pipelines show --id 1", "az pipelines runs show --id 1",
+            "az pipelines runs list --top 5", "az devops project list",
+            "az artifacts universal download --name x --version 1 --path .",
+            "az --only-show-errors boards work-item show --id 5",
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                # Act
+                prompted = self.prompts(command)
+                # Assert
+                self.assertTrue(prompted)
+
+    def test_askRules_removedAzGrants_areRevoked(self):
+        # Arrange: setup-env merges by union, so these old grants stay on synced
+        # machines; an ask rule must match every command they allowed.
+        removed = ["az boards work-item show", "az boards query", "az repos pr show",
+                   "az repos pr list", "az pipelines show", "az pipelines runs show",
+                   "az pipelines runs list"]
+        for prefix in removed:
+            with self.subTest(prefix=prefix):
+                # Act
+                prompted = self.prompts(prefix + " --id 1")
+                # Assert
+                self.assertTrue(prompted)
+                self.assertNotIn(f"Bash({prefix}:*)", committed_settings()["permissions"]["allow"])
+
     def test_askRules_routineAzAndGhReads_doNotPrompt(self):
         # Arrange
         commands = [
-            "az boards work-item show --id 5", "az boards work-item show --id 5 -o json",
-            "az boards query --wiql \"SELECT [System.Id] FROM WorkItems\"",
-            "az repos pr show --id 1", "az repos pr list --status active",
-            "az pipelines runs list --top 5", "az account show",
+            "az account show", "az account list -o table", "az extension list -o table",
+            "az --version", "az version",
             "gh pr view 12", "gh pr view 12 -R TimZander/claude",
             "gh pr view 12 --repo TimZander/claude --json body --jq .body",
             "gh pr view 12 --repo=TimZander/claude", "gh pr list --author @me",

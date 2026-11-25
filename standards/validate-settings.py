@@ -168,6 +168,14 @@ WRITE_CAPABLE = {
     "az extension remove": "removes extensions",
     "az boards work-item delete": "deletes work items",
     "az repos pr set-vote": "votes on PRs",
+    # Every azure-devops extension command group. Without --org and without
+    # `--detect false`, the extension picks a host from the repo's git remotes
+    # and sends the signed-in credential there; an allow rule cannot require
+    # the flag, so no command in these groups may be allowed. Listed after the
+    # specific az keys above so those keep their own reasons.
+    **{f"az {group}": ("azure-devops extension: unless --detect false is passed, it contacts a host "
+                       "taken from the repo's git remotes with your credential")
+       for group in ("boards", "repos", "pipelines", "devops", "artifacts")},
 }
 
 # Bare command-family roots: an entry equal to one of these (e.g. `Bash(git:*)`)
@@ -222,19 +230,26 @@ POLICY_ASK = {
                                  "print the token (also prompts for other argument forms)"),
     "mcp__azure-devops__wit_get_work_item_attachment": "revokes the removed grant; savePath writes local files",
     "mcp__azure-devops__wit_work_item_attachment": "same tool under the consolidated ADO MCP name",
-    # Keep the allowed az/gh reads on the team's own hosts. An allow rule cannot
-    # limit flags, and an ask rule cannot exempt one value (ask beats allow), so
-    # these prompt for every form that names a host: az sends the signed-in
-    # credential to whatever --org says, and gh connects to any host in -R or a
-    # URL. Routine reads without those forms still run unprompted. Known gap:
-    # without --org, az probes the repo's git remotes (any /_git/ or ssh://
-    # remote) and sends the credential to the one it picks, so an allowed
-    # `az ... show` can still reach another host unless it passes
-    # `--detect false`, which no rule can require. With `--detect false` az
-    # uses only `az devops configure --defaults` (setup-env sets the team's).
+    # Keep az/gh on the team's own hosts. An allow rule cannot limit flags, and
+    # an ask rule cannot exempt one value (ask beats allow), so these prompt for
+    # every form that can name a host: az sends the signed-in credential to
+    # whatever --org says, and gh connects to any host in -R or a URL.
     "Bash(az *--org*)": ("--org/--organization (and every abbreviation az accepts, --orga...) can "
                          "point az at any host, which receives the credential; even the team's "
                          "own org prompts because one value cannot be exempted"),
+    # Without --org, azure-devops extension commands auto-detect the
+    # organization from the repo's git remotes (not only Azure DevOps hosts)
+    # and send the credential to the remote they pick, unless `--detect false`
+    # is passed. No setting turns detection off (the extension registers
+    # --detect without a configured default), and no glob can match "lacks
+    # --detect false", so every command in these groups prompts. These also
+    # revoke the removed `az boards work-item show`, `az boards query`,
+    # `az repos pr show/list`, `az pipelines show` and `az pipelines runs
+    # show/list` grants. The leading `*` catches global options before the group.
+    **{f"Bash(az *{group} *)": ("azure-devops extension commands send the credential to a host taken "
+                                "from the repo's git remotes unless --detect false is passed, and no "
+                                "rule can require that flag")
+       for group in ("boards", "repos", "pipelines", "devops", "artifacts")},
     "Bash(gh *://*)": "a URL argument or -R URL can name any host (scheme matched in any case)",
     "Bash(gh *git@*)": "-R git@HOST:OWNER/REPO names any host",
     "Bash(gh *-R*/*/*)": "-R HOST/OWNER/REPO names any host (also -RHOST/...; github.com/... prompts too)",
