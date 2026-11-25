@@ -11,8 +11,8 @@ allowed-tools: Read, Grep, Glob, Bash(bash scripts/sdd/*), Bash(git log:*), Bash
 # Spec review for an OpenSpec change
 
 `openspec validate --strict` checks structure only. This review checks meaning: whether the
-change says one consistent, testable thing and whether its tasks cover it. Its passes adapt
-SpecKit's `analyze` to OpenSpec's artefacts.
+change says one consistent, testable thing and whether its tasks cover it. Passes A–H adapt
+SpecKit's `analyze` to OpenSpec's artefacts; pass I asks three questions of its own.
 
 You are a **fresh reviewer**: work only from the files, not from anything said about the change
 in conversation. A reviewer that wrote the spec reads what it meant, not what it says.
@@ -32,8 +32,10 @@ other than `archive/`; if there are several, stop and ask which):
 - every delta under `openspec/changes/<change>/specs/`
 - the main spec of every capability a delta touches (`openspec/specs/<capability>/spec.md`),
   and a grep of all of `openspec/specs/` for each requirement name, rule ID or term the change
-  modifies or removes
-- `openspec/conventions.md`, if present
+  modifies or removes, and for each piece of data, screen, file or format the change adds to
+  (pass I.1)
+- `openspec/conventions.md`, if present, and the repository's `CLAUDE.md` for the device or
+  environment the project targets (pass I.2)
 
 ## Build the inventories first
 
@@ -74,30 +76,35 @@ deltas don't.
 doesn't show the owner decided, without being recorded as an open question with its
 assumption.
 
-**I. Questions the code would answer by accident.** Ask each of these of the change. A spec
-that never answers one leaves it to whoever writes the code, where neither the conformance review
-nor the tests will look. An answer can be a requirement, a scenario, a line in `design.md`, or a
-reasoned "none" there; silence is the finding, located at the line of the delta or design that
-introduces the state, cost or wait.
+**I. Questions the code would answer by accident.** Three questions the other passes don't ask.
+A change that leaves one unanswered leaves it to whoever writes the code, where neither the
+conformance review nor the tests will look.
 
-1. **Existing requirements.** Which requirements the change does *not* touch will read, show or
-   store the new state it creates? (A new kind of run reaching an old "already done" message; a
-   new field in a public file format.) Grep `openspec/specs/` for the data, screen or file the
-   change adds to, not only for the names it modifies.
-2. **Cost on the target device.** What does it cost in memory, time and storage on the device the
-   project targets (a phone, a watch), at the largest input the spec allows? (A second full
-   decode of a long recording; a build time that grows with every vertex.)
-3. **Waits.** For each wait on the network, a device, a worker, a permission prompt or the
-   browser: what happens if it never answers, and what if the person does something else
-   meanwhile (cancels, navigates, opens another tab, starts the same thing again)?
+1. **New state in untouched requirements.** Which requirements the change does *not* modify will
+   read, show or store the state it adds (a new kind of record reaching an old message; a new
+   field in a published format)? Pass B keeps references to what the change removes or redefines;
+   this asks about what it adds.
+2. **Cost on the target.** What does it cost in memory, time and storage on the device or
+   environment the project targets, at the largest input the spec allows (a second full read of
+   the largest input; work that grows with every item)? Where the project names no constrained
+   target, the answer is "none".
+3. **Waits.** For each wait on the network, a device, a worker, a permission prompt or another
+   process: what happens if it never answers, and what if the person does something else meanwhile
+   (cancels, leaves, starts it again, works in a second window)?
+
+An answer that changes behaviour belongs in a requirement or scenario, so a test covers it. An
+answer of "none", with its reason, or an open question with its assumption, belongs in
+`design.md`. Report a question as a finding only when the change creates new state, a cost or a
+wait the question is about and no artefact answers it; locate it at the line that introduces that
+state, cost or wait, in a delta, `design.md`, `proposal.md` or `tasks.md`. When the change has
+nothing the question is about, it is not a finding.
 
 ## Severity
 
 - **Blocker:** a contradiction or dangling reference in a rule; a requirement with no task; a
   severity conflict. A builder would build the wrong thing or skip something.
 - **Should-fix:** an ambiguity with observable effect; an untestable SHALL; a scope change; a
-  stale reference; an undecided requirement; a pass-I question the change leaves unanswered
-  where the answer isn't obviously "none".
+  stale reference; an undecided requirement; a pass-I question the change leaves unanswered.
 - **Consider:** wording that is correct but easy to misread; minor duplication.
 
 ## Report
@@ -110,8 +117,8 @@ validate --strict: <result>
 |----|------|----------|----------|-------------|---------|------------------------------|
 
 Coverage: <n> requirements, <n> with tasks; uncovered: <list or none>
-Questions (pass I): existing requirements <answered at file:line | none, because … | finding ID>;
-  device cost <…>; waits <…>
+Questions (pass I): new state <answered at file:line | not applicable | finding ID>; cost <…>;
+  waits <…>
 Counts: blocker <n>, should-fix <n>, consider <n>
 Another round: <yes, because blocker IDs … | no>
 ```

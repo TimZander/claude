@@ -384,6 +384,19 @@ grep -qF -- 'add -A -f -- openspec' "$T/sdd-archive.sh" || fail "sdd-archive.sh 
 grep -qF -- "grep -qF -- 'add -A -f -- openspec' scripts/sdd/sdd-archive.sh" "$SCRIPT_DIR/../skills/archive-pr/SKILL.md" \
     || fail "/sdd:archive-pr no longer checks the installed sdd-archive.sh"
 
+# /sdd:spec-review's pass I (0.4.4): its three questions, its severity and its report line.
+SR="$SCRIPT_DIR/../skills/spec-review/SKILL.md"
+for t in '**I. Questions the code would answer by accident.**' '1. **New state in untouched requirements.**' \
+         '2. **Cost on the target.**' '3. **Waits.**' 'a pass-I question the change leaves unanswered' 'Questions (pass I):'; do
+    grep -qF -- "$t" "$SR" || fail "spec-review lost pass I text: $t"
+done
+pass "spec-review keeps pass I's questions, severity and report line"
+
+# Every plugin.json version has its README upgrade note.
+V=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$SCRIPT_DIR/../.claude-plugin/plugin.json")
+grep -qF -- "## Upgrading to $V" "$SCRIPT_DIR/../README.md" || fail "README has no '## Upgrading to $V' section"
+pass "README has an upgrade note for $V"
+
 # 0.4.3: verify compares what the PR holds, whatever .gitignore says. Here a .NET-style rule
 # ignores the files of a change named `packages`, which was force-added on the base.
 rg="$(fresh_repo)"

@@ -269,13 +269,11 @@ it, so sdd doesn't ship one.
 
 ## Upgrading to 0.4.4
 
-Nothing to re-run: 0.4.4 changes only the `/sdd:spec-review` skill, which updates with the plugin.
-Its new pass I asks three questions of every change: which requirements the change doesn't touch
-will see its new state, what it costs on the target device, and what happens when a wait never
-answers or the person does something else meanwhile. An unanswered one is a should-fix. The
-questions come from a trial in which a code review of five sdd PRs that had passed spec and
-conformance review found seven real problems; this pass is aimed at the kinds a question asked
-before any code could have caught.
+Update the plugin (`/plugin update sdd`; cloud sessions' setup does it for you). Nothing in a
+repository needs re-running: 0.4.4 changes only the `/sdd:spec-review` skill. Its new pass I asks
+three questions of a change (see the table above), and one left unanswered is a should-fix. A
+fix that answers one with new behaviour can still call for another round under `/sdd:spec-fix`'s
+rule.
 
 ## Upgrading to 0.4.3
 
