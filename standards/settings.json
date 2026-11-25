@@ -30,6 +30,7 @@
       "Bash(az pipelines runs show:*)",
       "Bash(az pipelines runs list:*)",
 
+      "mcp__azure-devops__wit_work_item",
       "mcp__azure-devops__wit_get_work_item",
       "mcp__azure-devops__wit_get_work_items_batch_by_ids",
       "mcp__azure-devops__wit_query_by_wiql",

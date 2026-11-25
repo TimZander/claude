@@ -1,6 +1,6 @@
 name: test-start-work-scripts
 
-# The start-work plugin's script creates branches and worktrees from arguments an agent passes in. The smoke test runs it against real git repos with a bare origin.
+# The start-work plugin's scripts: start-work.sh creates branches and worktrees from arguments an agent passes in, and origin-info.sh classifies the origin remote. The smoke tests run them against real git repos.
 # macOS covers bash 3.2; windows-latest covers Git Bash, which the team develops on.
 on:
   pull_request:
@@ -33,3 +33,4 @@ jobs:
           git config --global user.email ci@example.com
           git config --global user.name CI
           bash plugins/start-work/scripts/test_start-work.sh
+          bash plugins/start-work/scripts/test_origin-info.sh
