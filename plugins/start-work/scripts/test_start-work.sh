@@ -58,11 +58,17 @@ if ( cd "$repo" && bash "$SUT" --slug "trailing-" >/dev/null 2>&1 ); then
 fi
 pass "non-kebab-case slug rejected"
 
-# 3. Non-alphanumeric --id is rejected.
+# 3. A non-numeric --id is rejected.
 if ( cd "$repo" && bash "$SUT" --slug "valid-slug" --id "bad/id" >/dev/null 2>&1 ); then
     fail "expected rejection of --id with path separator"
 fi
 pass "id with path separator rejected"
+for bad_id in "abc" "12-34" "7a"; do
+    if ( cd "$repo" && bash "$SUT" --slug "valid-slug" --id "$bad_id" >/dev/null 2>&1 ); then
+        fail "expected rejection of non-numeric --id $bad_id"
+    fi
+done
+pass "non-numeric id rejected"
 
 # 4. Dirty working tree is refused.
 repo="$(fresh_repo)"

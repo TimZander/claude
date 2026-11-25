@@ -17,12 +17,12 @@ Optional flags:
 
 ## What it does
 
-1. **Detect source** — GitHub issue (`#NN`) or ADO work item (bare ID), decided from the repository's remotes; when that is ambiguous it asks which you meant.
-2. **Fetch the card** — title, description, area path, current state, dependencies.
+1. **Detect source** — GitHub issue (`#NN`) or ADO work item (bare ID), decided from the `origin` remote's host; a bare ID on a GitHub origin, or an unrecognized host, asks which you meant.
+2. **Fetch the card** — title, description, state, assignee, and (ADO) area path and tags.
 3. **Run Git Hygiene** — verify clean tree, fetch `origin/<base>`. The new branch is rooted directly at the latest `origin/<base>` tip, so no fast-forward of local `<base>` is needed.
 4. **Create the branch** — `branches/<id>-<slug>` from clean base, slug derived from the title (kebab-case, ≤ 50 chars).
 5. **Worktree by default** — branch lives in `.claude/worktrees/<id>-<slug>` for isolation. `--no-worktree` opts out.
-6. **Mark work item active** — `gh issue edit --add-assignee @me` for GitHub; ADO transitions to `Active` and self-assigns.
+6. **Mark work item active** — `gh issue edit --add-assignee @me` for GitHub. For ADO it confirms your sign-in address, moves the card to `Active` (or asks when the type has no such state), and assigns it to you — asking first if it is assigned to someone else.
 7. **Codebase research** — Explore subagent scoped to keywords from the card returns a short punch list of touched files.
 8. **Draft plan handoff** — present the card + research + suggested approach for your review before any implementation begins.
 
@@ -34,5 +34,5 @@ Worktrees keep new work isolated from the main checkout: uncommitted changes and
 
 - `git` 2.31+ (worktree support and `rev-parse --path-format`)
 - **GitHub:** `gh` CLI authenticated for the target repo
-- **ADO:** the consolidated Azure DevOps MCP server — the generation with `wit_work_item` and `wit_work_item_write`. No `az` CLI is needed. Reading the card is pre-approved, and the identity lookup is a read the team allow list grants; the state and assignee update goes through your permission settings. Shell commands (including `gh issue edit` on the GitHub path) are still pre-approved.
+- **ADO:** the consolidated Azure DevOps MCP server — the generation with `wit_work_item` and `wit_work_item_write`. No `az` CLI is needed. Reading the card is pre-approved; the state and assignee update goes through your permission settings and may prompt. Shell commands (including `gh issue edit` on the GitHub path) are still pre-approved.
   - **On an older server** (per-operation tools such as `wit_get_work_item`), the ADO path stops and says the server needs updating. The GitHub path is unaffected.

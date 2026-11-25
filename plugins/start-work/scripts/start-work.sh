@@ -89,9 +89,10 @@ fi
 
 # Construct branch name and worktree dir name per the team's Branch Naming standard.
 if [ -n "$ID" ]; then
-    # Validate id is alphanumeric + hyphen so it can't inject path components.
-    if ! printf '%s' "$ID" | grep -Eq '^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$'; then
-        echo "error: --id $(quoted "$ID") must be alphanumeric (with optional internal hyphens)" >&2
+    # Issue and work-item numbers are plain integers; this also keeps path
+    # components and options out of the branch and worktree names.
+    if ! printf '%s' "$ID" | grep -Eq '^[0-9]+$'; then
+        echo "error: --id $(quoted "$ID") must be a number (digits only)" >&2
         exit 2
     fi
     BRANCH="branches/$ID-$SLUG"
