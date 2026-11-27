@@ -92,6 +92,17 @@ doesn't carry over.
   PR build runs the PR's own YAML and scripts, so a PR can change what judges it. Treat a red
   build as a real failure and a green one as a hint; the rules it checks rest on review there,
   and `/sdd:archive-pr` verifies an archive itself with the default branch's scripts.
+- **A UAT costs the owner as little time and attention as possible.** An owner check (a
+  device test, a look at a preview, a try on a phone) is ready to use before it is asked for:
+  - **One action sets it up:** one link, and at most one button that does everything. Nothing for
+    the owner to build, time, download or copy by hand, and no second device unless the check is
+    about that device.
+  - **Only the questions only the owner can answer,** each a yes/no or a pick, saying where to
+    look and what right looks like, in plain words: landmarks and colours, not codes or jargon.
+  - **Measurements are benches, not UAT steps:** the builder takes timings and sizes itself.
+  - **The builder checks the kit first** (the link opens, the button works, the files are the
+    right ones) and says what it couldn't check.
+  A check that is hard to do gets put off and holds the change open.
 - **The conformance review is the code review.** Every change gets `/sdd:conformance-review`,
   not a general code review: the spec was already reviewed for intent, so the code is checked
   against it.
