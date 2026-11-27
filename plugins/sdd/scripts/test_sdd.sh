@@ -392,6 +392,15 @@ for t in '**I. Questions the code would answer by accident.**' '1. **New state i
 done
 pass "spec-review keeps pass I's questions, severity and report line"
 
+# The UAT rule (0.4.5): the flow keeps its four parts.
+WF="$SCRIPT_DIR/../template/.claude/sdd-workflow.md"
+for t in '**A UAT costs the owner as little time and attention as possible.**' '**One action sets it up:**' \
+         '**Only the questions only the owner can answer,**' '**Measurements are benches, not UAT steps:**' \
+         '**The builder checks the kit first**'; do
+    grep -qF -- "$t" "$WF" || fail "sdd-workflow.md lost the UAT rule's text: $t"
+done
+pass "sdd-workflow.md keeps the UAT rule"
+
 # Every plugin.json version has its README upgrade note.
 V=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' "$SCRIPT_DIR/../.claude-plugin/plugin.json")
 grep -qF -- "## Upgrading to $V" "$SCRIPT_DIR/../README.md" || fail "README has no '## Upgrading to $V' section"

@@ -267,6 +267,15 @@ pipeline definition outside this repository's control, and a way for `/sdd:archi
 that pipeline's runs from any other. The local re-run already gives the archive gate without
 it, so sdd doesn't ship one.
 
+## Upgrading to 0.4.5
+
+Update the plugin, then re-run `/sdd:init` in each repository to install 0.4.5's
+`.claude/sdd-workflow.md`. It gains one rule: a UAT (an owner check) costs the owner as little
+time and attention as possible: one link and at most one button that sets it up, only questions
+the owner alone can answer, timings taken by the builder, and the kit checked by the builder
+first. A repository that wrote its own version of this rule in `CLAUDE.md` can trim it to its
+project specifics.
+
 ## Upgrading to 0.4.4
 
 Update the plugin (`/plugin update sdd`; cloud sessions' setup does it for you). Nothing in a
